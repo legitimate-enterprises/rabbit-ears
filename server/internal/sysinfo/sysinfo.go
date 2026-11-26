@@ -14,7 +14,8 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/transcode"
 )
 
-// Facts is one reading of the host.
+// Facts is one reading of the host. A reading the host does not offer is
+// zero.
 type Facts struct {
 	CPUModel     string
 	Cores        int
@@ -26,7 +27,8 @@ type Facts struct {
 	VideoToolbox bool // ffmpeg offers the VideoToolbox hardware encoders
 }
 
-// Sampler reads Facts for the volume holding path.
+// Sampler reads Facts for the volume holding path. Only that volume being
+// unreadable is an error.
 type Sampler interface {
 	Sample(path string) (Facts, error)
 }
@@ -42,11 +44,10 @@ type sampler struct {
 	once   sync.Once
 	static Facts
 
-	mu     sync.Mutex
-	meter  cpuMeter
-	cpu    float64
-	cpuAt  time.Time
-	cpuErr error
+	mu    sync.Mutex
+	meter cpuMeter
+	cpu   float64
+	cpuAt time.Time
 }
 
 func (d *sampler) Sample(path string) (Facts, error) {
@@ -57,13 +58,8 @@ func (d *sampler) Sample(path string) (Facts, error) {
 		d.static.VideoToolbox = transcode.Hardware()
 	})
 	f := d.static
-	var err error
-	if f.CPUPercent, err = d.cpuPercent(); err != nil {
-		return f, err
-	}
-	if f.MemoryUsed, err = memoryUsed(); err != nil {
-		return f, err
-	}
+	f.CPUPercent = d.cpuPercent()
+	f.MemoryUsed, _ = memoryUsed()
 	var st unix.Statfs_t
 	if err := unix.Statfs(path, &st); err != nil {
 		return f, err
@@ -72,12 +68,12 @@ func (d *sampler) Sample(path string) (Facts, error) {
 	return f, nil
 }
 
-func (d *sampler) cpuPercent() (float64, error) {
+func (d *sampler) cpuPercent() float64 {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if time.Since(d.cpuAt) >= cpuEvery {
-		d.cpu, d.cpuErr = d.meter.read(d.static.Cores)
+		d.cpu, _ = d.meter.read(d.static.Cores)
 		d.cpuAt = time.Now()
 	}
-	return d.cpu, d.cpuErr
+	return d.cpu
 }

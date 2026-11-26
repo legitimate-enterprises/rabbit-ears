@@ -41,10 +41,14 @@ func cpuPercent(ps []byte, cores int) float64 {
 	return min(sum/float64(max(cores, 1)), 100)
 }
 
+// memoryCounters are the page size and the internal, purgeable and wired
+// page counts, in that order.
+var memoryCounters = []string{"vm.pagesize", "vm.page_pageable_internal_count", "vm.page_purgeable_count", "vm.page_wired_count"}
+
 // memoryUsed is app memory (anonymous pages less purgeable) plus wired.
 func memoryUsed() (uint64, error) {
 	var pages [4]uint64
-	for i, name := range []string{"vm.pagesize", "vm.page_pageable_internal_count", "vm.page_purgeable_count", "vm.page_wired_count"} {
+	for i, name := range memoryCounters {
 		// These are 32 or 64 bits wide depending on the name and OS release.
 		b, err := unix.SysctlRaw(name)
 		switch {
