@@ -4,7 +4,7 @@
 STACKS := server web
 
 .DEFAULT_GOAL := help
-.PHONY: help deps generate build run test test-unit test-integration test-e2e style lint format clean release fixtures changed
+.PHONY: help deps generate build run test test-unit test-integration test-e2e style lint format clean release fixtures
 
 help: ## Print this target list
 	@grep -hE '^[a-z0-9-]+:.*##' $(MAKEFILE_LIST) \
@@ -74,9 +74,6 @@ lint: ## Linters in every stack
 clean: ## Remove build products and fixtures
 	@for s in $(STACKS); do $(MAKE) --no-print-directory -C $$s clean || exit $$?; done
 	rm -rf fixtures
-
-changed: ## Which stacks differ from the last commit on main that CI passed
-	@scripts/changed-stacks.sh
 
 # There is no local publish path.
 release: ## Tag origin/main server-v<version> once CI is green there, and push the tag
