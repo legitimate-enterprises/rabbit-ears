@@ -1,0 +1,29 @@
+name: tooling
+description: >
+  Go, Node and ffmpeg, which a gate of either stack needs: the server's build
+  embeds the web client, and the web client's browser tests build and run the
+  server over fixtures ffmpeg makes. ffmpeg is the latest stable release:
+  Homebrew's on macOS, and on Linux a static build, since a distribution's
+  own is older than the server supports.
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v7
+      with:
+        go-version-file: server/go.mod
+        cache-dependency-path: server/go.sum
+    - uses: actions/setup-node@v7
+      with:
+        node-version: 24
+        cache: npm
+        cache-dependency-path: web/package-lock.json
+    - if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        id="$(docker create mwader/static-ffmpeg:latest)"
+        sudo docker cp "$id:/ffmpeg" /usr/local/bin/ffmpeg
+        sudo docker cp "$id:/ffprobe" /usr/local/bin/ffprobe
+        docker rm "$id"
+    - if: runner.os == 'macOS'
+      shell: bash
+      run: brew install ffmpeg

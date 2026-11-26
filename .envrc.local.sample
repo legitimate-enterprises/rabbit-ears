@@ -1,0 +1,10 @@
+# Copy to .envrc.local and replace the TMDB key with a TMDB v3 API key (not
+# the read access token).
+export RABBIT_EARS_TMDB_KEY=replace-me
+
+# Optional overrides; uncomment only what differs from the built-in default.
+# export RABBIT_EARS_TMDB_LIVE=1           # run the live TMDB test
+# export RABBIT_EARS_PORT=8477
+# export RABBIT_EARS_DB="$HOME/Library/Application Support/Rabbit Ears/rabbit-ears.db"
+# export RABBIT_EARS_DATA="$HOME/Library/Application Support/Rabbit Ears"
+# export FIXTURES_SOURCE=/Volumes/storage/replace-me   # copy fixtures instead of synthesizing

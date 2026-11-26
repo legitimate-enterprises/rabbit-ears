@@ -1,0 +1,45 @@
+.art.v {
+  aspect-ratio: 16/9;
+  width: 100%;
+}
+.grid.vids {
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+}
+.strip .poster.vid {
+  width: 220px;
+}
+.art.avatar160 {
+  width: 160px;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  flex: none;
+}
+.art.v480 {
+  width: 480px;
+  max-width: 100%;
+  aspect-ratio: 16/9;
+  border-radius: 10px;
+  flex: none;
+}
+.chcrumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--amber);
+  font-weight: 600;
+  font-size: 13px;
+}
+.chcrumb .art {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+}
+.more {
+  align-self: center;
+}
+label.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+}

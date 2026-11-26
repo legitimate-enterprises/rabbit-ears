@@ -1,0 +1,14 @@
+# Media clips fetched by `make deps`.
+fixtures/
+
+build/
+dist/
+node_modules/
+.envrc.local
+.DS_Store
+
+# Working notes, never committed.
+notes.md
+plan.md
+memory.md
+release-setup.md

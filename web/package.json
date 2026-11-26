@@ -1,0 +1,40 @@
+{
+  "name": "rabbit-ears-web",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "lint": "eslint .",
+    "style": "prettier --check .",
+    "format": "prettier --write .",
+    "generate": "openapi-typescript ../server/api/openapi.yaml -o src/api/schema.gen.ts",
+    "drift": "openapi-typescript ../server/api/openapi.yaml 2>/dev/null | cmp -s - src/api/schema.gen.ts || { echo 'src/api/schema.gen.ts is stale; run make generate' >&2; exit 1; }",
+    "unit": "vitest run"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.65.0",
+    "@types/node": "^26.6.6",
+    "eslint": "^10.14.0",
+    "jsdom": "^31.0.0",
+    "openapi-typescript": "7.13.0",
+    "prettier": "^3.10.1",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.72.2",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.0"
+  },
+  "dependencies": {
+    "hls.js": "^1.6.15",
+    "openapi-fetch": "0.17.0"
+  },
+  "overrides": {
+    "openapi-typescript": {
+      "typescript": "$typescript"
+    }
+  }
+}

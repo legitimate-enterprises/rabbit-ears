@@ -1,0 +1,11 @@
+# oapi-codegen config: types, a net/http strict server and the embedded spec
+# the request validator reads.
+package: api
+output: api.gen.go
+generate:
+  models: true
+  std-http-server: true
+  strict-server: true
+  embedded-spec: true
+output-options:
+  nullable-type: false

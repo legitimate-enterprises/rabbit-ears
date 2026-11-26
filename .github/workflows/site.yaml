@@ -1,0 +1,29 @@
+name: site
+
+# The store listings' learn more, privacy and terms pages. The site has no
+# version: main is what is live. For an out-of-band push, run the wrangler
+# command below by hand with the Cloudflare token.
+on:
+  push:
+    branches: [main]
+    paths: ['docs/site/**']
+
+concurrency:
+  group: site
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: deploy site to Cloudflare Pages
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+        run: |
+          npx --yes wrangler@4 pages deploy docs/site \
+            --project-name rabbit-ears --branch main

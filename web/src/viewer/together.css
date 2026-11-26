@@ -1,0 +1,86 @@
+.tg {
+  display: contents;
+}
+.tgnote {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+  max-width: 100ch;
+}
+.tgnote:empty {
+  display: none;
+}
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 44px;
+  padding: 0 16px;
+  border-radius: 8px;
+  font-weight: 600;
+}
+.pill[hidden] {
+  display: none;
+}
+.pill > button {
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.pill.wait {
+  background: rgba(242, 179, 61, 0.16);
+  color: var(--amber);
+}
+.pill.wait i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.pill.sync {
+  background: rgba(91, 212, 122, 0.14);
+  color: var(--ok);
+}
+.pill .leave {
+  height: 22px;
+  padding: 0 10px;
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.14);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+.btn.join {
+  background: none;
+  border: 1.5px solid var(--amber);
+  color: var(--amber);
+  font-weight: 600;
+}
+.pill.small {
+  height: 32px;
+  border-radius: 16px;
+  padding: 0 8px 0 12px;
+  font-size: 13px;
+  background: rgba(20, 40, 28, 0.85);
+}
+.pnote {
+  position: absolute;
+  left: 50%;
+  top: calc(50% - 96px);
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  background: rgba(30, 30, 34, 0.9);
+  font-weight: 600;
+  pointer-events: none;
+}
+.pnote[hidden] {
+  display: none;
+}

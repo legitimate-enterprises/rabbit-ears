@@ -1,0 +1,68 @@
+name: stack
+
+# One stack's gates, each job one `make` target. Style reads the same on
+# every system, so it runs on one; lint, build and the tests run on each
+# system the server supports. No test reads what `build` makes, so neither
+# waits for the other.
+on:
+  workflow_call:
+    inputs:
+      stack:
+        description: The stack's directory.
+        type: string
+        required: true
+      tests:
+        description: The stack's test targets as a JSON list; '[]' for none.
+        type: string
+        default: '["test-unit"]'
+
+jobs:
+  style:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/tooling
+      - run: make -C ${{ inputs.stack }} deps
+      - run: make -C ${{ inputs.stack }} style
+
+  lint:
+    needs: style
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/tooling
+      - run: make -C ${{ inputs.stack }} deps
+      - run: make -C ${{ inputs.stack }} lint
+
+  build:
+    needs: lint
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/tooling
+      - run: make -C ${{ inputs.stack }} deps
+      - run: make -C ${{ inputs.stack }} build
+
+  test:
+    name: ${{ matrix.target }} (${{ matrix.os }})
+    needs: lint
+    if: inputs.tests != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        target: ${{ fromJSON(inputs.tests) }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/tooling
+      - run: make -C ${{ inputs.stack }} deps
+      - run: make -C ${{ inputs.stack }} ${{ matrix.target }}
