@@ -27,7 +27,7 @@ const played = async (page: Page, seconds: number) => {
   await page.mouse.move(400, 300);
 };
 
-test("an adult plays a fixture by direct play and the position is saved", async ({
+test("an adult plays a fixture, by direct play where the browser decodes it in hardware, and the position is saved", async ({
   page,
   request,
 }) => {
@@ -38,11 +38,30 @@ test("an adult plays a fixture by direct play and the position is saved", async 
   // A position an earlier spec or browser left near the 10 s fixture's end would resume into watched.
   await request.delete(`/api/v1/profiles/${me.account.id}/watch-state/${itemId}`, { headers });
   await signIn(page);
+  // The server copies only what the browser decodes in hardware; a browser that decodes
+  // H.264 in software, as on a machine without a GPU decoder, is given a conversion.
+  const hardware = await page.evaluate(
+    async () =>
+      (
+        await navigator.mediaCapabilities.decodingInfo({
+          type: "file",
+          video: {
+            contentType: 'video/mp4; codecs="avc1.640029"',
+            width: 640,
+            height: 360,
+            bitrate: 400_000,
+            framerate: 24,
+          },
+        })
+      ).powerEfficient,
+  );
   await openMovie(page, /h264-high41/);
-  await expect(page.getByText("Direct play on this device")).toBeVisible();
+  await expect(
+    page.getByText(hardware ? "Direct play on this device" : "Converted for this device"),
+  ).toBeVisible();
   await page.getByRole("link", { name: "Play", exact: true }).click();
 
-  await expect(pill(page)).toContainText("Direct play");
+  await expect(pill(page)).toContainText(hardware ? "Direct play" : "Video transcode");
   await played(page, 1);
   await page.getByRole("button", { name: "Pause" }).click();
   const at = await page.evaluate(() => document.querySelector("video")!.currentTime);
