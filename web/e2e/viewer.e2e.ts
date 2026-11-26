@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import type { Snapshot } from "../src/viewer/capabilities";
 import { leavePlayer, quiet, seed, signIn } from "./support";
 
 test.describe.configure({ mode: "serial" });
@@ -38,23 +39,13 @@ test("an adult plays a fixture, by direct play where the browser decodes it in h
   // A position an earlier spec or browser left near the 10 s fixture's end would resume into watched.
   await request.delete(`/api/v1/profiles/${me.account.id}/watch-state/${itemId}`, { headers });
   await signIn(page);
-  // The server copies only what the browser decodes in hardware; a browser that decodes
-  // H.264 in software, as on a machine without a GPU decoder, is given a conversion.
-  const hardware = await page.evaluate(
-    async () =>
-      (
-        await navigator.mediaCapabilities.decodingInfo({
-          type: "file",
-          video: {
-            contentType: 'video/mp4; codecs="avc1.640029"',
-            width: 640,
-            height: 360,
-            bitrate: 400_000,
-            framerate: 24,
-          },
-        })
-      ).powerEfficient,
-  );
+  // The server copies only what the client reports this browser decodes in hardware; one
+  // that decodes H.264 in software, as on a machine without a GPU decoder, is given a
+  // conversion. The report is the client's own, read from the module the page loaded.
+  const { decoder } = (await page.evaluate(
+    'import("/src/viewer/device.ts").then((m) => m.deviceSnapshot())',
+  )) as Snapshot;
+  const hardware = decoder.videoCodecs.some((c) => c.codec === "h264" && c.hardware);
   await openMovie(page, /h264-high41/);
   await expect(
     page.getByText(hardware ? "Direct play on this device" : "Converted for this device"),
