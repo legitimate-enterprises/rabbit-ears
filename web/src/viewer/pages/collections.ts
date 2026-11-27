@@ -8,6 +8,7 @@ import { plural } from "../format";
 import { back, icon, refresh, section } from "../ui";
 import { addButton, addToPlaylist, addToStation, confirmDelete, nameDialog } from "./playlists";
 import { reorder, row } from "./music";
+import { shuffleButton } from "../shuffle";
 
 type Collection = Schemas["Collection"];
 
@@ -192,6 +193,7 @@ export async function collection(ctx: Ctx, [id]: string[]) {
         meta,
         h(
           "div.actions",
+          shuffleButton(ctx, movies),
           addToPlaylist(ctx, { collectionId: c.id }, "movies"),
           addToStation(ctx, { collectionId: c.id }, "movies"),
           dyn,

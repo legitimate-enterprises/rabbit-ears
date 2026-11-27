@@ -41,6 +41,7 @@ import {
 import { artKey } from "../artwork";
 import { watchTogether } from "../together";
 import { markWatched } from "../select";
+import { shuffleButton } from "../shuffle";
 import { addToCollection } from "./collections";
 import { occasionRows } from "./occasion";
 import { addToPlaylist, addToStation } from "./playlists";
@@ -398,6 +399,7 @@ export async function show(ctx: Ctx, [id]: string[]): Promise<HTMLElement[]> {
                 `${inProgress(w) ? "Resume" : started ? "Play next" : "Play"} ${epCode(next)}`,
               )
             : null,
+          shuffleButton(ctx, eps, s),
           await more(ctx, s, allWatched, () => markWatched(ctx, [s.id], !allWatched), [
             addToPlaylist(ctx, s.id, "tv"),
             addToStation(ctx, s.id, "tv"),
@@ -508,6 +510,7 @@ export async function season(ctx: Ctx, [id]: string[]): Promise<HTMLElement[]> {
                 `${inProgress(ws.get(next.id)) ? "Resume" : "Play"} E${next.episodeNumber}`,
               )
             : null,
+          shuffleButton(ctx, eps, sh),
           btn(
             allWatched ? "Mark all unwatched" : "Mark all watched",
             "check",

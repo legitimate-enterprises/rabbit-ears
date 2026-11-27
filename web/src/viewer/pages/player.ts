@@ -25,6 +25,7 @@ import { playRows } from "./playlists";
 import { findTogether, otherName, Sync, type Together } from "../together";
 import { askHandoff, elsewhere, movedTo, moveHere, toast } from "../handoff";
 import { onLive } from "../live";
+import { runNext } from "../shuffle";
 
 interface Opt {
   name: string;
@@ -114,16 +115,24 @@ export async function player(
   const n = Number(query.get("n"));
   const [cur] = playlistId ? await playRows(ctx, playlistId, n).catch(() => []) : [];
   const row = cur?.itemId === itemId ? cur : undefined;
-  // The server decides what follows; a station or a Watch together has nothing next.
+  // A shuffle's run decides what follows, else the server; a station or a Watch together has nothing next.
+  const fromRun = runNext(itemId, query);
   const up =
-    live || tg ? undefined : await upNext(ctx, itemId, playlistId, n).catch(() => undefined);
-  const next = up && {
-    href:
-      up.index === undefined
-        ? `#/play/${up.itemId}`
-        : `#/play/${up.itemId}?playlist=${playlistId}&n=${up.index}`,
-    title: up.title,
-  };
+    live || tg || fromRun !== null
+      ? undefined
+      : await upNext(ctx, itemId, playlistId, n).catch(() => undefined);
+  const next =
+    live || tg
+      ? undefined
+      : fromRun !== null
+        ? fromRun
+        : up && {
+            href:
+              up.index === undefined
+                ? `#/play/${up.itemId}`
+                : `#/play/${up.itemId}?playlist=${playlistId}&n=${up.index}`,
+            title: up.title,
+          };
 
   const video = h("video", { playsInline: true, preload: "auto" }) as HTMLVideoElement;
   const audioTrackId = query.get("audio") ?? undefined;

@@ -1,5 +1,15 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
-import { api, email, quiet, seed, seedAdult, seedMusic, seedTV, signIn } from "./support";
+import {
+  api,
+  email,
+  leavePlayer,
+  quiet,
+  seed,
+  seedAdult,
+  seedMusic,
+  seedTV,
+  signIn,
+} from "./support";
 
 test.describe.configure({ mode: "serial" });
 
@@ -232,6 +242,52 @@ test("an episode's Next opens the next episode in place of it, so Back returns t
   await expect(page.getByRole("link", { name: /^Next episode/ })).toHaveCount(0);
   await page.goBack();
   await expect(page).toHaveURL(/#\/season\//);
+});
+
+test("a show's Shuffle plays each episode once from its start, never asking the server what follows", async ({
+  page,
+  request,
+}) => {
+  const headers = await seed(request);
+  await seedTV(request, headers);
+  const me = await (await request.get(`${api}/me`, { headers })).json();
+  const states = `${api}/profiles/${me.account.id}/watch-state`;
+  const eps = (await (await request.get(`${api}/items?kind=episode`, { headers })).json()).items;
+  // Half-watched, each would resume at 20 s.
+  for (const e of eps)
+    await request.put(`${states}/${e.id}`, {
+      headers,
+      data: { positionMs: 20_000, watched: false },
+    });
+  const asked: string[] = [];
+  const starts: { itemId: string; positionMs?: number }[] = [];
+  page.on("request", (r) => {
+    if (r.url().includes("/up-next/")) asked.push(r.url());
+    if (r.method() === "POST" && r.url().endsWith("/playback/sessions"))
+      starts.push(r.postDataJSON());
+  });
+  try {
+    await signIn(page);
+    await tab(page, "TV").click();
+    await pick(page, /Signal Hour/).click();
+    await page.getByRole("main").getByRole("button", { name: "Shuffle" }).click();
+    await expect(page).toHaveURL(/\?pos=0&shuffle=0$/);
+    await expect(page.locator("video")).toBeVisible();
+    await page.mouse.move(400, 300);
+    await page.getByRole("button", { name: "Next", exact: true }).click();
+    await expect(page).toHaveURL(/\?pos=0&shuffle=1$/);
+    await expect.poll(() => starts.length).toBe(2);
+    await expect(page.locator("video")).toBeVisible();
+    await page.mouse.move(400, 300);
+    await expect(page.getByRole("button", { name: "Back", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Next", exact: true })).toHaveCount(0);
+    expect(starts.map((s) => s.positionMs)).toEqual([0, 0]);
+    expect(starts.map((s) => s.itemId).sort()).toEqual(eps.map((e: { id: string }) => e.id).sort());
+    expect(asked).toEqual([]);
+  } finally {
+    await leavePlayer({ page });
+    for (const e of eps) await request.delete(`${states}/${e.id}`, { headers });
+  }
 });
 
 test("a custom collection holds a movie, shows on its details, is one row in a movies playlist, and rows its other films", async ({
