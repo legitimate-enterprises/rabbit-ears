@@ -563,3 +563,26 @@ func TestStationsTaskRunsHourly(t *testing.T) {
 		t.Fatalf("%+v %v", last, err)
 	}
 }
+
+func TestPurgeTaskRunsDaily(t *testing.T) {
+	e := newEnv(t, library.Movies, "")
+	r, tasks := newRunner(t, e)
+	runs := 0
+	r.Purge = func(context.Context) (string, error) { runs++; return "3 tombstones and 0 actions purged", nil }
+	if err := r.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	p, err := tasks.ByName("Purge sync history")
+	if err != nil || p.Kind != PurgeKind || p.IntervalSeconds == nil || *p.IntervalSeconds != 86400 || p.NextRunAt == nil {
+		t.Fatalf("%+v %v", p, err)
+	}
+	if err := r.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ = tasks.ByName("Purge sync history"); runs != 1 || p.NextRunAt == nil || !p.NextRunAt.Equal(e.clock.Add(24*time.Hour)) {
+		t.Fatalf("runs %d, next %v", runs, p.NextRunAt)
+	}
+	if last, err := tasks.LastRun(p.ID); err != nil || last.Summary != "3 tombstones and 0 actions purged" || last.Status != task.Succeeded {
+		t.Fatalf("%+v %v", last, err)
+	}
+}

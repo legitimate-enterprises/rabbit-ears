@@ -8,9 +8,11 @@ import (
 	"testing"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/replica"
 )
 
-// Open returns a fully migrated database that is closed with the test.
+// Open returns a fully migrated database, sync triggers installed, that is
+// closed with the test.
 func Open(t *testing.T) *sql.DB {
 	t.Helper()
 	d, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
@@ -18,7 +20,7 @@ func Open(t *testing.T) *sql.DB {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = d.Close() })
-	if err := db.Migrate(d); err != nil {
+	if err := replica.Migrate(d, ""); err != nil {
 		t.Fatal(err)
 	}
 	return d

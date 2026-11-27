@@ -108,10 +108,11 @@ func (s *Server) PutYouTubeChannelWatchState(ctx context.Context, r api.PutYouTu
 	if err != nil {
 		return nil, err
 	}
+	at := watchedAt(r.Body.At)
 	var tell []int64
 	err = s.svc.WatchStates.Repo().InTx(func(repo *watchstate.Repo) error {
 		for _, v := range videos {
-			_, changed, err := saveWatchStateIn(repo, r.ProfileId, v.ID, nil, func(w *watchstate.State) { w.Mark(r.Body.Watched, 0) })
+			_, changed, err := saveWatchStateIn(repo, r.ProfileId, v.ID, at, func(w *watchstate.State) { w.Mark(r.Body.Watched, 0) })
 			if err != nil {
 				return err
 			}

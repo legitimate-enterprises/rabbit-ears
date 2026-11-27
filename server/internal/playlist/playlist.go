@@ -4,7 +4,7 @@ package playlist
 
 import (
 	"database/sql"
-	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/collection"
@@ -37,16 +37,18 @@ type Playlist struct {
 	UpdatedAt    time.Time
 }
 
-// Entry is one item, or one collection, at a position from 0. Exactly one
-// of ItemID and CollectionID is set, the other 0. Either may appear more
-// than once. EditionID is the edition a title's entry plays, 0 for its
-// default; a container's is 0.
+// Entry is one item, or one collection, ordered by Rank, ties by ID;
+// Position is its place in that order from 0, as read. Exactly one of
+// ItemID and CollectionID is set, the other 0. Either may appear more than
+// once. EditionID is the edition a title's entry plays, 0 for its default; a
+// container's is 0.
 type Entry struct {
 	ID           int64
 	PlaylistID   int64
 	ItemID       int64
 	CollectionID int64
 	EditionID    int64
+	Rank         string
 	Position     int
 	AddedAt      time.Time
 }
@@ -255,12 +257,14 @@ func (r *Repo) Delete(id int64) error {
 	return db.ExecOne(r.d, `DELETE FROM playlist WHERE id = ?`, id)
 }
 
-const entryCols = `id, playlist_id, COALESCE(item_id, 0), COALESCE(collection_id, 0), COALESCE(edition_id, 0), position, added_at`
+const entryCols = `id, playlist_id, COALESCE(item_id, 0), COALESCE(collection_id, 0), COALESCE(edition_id, 0), rank,
+	(SELECT COUNT(*) FROM playlist_entry o WHERE o.playlist_id = playlist_entry.playlist_id
+		AND (o.rank, o.id) < (playlist_entry.rank, playlist_entry.id)), added_at`
 
 func scanEntry(s db.Scanner) (*Entry, error) {
 	var e Entry
 	var added int64
-	if err := s.Scan(&e.ID, &e.PlaylistID, &e.ItemID, &e.CollectionID, &e.EditionID, &e.Position, &added); err != nil {
+	if err := s.Scan(&e.ID, &e.PlaylistID, &e.ItemID, &e.CollectionID, &e.EditionID, &e.Rank, &e.Position, &added); err != nil {
 		return nil, db.Wrap(err)
 	}
 	e.AddedAt = db.FromMs(added)
@@ -278,7 +282,7 @@ func (r *Repo) Entry(id int64) (*Entry, error) {
 func (r *Repo) Entries(playlistID int64, a item.Audience, limit, offset int) ([]*Entry, error) {
 	rows, err := r.d.Query(expansion+`, seen AS (SELECT DISTINCT x.entry_id`+visible+`)
 		SELECT `+entryCols+` FROM playlist_entry WHERE playlist_id = ?1 AND (NOT ?5 OR id IN (SELECT entry_id FROM seen))
-		ORDER BY position, id LIMIT ?3 OFFSET ?4`, append([]any{playlistID, 0, limit, offset, a.Kid || a.HideKids}, a.Args()...)...)
+		ORDER BY rank, id LIMIT ?3 OFFSET ?4`, append([]any{playlistID, 0, limit, offset, a.Kid || a.HideKids}, a.Args()...)...)
 	return db.Collect(rows, err, scanEntry)
 }
 
@@ -299,18 +303,19 @@ func (r *Repo) CountEntries(playlistID int64) (int, error) {
 // expansion is x over the entries of playlist ?1 (any for 0), or of entry
 // ?2 alone.
 var expansion = `WITH e AS (
-	SELECT id, position, item_id, collection_id, edition_id FROM playlist_entry WHERE (?1 = 0 OR playlist_id = ?1) AND (?2 = 0 OR id = ?2)
-)` + branches
+	SELECT id, rank, item_id, collection_id, edition_id FROM playlist_entry WHERE (?1 = 0 OR playlist_id = ?1) AND (?2 = 0 OR id = ?2)
+)` + Branches
 
 // targetExpansion is x over one entry, id 0, naming item ?1 or collection
 // ?2, and edition ?5 of a title (0 for its default).
 var targetExpansion = `WITH e AS (
-	SELECT 0 AS id, 0 AS position, NULLIF(?1, 0) AS item_id, NULLIF(?2, 0) AS collection_id, NULLIF(?5, 0) AS edition_id
-)` + branches
+	SELECT 0 AS id, '' AS rank, NULLIF(?1, 0) AS item_id, NULLIF(?2, 0) AS collection_id, NULLIF(?5, 0) AS edition_id
+)` + Branches
 
-// branches is x, the play order of the entries e: a movie, episode, song
-// or video stands for itself, a show, season, album or artist for its
-// episodes or songs as they are now, a channel for its videos by publish
+// Branches is x, the play order of the entries e (id, rank, item_id,
+// collection_id, edition_id): a movie, episode, song or video stands for
+// itself, a show, season, album or artist for its episodes or songs as
+// they are now, a channel for its videos by publish
 // date, oldest first, a collection for its movies in collection.Order (k1
 // and k2 are the position, k3 the date, '~' sorting an undated movie last). A
 // title's row plays the edition its entry names, else the default, and a
@@ -320,52 +325,52 @@ var targetExpansion = `WITH e AS (
 // albums and those it performs on other albums; a song in both counts once.
 // No playlist entry names a channel or video. CROSS JOIN holds SQLite to
 // reaching items from the entries, never every item of a kind.
-var branches = `, x AS (
-	SELECT e.id AS entry_id, e.position AS pos, i.id AS item_id, COALESCE(e.edition_id, ` + edition.DefaultOf("i.id") + `) AS edition_id,
+var Branches = `, x AS (
+	SELECT e.id AS entry_id, e.rank AS pos, i.id AS item_id, COALESCE(e.edition_id, ` + edition.DefaultOf("i.id") + `) AS edition_id,
 		0 AS k1, 0 AS k2, '' AS k3, 0 AS k4, 0 AS k5, 0 AS k6, 0 AS k7, '' AS k8
 	FROM e CROSS JOIN item i ON i.id = e.item_id WHERE i.kind IN ('movie','episode','song','video')
 	UNION ALL
-	SELECT e.id, e.position, v.id, ` + edition.DefaultOf("v.id") + `, yv.published_at IS NULL, COALESCE(yv.published_at, 0), '', v.added_at, 0, 0, 0, ''
+	SELECT e.id, e.rank, v.id, ` + edition.DefaultOf("v.id") + `, yv.published_at IS NULL, COALESCE(yv.published_at, 0), '', v.added_at, 0, 0, 0, ''
 	FROM e CROSS JOIN item v ON v.parent_id = e.item_id AND v.kind = 'video' LEFT JOIN item_metadata yv ON yv.item_id = v.id
 	UNION ALL
-	SELECT e.id, e.position, ep.id, ` + edition.DefaultOf("ep.id") + `, COALESCE(se.season_number, 0) = 0, se.season_number, '', se.id, 0, 0,
+	SELECT e.id, e.rank, ep.id, ` + edition.DefaultOf("ep.id") + `, COALESCE(se.season_number, 0) = 0, se.season_number, '', se.id, 0, 0,
 		ep.episode_number, ''
 	FROM e CROSS JOIN item se ON se.parent_id = e.item_id AND se.kind = 'season' CROSS JOIN item ep ON ep.parent_id = se.id AND ep.kind = 'episode'
 	UNION ALL
-	SELECT e.id, e.position, ep.id, ` + edition.DefaultOf("ep.id") + `, 0, 0, '', 0, 0, 0, ep.episode_number, ''
+	SELECT e.id, e.rank, ep.id, ` + edition.DefaultOf("ep.id") + `, 0, 0, '', 0, 0, 0, ep.episode_number, ''
 	FROM e CROSS JOIN item ep ON ep.parent_id = e.item_id AND ep.kind = 'episode'
 	UNION ALL
-	SELECT e.id, e.position, s.id, ` + edition.DefaultOf("s.id") + `, 0, 0, '', 0, COALESCE(s.disc_number, 1), s.track_number IS NULL,
+	SELECT e.id, e.rank, s.id, ` + edition.DefaultOf("s.id") + `, 0, 0, '', 0, COALESCE(s.disc_number, 1), s.track_number IS NULL,
 		s.track_number, COALESCE(s.sort_title, s.parsed_title)
 	FROM e CROSS JOIN item s ON s.parent_id = e.item_id AND s.kind = 'song'
 	UNION ALL
-	SELECT e.id, e.position, s.id, ` + edition.DefaultOf("s.id") + `, al.parsed_year IS NULL, -al.parsed_year,
+	SELECT e.id, e.rank, s.id, ` + edition.DefaultOf("s.id") + `, al.parsed_year IS NULL, -al.parsed_year,
 		COALESCE(al.sort_title, al.parsed_title), al.id, COALESCE(s.disc_number, 1), s.track_number IS NULL, s.track_number,
 		COALESCE(s.sort_title, s.parsed_title)
 	FROM e CROSS JOIN item al ON al.parent_id = e.item_id AND al.kind = 'album' CROSS JOIN item s ON s.parent_id = al.id AND s.kind = 'song'
 	UNION ALL
-	SELECT e.id, e.position, s.id, ` + edition.DefaultOf("s.id") + `, al.parsed_year IS NULL, -al.parsed_year,
+	SELECT e.id, e.rank, s.id, ` + edition.DefaultOf("s.id") + `, al.parsed_year IS NULL, -al.parsed_year,
 		COALESCE(al.sort_title, al.parsed_title), al.id, COALESCE(s.disc_number, 1), s.track_number IS NULL, s.track_number,
 		COALESCE(s.sort_title, s.parsed_title)
 	FROM e CROSS JOIN item s ON s.artist_id = e.item_id AND s.kind = 'song' CROSS JOIN item al ON al.id = s.parent_id AND al.parent_id != e.item_id
 	UNION ALL
-	SELECT e.id, e.position, item.id, ` + edition.DefaultOf("item.id") + `, cm.position IS NULL, COALESCE(cm.position, 0),
+	SELECT e.id, e.rank, item.id, ` + edition.DefaultOf("item.id") + `, cm.position IS NULL, COALESCE(cm.position, 0),
 		COALESCE(` + collection.Date + `, '~'), 0, 0, 0, 0, ` + collection.Title + `
 	FROM e CROSS JOIN collection_movie cm ON cm.collection_id = e.collection_id CROSS JOIN item ON item.id = cm.item_id
 ) `
 
-// runtime is row x's edition's runtime, else that of its largest file.
-const runtime = `(SELECT COALESCE(re.runtime_ms, (SELECT f.duration_ms FROM edition_file rf JOIN media_file f ON f.id = rf.media_file_id
+// Runtime is row x's edition's runtime, else that of its largest file.
+const Runtime = `(SELECT COALESCE(re.runtime_ms, (SELECT f.duration_ms FROM edition_file rf JOIN media_file f ON f.id = rf.media_file_id
 	WHERE rf.edition_id = re.id ORDER BY f.size_bytes DESC, f.id LIMIT 1)) FROM edition re WHERE re.id = x.edition_id)`
 
 // visible keeps the rows of x the audience bound at ?6 to ?10 may see, so a
 // container never yields or counts an item its reader could not open, and
 // drops a row whose edition has no file left. CROSS JOIN holds SQLite to
 // reading x first, never the whole library.
-var visible = ` FROM x CROSS JOIN item ON item.id = x.item_id WHERE ` + playable + ` AND ` + item.VisibleWhere
+var visible = ` FROM x CROSS JOIN item ON item.id = x.item_id WHERE ` + Playable + ` AND ` + item.VisibleWhere
 
-// playable keeps the rows of x whose edition, if any, has a file left.
-const playable = `(x.edition_id IS NULL OR EXISTS (SELECT 1 FROM edition_file vf WHERE vf.edition_id = x.edition_id))`
+// Playable keeps the rows of x whose edition, if any, has a file left.
+const Playable = `(x.edition_id IS NULL OR EXISTS (SELECT 1 FROM edition_file vf WHERE vf.edition_id = x.edition_id))`
 
 // args binds a playlist or entry as ?1 and ?2, ?3 and ?4 (paging, if any),
 // and the audience as ?6 to ?10.
@@ -384,9 +389,12 @@ type Row struct {
 	RuntimeMs *int64
 }
 
+// RowOrder is the play order of x's rows.
+const RowOrder = `x.pos, x.entry_id, x.k1, x.k2, x.k3 COLLATE NOCASE, x.k4, x.k5, x.k6, x.k7, x.k8 COLLATE NOCASE, x.item_id`
+
 // playRows selects x's rows in play order, paged by ?3 and ?4.
-var playRows = `SELECT x.entry_id, x.item_id, item.kind, item.library_id, COALESCE(x.edition_id, 0), ` + runtime + visible + `
-	ORDER BY x.pos, x.entry_id, x.k1, x.k2, x.k3 COLLATE NOCASE, x.k4, x.k5, x.k6, x.k7, x.k8 COLLATE NOCASE, x.item_id
+var playRows = `SELECT x.entry_id, x.item_id, item.kind, item.library_id, COALESCE(x.edition_id, 0), ` + Runtime + visible + `
+	ORDER BY ` + RowOrder + `
 	LIMIT ?3 OFFSET ?4`
 
 func (r *Repo) rows(q string, args []any) ([]Row, error) {
@@ -422,11 +430,11 @@ func (r *Repo) Expand(itemID, collectionID, editionID int64, a item.Audience) ([
 // order), nil when there is none.
 func (r *Repo) Totals(playlistID int64, a item.Audience) (count int, durationMs int64, first *int64, err error) {
 	var f sql.NullInt64
-	err = r.d.QueryRow(expansion+`SELECT COUNT(*), COALESCE(SUM(`+runtime+`), 0),
-			(SELECT a FROM (SELECT f.position, f.id, COALESCE((SELECT fi.id FROM item fi WHERE fi.id = f.item_id AND `+item.VisibleOf("fi")+`),
+	err = r.d.QueryRow(expansion+`SELECT COUNT(*), COALESCE(SUM(`+Runtime+`), 0),
+			(SELECT a FROM (SELECT f.rank, f.id, COALESCE((SELECT fi.id FROM item fi WHERE fi.id = f.item_id AND `+item.VisibleOf("fi")+`),
 				(SELECT item.id FROM collection_movie cm JOIN item ON item.id = cm.item_id WHERE cm.collection_id = f.collection_id AND `+item.VisibleWhere+`
 				ORDER BY `+collection.Order+` LIMIT 1)) AS a
-			FROM playlist_entry f WHERE f.playlist_id = ?1) WHERE a IS NOT NULL ORDER BY position, id LIMIT 1)`+visible,
+			FROM playlist_entry f WHERE f.playlist_id = ?1) WHERE a IS NOT NULL ORDER BY rank, id LIMIT 1)`+visible,
 		args(playlistID, 0, nil, nil, a)...).Scan(&count, &durationMs, &f)
 	if f.Valid {
 		first = &f.Int64
@@ -438,16 +446,20 @@ func (r *Repo) Totals(playlistID int64, a item.Audience) (count int, durationMs 
 // play order, or for an adult hiding kids' content any row of it; an empty
 // one allows anyone.
 func (r *Repo) Allows(playlistID int64, a item.Audience) (bool, error) {
-	var all, seen int
-	err := r.d.QueryRow(expansion+`SELECT COUNT(*), COALESCE(SUM(`+item.VisibleWhere+`), 0)
-		FROM x CROSS JOIN item ON item.id = x.item_id WHERE `+playable, args(playlistID, 0, nil, nil, a)...).Scan(&all, &seen)
-	return seen == all || a.HideKids && seen > 0, db.Wrap(err)
+	var ok bool
+	err := r.d.QueryRow(expansion+`SELECT `+AllowsOf(`?6 = 2`)+` FROM (SELECT COUNT(*) AS total, COALESCE(SUM(`+item.VisibleWhere+`), 0) AS seen
+		FROM x CROSS JOIN item ON item.id = x.item_id WHERE `+Playable+`)`, args(playlistID, 0, nil, nil, a)...).Scan(&ok)
+	return ok, db.Wrap(err)
 }
+
+// AllowsOf is Allows over a play order of total rows, seen of them visible
+// to an audience that hides kids' content when hideKids holds.
+func AllowsOf(hideKids string) string { return `(seen = total OR ` + hideKids + ` AND seen > 0)` }
 
 // EntryTotals is how many rows of the play order one entry stands for now
 // for the audience, and their editions' runtimes added up.
 func (r *Repo) EntryTotals(entryID int64, a item.Audience) (count int, durationMs int64, err error) {
-	err = r.d.QueryRow(expansion+`SELECT COUNT(*), COALESCE(SUM(`+runtime+`), 0)`+visible,
+	err = r.d.QueryRow(expansion+`SELECT COUNT(*), COALESCE(SUM(`+Runtime+`), 0)`+visible,
 		args(0, entryID, nil, nil, a)...).Scan(&count, &durationMs)
 	return count, durationMs, db.Wrap(err)
 }
@@ -461,7 +473,7 @@ type Total struct {
 // EntriesTotals is EntryTotals for every entry of the playlist, by entry id;
 // an entry that stands for nothing the audience may see is absent.
 func (r *Repo) EntriesTotals(playlistID int64, a item.Audience) (map[int64]Total, error) {
-	rows, err := r.d.Query(expansion+`SELECT x.entry_id, COUNT(*), COALESCE(SUM(`+runtime+`), 0)`+visible+` GROUP BY x.entry_id`,
+	rows, err := r.d.Query(expansion+`SELECT x.entry_id, COUNT(*), COALESCE(SUM(`+Runtime+`), 0)`+visible+` GROUP BY x.entry_id`,
 		args(playlistID, 0, nil, nil, a)...)
 	if err != nil {
 		return nil, db.Wrap(err)
@@ -485,84 +497,105 @@ func (r *Repo) InTx(fn func(*Repo) error) error {
 	return db.InTx(r.d, func(d db.DBTX) error { return fn(New(d)) })
 }
 
-// AddEntry inserts e at position at, shifting later entries down; nil or past
-// the end appends. It fills ID, Position and AddedAt.
+// AddEntry inserts e at its Rank, or with none at position at, nil or past
+// the end last, and fills it as read back.
 func (r *Repo) AddEntry(e *Entry, at *int) error {
 	return db.InTx(r.d, func(d db.DBTX) error {
-		ids, err := order(d, e.PlaylistID, 0)
-		if err != nil {
-			return err
+		if e.Rank == "" {
+			var err error
+			if e.Rank, err = rankAt(d, e.PlaylistID, 0, at); err != nil {
+				return err
+			}
 		}
-		e.AddedAt = time.Now().UTC()
-		res, err := d.Exec(`INSERT INTO playlist_entry (playlist_id, item_id, collection_id, edition_id, position, added_at) VALUES (?,?,?,?,?,?)`,
-			e.PlaylistID, db.NullZeroID(e.ItemID), db.NullZeroID(e.CollectionID), db.NullZeroID(e.EditionID), len(ids), db.Ms(e.AddedAt))
+		res, err := d.Exec(`INSERT INTO playlist_entry (playlist_id, item_id, collection_id, edition_id, rank, added_at) VALUES (?,?,?,?,?,?)`,
+			e.PlaylistID, db.NullZeroID(e.ItemID), db.NullZeroID(e.CollectionID), db.NullZeroID(e.EditionID), e.Rank, db.Ms(time.Now().UTC()))
 		if err != nil {
 			return db.Wrap(err)
 		}
-		e.ID, _ = res.LastInsertId()
-		e.Position = place(&ids, e.ID, at)
-		return renumber(d, ids)
+		id, _ := res.LastInsertId()
+		v, err := scanEntry(d.QueryRow(`SELECT `+entryCols+` FROM playlist_entry WHERE id = ?`, id))
+		if err == nil {
+			*e = *v
+		}
+		return err
 	})
 }
 
-// MoveEntry moves an entry to position at, shifting the others; nil or past
-// the end moves it last.
+// AddEntries appends entries of one playlist in order, ranked as a batch.
+func (r *Repo) AddEntries(es []*Entry) error {
+	if len(es) == 0 {
+		return nil
+	}
+	return db.InTx(r.d, func(d db.DBTX) error {
+		var last string
+		err := d.QueryRow(`SELECT rank FROM playlist_entry WHERE playlist_id = ? ORDER BY rank DESC, id DESC LIMIT 1`, es[0].PlaylistID).Scan(&last)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return db.Wrap(err)
+		}
+		ranks, err := NKeysBetween(last, "", len(es))
+		if err != nil {
+			return err
+		}
+		for i, e := range es {
+			e.Rank = ranks[i]
+			if err := New(d).AddEntry(e, nil); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// MoveEntry ranks an entry at position at among the others, nil or past
+// the end last. No other entry changes.
 func (r *Repo) MoveEntry(id int64, at *int) error {
 	return db.InTx(r.d, func(d db.DBTX) error {
 		e, err := scanEntry(d.QueryRow(`SELECT `+entryCols+` FROM playlist_entry WHERE id = ?`, id))
 		if err != nil {
 			return err
 		}
-		ids, err := order(d, e.PlaylistID, id)
+		rank, err := rankAt(d, e.PlaylistID, id, at)
 		if err != nil {
 			return err
 		}
-		place(&ids, id, at)
-		return renumber(d, ids)
+		return New(d).RankEntry(id, rank)
 	})
+}
+
+// RankEntry gives an entry rank.
+func (r *Repo) RankEntry(id int64, rank string) error {
+	return db.ExecOne(r.d, `UPDATE playlist_entry SET rank = ? WHERE id = ?`, rank, id)
 }
 
 // RemoveEntry deletes an entry; later entries move up.
 func (r *Repo) RemoveEntry(id int64) error {
-	return db.InTx(r.d, func(d db.DBTX) error {
-		e, err := scanEntry(d.QueryRow(`SELECT `+entryCols+` FROM playlist_entry WHERE id = ?`, id))
-		if err != nil {
-			return err
-		}
-		if err := db.ExecOne(d, `DELETE FROM playlist_entry WHERE id = ?`, id); err != nil {
-			return err
-		}
-		ids, err := order(d, e.PlaylistID, 0)
-		if err != nil {
-			return err
-		}
-		return renumber(d, ids)
-	})
+	return db.ExecOne(r.d, `DELETE FROM playlist_entry WHERE id = ?`, id)
 }
 
-// order lists a playlist's entry ids in order, leaving out except.
-func order(d db.DBTX, playlistID, except int64) ([]int64, error) {
-	rows, err := d.Query(`SELECT id FROM playlist_entry WHERE playlist_id = ? AND id != ? ORDER BY position, id`, playlistID, except)
-	return db.Collect(rows, err, db.Column[int64])
-}
-
-// place inserts id into ids at at (nil or past the end appends) and returns
-// where it went.
-func place(ids *[]int64, id int64, at *int) int {
-	pos := len(*ids)
+// rankAt is a rank for position at among the playlist's entries other than
+// except, nil or past the end last. No key sorts between two equal ranks, so
+// a position between them lands after both.
+func rankAt(d db.DBTX, playlistID, except int64, at *int) (string, error) {
+	rows, err := d.Query(`SELECT rank FROM playlist_entry WHERE playlist_id = ? AND id != ? ORDER BY rank, id`, playlistID, except)
+	ranks, err := db.Collect(rows, err, db.Column[string])
+	if err != nil {
+		return "", err
+	}
+	pos := len(ranks)
 	if at != nil && *at < pos {
 		pos = *at
 	}
-	*ids = append((*ids)[:pos], append([]int64{id}, (*ids)[pos:]...)...)
-	return pos
-}
-
-// renumber writes positions 0 to n-1 in the order of ids, closing any gap.
-func renumber(d db.DBTX, ids []int64) error {
-	list, _ := json.Marshal(ids)
-	_, err := d.Exec(`UPDATE playlist_entry SET position = j.key FROM json_each(?) j
-		WHERE playlist_entry.id = j.value AND playlist_entry.position != j.key`, string(list))
-	return db.Wrap(err)
+	var lo, hi string
+	if pos > 0 {
+		lo = ranks[pos-1]
+	}
+	for _, k := range ranks[pos:] {
+		if k != lo {
+			hi = k
+			break
+		}
+	}
+	return KeyBetween(lo, hi)
 }
 
 // Ratings lists the distinct content ratings of the play order's rows as

@@ -1,6 +1,7 @@
 package httpapi_test
 
 import (
+	"net/url"
 	"slices"
 	"testing"
 	"time"
@@ -276,6 +277,92 @@ func TestWatchStateNewerWins(t *testing.T) {
 	eds, err := e.svc.Editions.Repo().Default(other)
 	must(t, err)
 	e.expect(404, "PUT", path, tok, map[string]any{"watched": false, "positionMs": 1, "editionId": eds.ID}, nil)
+}
+
+// A play recorded late counts once whichever way round it and a
+// putWatchState arrive; the rest of the state settles on the later
+// instant, as putWatchState settles it.
+func TestRecordPlayCommutesWithNewerWins(t *testing.T) {
+	e := newEnv(t)
+	lib := e.library("movies")
+	me, tok := e.plain.account.ID, e.plain.token
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	earlier, played, later := now.Add(-time.Hour), now.Add(-30*time.Minute), now.Add(-10*time.Minute)
+	for i, c := range []struct {
+		putAt    time.Time
+		putFirst bool
+		watched  bool
+		pos      int64
+		at       time.Time
+	}{
+		{earlier, true, true, 0, played},
+		{earlier, false, true, 0, played},
+		{later, true, false, 7000, later},
+		{later, false, false, 7000, later},
+	} {
+		m := e.movie(lib, "M"+itoa(int64(i)))
+		e.file(m, 600_000)
+		path := "/profiles/" + itoa(me) + "/watch-state/" + itoa(m)
+		e.expect(200, "PUT", path, tok, map[string]any{"watched": false, "positionMs": 5000, "at": now.Add(-2 * time.Hour)}, nil)
+		put := func() {
+			e.expect(200, "PUT", path, tok, map[string]any{"watched": false, "positionMs": 7000, "at": c.putAt}, nil)
+		}
+		if c.putFirst {
+			put()
+		}
+		e.expect(200, "POST", path+"/plays", tok, map[string]any{"at": played}, nil)
+		if !c.putFirst {
+			put()
+		}
+		var w api.WatchState
+		e.expect(200, "GET", path, tok, nil, &w)
+		if w.PlayCount != 1 || w.Watched != c.watched || w.PositionMs != c.pos || !w.UpdatedAt.Equal(c.at) || !w.LastPlayedAt.Equal(c.at) ||
+			w.EditionId == nil {
+			t.Errorf("put at %v first %v: %+v", c.putAt, c.putFirst, w)
+		}
+	}
+}
+
+// Every recorded play counts, a watched item's too, and the first makes
+// the state.
+func TestRecordPlayCountsEachPlay(t *testing.T) {
+	e := newEnv(t)
+	lib := e.library("movies")
+	m := e.movie(lib, "Heat")
+	e.file(m, 600_000)
+	path := "/profiles/" + itoa(e.plain.account.ID) + "/watch-state/" + itoa(m)
+	hourAgo := time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
+	var w api.WatchState
+	e.expect(200, "POST", path+"/plays", e.plain.token, map[string]any{"at": hourAgo}, &w)
+	if w.PlayCount != 1 || !w.Watched || w.PositionMs != 0 || !w.LastPlayedAt.Equal(hourAgo) {
+		t.Fatalf("%+v", w)
+	}
+	e.expect(200, "POST", path+"/plays", e.plain.token, map[string]any{"at": hourAgo.Add(-time.Hour)}, &w)
+	if w.PlayCount != 2 || !w.LastPlayedAt.Equal(hourAgo) {
+		t.Fatalf("an earlier play counts and keeps the later one: %+v", w)
+	}
+	e.expect(400, "POST", path+"/plays", e.plain.token, map[string]any{}, nil)
+	e.expect(404, "POST", "/profiles/"+itoa(e.plain.account.ID)+"/watch-state/999/plays", e.plain.token, map[string]any{"at": hourAgo}, nil)
+	other := e.movie(lib, "Ronin")
+	e.file(other, 600_000)
+	ed, err := e.svc.Editions.Repo().Default(other)
+	must(t, err)
+	e.expect(404, "POST", path+"/plays", e.plain.token, map[string]any{"at": hourAgo, "editionId": ed.ID}, nil)
+}
+
+// A forget that says when it happened leaves a state changed after it.
+func TestDeleteWatchStateAt(t *testing.T) {
+	e := newEnv(t)
+	lib := e.library("movies")
+	m := e.movie(lib, "Heat")
+	path := "/profiles/" + itoa(e.plain.account.ID) + "/watch-state/" + itoa(m)
+	minuteAgo := time.Now().UTC().Add(-time.Minute)
+	e.expect(200, "PUT", path, e.plain.token, map[string]any{"watched": true, "at": minuteAgo}, nil)
+	e.expect(204, "DELETE", path+"?at="+url.QueryEscape(minuteAgo.Add(-time.Hour).Format(time.RFC3339Nano)), e.plain.token, nil, nil)
+	e.expect(200, "GET", path, e.plain.token, nil, nil)
+	e.expect(204, "DELETE", path+"?at="+url.QueryEscape(minuteAgo.Format(time.RFC3339Nano)), e.plain.token, nil, nil)
+	e.expect(404, "GET", path, e.plain.token, nil, nil)
+	e.expect(404, "DELETE", path+"?at="+url.QueryEscape(minuteAgo.Format(time.RFC3339Nano)), e.plain.token, nil, nil)
 }
 
 // A show's or season's page reads the states of its own episodes only.

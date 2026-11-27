@@ -907,6 +907,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/profiles/{profileId}/watch-state/{itemId}/plays": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                profileId: components["parameters"]["ProfileId"];
+                itemId: components["parameters"]["ItemId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Count one finished play the server did not see.
+         * @description For a play the server did not stream, such as of a downloaded file, sent once per play when it ends. playCount goes up by one, and lastPlayedAt becomes the latest play, in whatever order plays and putWatchState arrive. Over a state that changed no later than at, the item is watched and resumes from the start of the edition played; a state that changed later stays. Playback the server streams counts a play only when it marks the item watched, so a client sends no putWatchState with watched true for a play it records.
+         */
+        post: operations["recordPlay"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/profiles/{profileId}/show-progress": {
         parameters: {
             query?: {
@@ -1011,7 +1034,7 @@ export interface paths {
         put?: never;
         /**
          * Add many to a playlist, appended in order.
-         * @description Each entry is checked as `addPlaylistEntry` checks it, and its position is ignored; a title of several editions without an editionId takes its default edition. A station's own playlist is written through its owner's profile, as `addPlaylistEntry` writes it. Nothing is added unless every entry may be.
+         * @description Each entry is checked as `addPlaylistEntry` checks it, and its position and rank are ignored: the entries take the ranks of generateNKeysBetween after the last entry's; a title of several editions without an editionId takes its default edition. A station's own playlist is written through its owner's profile, as `addPlaylistEntry` writes it. Nothing is added unless every entry may be.
          */
         post: operations["addPlaylistEntries"];
         delete?: never;
@@ -3966,6 +3989,169 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/sync/changes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What changed in this device's replica since a version.
+         * @description A native client keeps a replica: a local SQLite database of what its
+         *     household may see, in a sync schema the server defines. It fills it
+         *     from getSyncSnapshot, then keeps it current from this operation, on
+         *     every start, return to the foreground, reconnection and ring of
+         *     waitSyncVersion.
+         *
+         *     Every change the server makes moves a version, one global counter.
+         *     A pass asks with `since`, the version the replica holds, and without
+         *     `cursor`. An answer with mode `diff` and a `cursor` has more to read:
+         *     the client asks again with the same `since` and `schema` and that
+         *     cursor, until an answer comes without one. Each row appears at most
+         *     once per pass, in its state at the time it was read; it replaces the
+         *     replica's row of the same key in that table. Each tombstone deletes
+         *     the replica's row of that key, if it holds one. The replica has no
+         *     foreign keys, so rows and tombstones apply in the order given or any
+         *     other.
+         *
+         *     `version` is the watermark: a client that applied every page of a
+         *     pass holds everything up to `version`, and asks from it next time.
+         *     A page with a `cursor` reports `since` as its `version`, so a client
+         *     that stops mid-pass keeps its `since` and loses nothing by starting
+         *     the pass again.
+         *
+         *     Mode `snapshot` carries no rows: the client replaces its replica with
+         *     getSyncSnapshot, then catches up from that snapshot's version. It is
+         *     the answer, on any page, when `since` is absent; when `since` is older
+         *     than the deletions the server keeps (90 days) or newer than the
+         *     server's version, as after a restore; when a change after
+         *     `since` altered which rows the household's replica holds, such as a
+         *     membership, adult link, share, profile offer, a station made,
+         *     deleted or changing visibility, owner or playlist, or a device moving
+         *     household, or when the server was upgraded; and, on a
+         *     first page, when more rows changed since `since` than half the
+         *     replica holds.
+         *
+         *     Mode `unsupported` carries no rows: `schema` is outside
+         *     `ranges.schemaMin` to `ranges.schemaMax`. A client below schemaMin
+         *     updates before it syncs again; one above schemaMax waits for the
+         *     server to be upgraded.
+         */
+        get: operations["getSyncChanges"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sync/snapshot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * This device's whole replica as a SQLite database.
+         * @description The replica of the device's household in sync schema `schema`, as
+         *     one SQLite database: the schema's tables holding every row the
+         *     household may see, its views, among them those that apply each
+         *     profile's kid filter such as profile_item and profile_station, and
+         *     its indexes. Its
+         *     one-row table replica_meta holds `schema`, `version`, the version
+         *     the snapshot was taken at, and `household_id`. The client replaces
+         *     its replica with the file whole, then asks getSyncChanges with
+         *     `since` set to replica_meta's `version`. A `schema` outside
+         *     SyncRanges' schemaMin to schemaMax answers 400.
+         */
+        get: operations["getSyncSnapshot"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sync/version": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Wait until this device's replica has changes to read.
+         * @description A long poll, held as listEvents is, at most 25 seconds. It answers `changed` true as soon as getSyncChanges since `after` would answer a row, a tombstone or mode `snapshot`, else false when the time is up; it carries no data. A client asks with the version its replica holds while it is in the foreground, runs getSyncChanges on true, and asks again at once on false. A write elsewhere that the household cannot see does not ring, except a deletion from a table keyed by a single id, which reaches every household as a tombstone.
+         */
+        get: operations["waitSyncVersion"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sync/actions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Replay writes a client queued, in order.
+         * @description A client writes to its replica at once and queues each write as an
+         *     action naming an operation marked `x-replayable`, to send when it is
+         *     online. The server runs the actions in `seq` order, each as the
+         *     request it names would run, with the same validation, permissions
+         *     and rules, as `actingProfileId`, which must be a profile of the
+         *     device's household that is not revoked, with that profile's
+         *     permissions at the time of the replay. A profile's PIN is not asked,
+         *     and a device locked at Who's watching replays too and stays locked.
+         *
+         *     Each action the server answers gets one result: `accepted` when the
+         *     operation succeeded, `rejected` with the operation's Error `code`
+         *     when it answered 4xx. An operation not marked `x-replayable`, or a
+         *     `path` and `method` that are not `operationId`'s, is rejected with
+         *     `not_replayable`; an `actingProfileId` outside the household, or
+         *     revoked, with `not_found`. When an operation fails on the server, a 5xx, the
+         *     batch stops there: that action and every later one are absent from
+         *     `results`, and the client sends them again later. The client
+         *     removes from its queue only the actions answered.
+         *
+         *     The server remembers each answered action's `id` for 90 days per
+         *     device: an action sent again answers its stored result without
+         *     running again. A batch whose `apiVersion` is outside SyncRanges'
+         *     apiMin to apiMax rejects every action with `unsupported_version`,
+         *     runs and remembers none.
+         *
+         *     After each answered action, accepted or rejected, the server marks
+         *     every row in its `touched` as changed, or a deletion when the row
+         *     no longer exists, so the next getSyncChanges brings the replica's
+         *     copy of each to what the server holds; a row that exists but the
+         *     household may not see is left alone. A client keeps no rollback of
+         *     its own.
+         *
+         *     A batch that fails validation, names in `touched` a table that is
+         *     not one of the sync schema's, a key of the wrong length or a key
+         *     part of the wrong type (an integer for an integer column, a string
+         *     for a text one), or whose `seq` does not strictly increase, answers
+         *     400 and runs nothing.
+         */
+        post: operations["replaySyncActions"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -5017,6 +5203,15 @@ export interface components {
              */
             at?: string;
         };
+        PlayInput: {
+            /**
+             * Format: date-time
+             * @description When the play ended; a time ahead of the server's is taken as now.
+             */
+            at: string;
+            /** @description The edition, of this item, that played; absent is the default edition. */
+            editionId?: components["schemas"]["Id"];
+        };
         WatchStatePage: {
             items: components["schemas"]["WatchState"][];
             nextOffset?: number;
@@ -5797,6 +5992,11 @@ export interface components {
         YouTubeVideoSort: "newest" | "oldest" | "title" | "channel" | "length" | "played";
         YouTubeChannelWatchInput: {
             watched: boolean;
+            /**
+             * Format: date-time
+             * @description As WatchStateInput.at, for each video.
+             */
+            at?: string;
         };
         /**
          * @description The library kind a playlist holds. movies takes movies and collections; tv takes shows, seasons and episodes; music takes artists, albums and songs.
@@ -5951,6 +6151,8 @@ export interface components {
             playlistId: components["schemas"]["Id"];
             /** @description Order from 0 at the top. */
             position: number;
+            /** @description What orders the playlist's entries, compared bytewise, ties by id: a key of rocicorp/fractional-indexing with its default alphabet. Always sent; optional so a copy a client stored before the field existed still reads. */
+            rank?: string;
             /** @description Absent for a collection. */
             itemId?: components["schemas"]["Id"];
             /** @description Present for a collection only. */
@@ -5980,8 +6182,10 @@ export interface components {
         PlaylistEntryInput: {
             itemId?: components["schemas"]["Id"];
             collectionId?: components["schemas"]["Id"];
-            /** @description Where it goes, from 0; past the end or absent puts it last. */
+            /** @description Where it goes, from 0; past the end or absent puts it last. It takes a rank between its new neighbours', so a late replay can land elsewhere; between two of equal rank it goes after both. */
             position?: number;
+            /** @description Where it goes, as PlaylistEntry.rank orders it: a key that generateKeyBetween of rocicorp/fractional-indexing makes with its default alphabet from the neighbours' ranks. Taken as given; not with position. A string that is not such a key answers 400. */
+            rank?: string;
             /** @description An edition of itemId; required when that movie, episode or song has more than one. */
             editionId?: components["schemas"]["Id"];
         };
@@ -6414,6 +6618,103 @@ export interface components {
             /** @description `after` could not be continued; reload everything shown. */
             resync: boolean;
             events: components["schemas"]["Event"][];
+        };
+        /** @description What this server syncs with. */
+        SyncRanges: {
+            /** @description The oldest API version, as info.version, whose action batches the server replays. */
+            apiMin: string;
+            /** @description The newest such version, the server's own. */
+            apiMax: string;
+            /** @description The oldest sync schema the server serves. */
+            schemaMin: number;
+            /** @description The newest sync schema the server serves. */
+            schemaMax: number;
+        };
+        /** @description A column value as SQLite holds it: a JSON integer, number, string or null, never a boolean, array or object; true and false are 1 and 0. A key part is never null. */
+        SyncScalar: unknown;
+        /** @description Rows of one table of the sync schema, each a value per column. */
+        SyncTable: {
+            name: string;
+            columns: string[];
+            rows: components["schemas"]["SyncScalar"][][];
+        };
+        /** @description Rows deleted from one table of the sync schema, each by its primary key, its columns in the table's key order. */
+        SyncTombstones: {
+            table: string;
+            keys: components["schemas"]["SyncScalar"][][];
+        };
+        /** @description One page of a pass of getSyncChanges, or the mode to take instead. */
+        SyncChanges: {
+            /** @enum {string} */
+            mode: "diff" | "snapshot" | "unsupported";
+            ranges: components["schemas"]["SyncRanges"];
+            /**
+             * Format: int64
+             * @description With diff, the watermark; see getSyncChanges. Absent otherwise.
+             */
+            version?: number;
+            /** @description With diff, present while the pass has more pages; pass it back as `cursor`. */
+            cursor?: string;
+            /** @description With diff, the rows that changed, by table. */
+            tables?: components["schemas"]["SyncTable"][];
+            /** @description With diff, the rows deleted, by table. */
+            tombstones?: components["schemas"]["SyncTombstones"][];
+        };
+        SyncBell: {
+            /** @description True when getSyncChanges since `after` has something to answer. */
+            changed: boolean;
+            ranges: components["schemas"]["SyncRanges"];
+        };
+        SyncActionBatch: {
+            /** @description The API version, as info.version, of the spec the client was built from. */
+            apiVersion: string;
+            actions: components["schemas"]["SyncAction"][];
+        };
+        /** @description A row of the sync schema an action may change, by its primary key, its columns in the table's key order. */
+        SyncTouched: {
+            table: string;
+            key: components["schemas"]["SyncScalar"][];
+        };
+        /** @description One queued write, the request it replays and the replica rows it wrote. */
+        SyncAction: {
+            /**
+             * Format: uuid
+             * @description Chosen by the client, once per action.
+             */
+            id: string;
+            /**
+             * Format: int64
+             * @description Its place in the client's queue.
+             */
+            seq: number;
+            operationId: string;
+            /** @enum {string} */
+            method: "PUT" | "POST" | "DELETE";
+            /** @description Relative to /api/v1, path parameters filled in and query included. */
+            path: string;
+            /** @description The request body; absent for none. */
+            body?: unknown;
+            actingProfileId: components["schemas"]["Id"];
+            /**
+             * Format: date-time
+             * @description When the action was taken on the device. An operation that orders writes by time reads its own instant, the `at` of its body or query, which the client sets to the same.
+             */
+            at: string;
+            /** @description The replica rows the client wrote for the action, including those it deleted. */
+            touched: components["schemas"]["SyncTouched"][];
+        };
+        SyncActionResult: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            result: "accepted" | "rejected";
+            /** @description With rejected, an Error code the operation answered, or not_replayable or unsupported_version, as replaySyncActions describes. Not an enum, so a later server may add codes. */
+            code?: string;
+            /** @description With rejected, the Error message. */
+            message?: string;
+        };
+        SyncActionResults: {
+            results: components["schemas"]["SyncActionResult"][];
         };
         /** @description A playback session as the profile's other devices see it. */
         PlaybackSession: {
@@ -8140,7 +8441,10 @@ export interface operations {
     };
     deleteWatchState: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description When it was forgotten, as a device that was offline knows it; a time ahead of the server's is taken as now. A state that changed later stays, and the answer is still 204. */
+                at?: string;
+            };
             header?: never;
             path: {
                 profileId: components["parameters"]["ProfileId"];
@@ -8157,6 +8461,37 @@ export interface operations {
                 };
                 content?: never;
             };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    recordPlay: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                profileId: components["parameters"]["ProfileId"];
+                itemId: components["parameters"]["ItemId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlayInput"];
+            };
+        };
+        responses: {
+            /** @description The state with the play counted. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WatchState"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["NotFound"];
         };
@@ -13932,6 +14267,113 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EventPage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    getSyncChanges: {
+        parameters: {
+            query: {
+                /** @description The sync schema the client's replica uses. */
+                schema: number;
+                /** @description The `version` the replica holds; absent for none. */
+                since?: number;
+                /** @description The `cursor` of the previous page of this pass; opaque. */
+                cursor?: string;
+                /** @description At most this many rows and tombstones on the page. */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of changes, or the mode the client must take instead. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SyncChanges"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    getSyncSnapshot: {
+        parameters: {
+            query: {
+                /** @description The sync schema the client's replica uses. */
+                schema: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The replica. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/vnd.sqlite3": string;
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    waitSyncVersion: {
+        parameters: {
+            query: {
+                /** @description The `version` the replica holds. */
+                after: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Whether there are changes to read. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SyncBell"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    replaySyncActions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SyncActionBatch"];
+            };
+        };
+        responses: {
+            /** @description A result for each action answered, in the batch's order. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SyncActionResults"];
                 };
             };
             400: components["responses"]["BadRequest"];

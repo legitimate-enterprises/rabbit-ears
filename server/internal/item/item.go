@@ -125,7 +125,7 @@ type Filter struct {
 	PersonID int64
 	// Catalog keeps only CatalogKinds.
 	Catalog bool
-	// KidsOnly keeps kids' content, as kidsContentOf says.
+	// KidsOnly keeps kids' content, as KidsContentOf says.
 	KidsOnly bool
 	// UHD keeps movies and episodes with a file whose video is at least
 	// 3200 wide or 2000 tall, and shows and seasons with such an episode.
@@ -159,7 +159,7 @@ var where = `(?1 = 0 OR library_id = ?1) AND (?2 = '' OR kind = ?2) AND (?3 = 0 
 // kidsOnly is the clause that keeps f to kids' content.
 func (f Filter) kidsOnly() string {
 	if f.KidsOnly {
-		return ` AND ` + kidsContentOf("item")
+		return ` AND ` + KidsContentOf("item")
 	}
 	return ""
 }
@@ -189,10 +189,10 @@ func rootOf(t string) string {
 	return `COALESCE((SELECT vp.parent_id FROM item vp WHERE vp.id = ` + t + `.parent_id), ` + t + `.parent_id, ` + t + `.id)`
 }
 
-// kidsContentOf is whether t's root is kids' content, as IsKidsContent
+// KidsContentOf is whether t's root is kids' content, as IsKidsContent
 // says: a movie or show by its override or rating, a channel for kids. It
 // reads item_shown by key; a LEFT JOIN onto it builds the whole view.
-func kidsContentOf(t string) string {
+func KidsContentOf(t string) string {
 	rating := `(SELECT vm.content_rating FROM item_shown vm WHERE vm.item_id = vr.id)`
 	return `EXISTS (SELECT 1 FROM item vr WHERE vr.id = ` + rootOf(t) + `
 		AND COALESCE(vr.kids_content, vr.kind = 'movie' AND ` + rating + ` IN ('` + strings.Join(KidsRatings[Movie], "','") + `')
@@ -203,9 +203,9 @@ func kidsContentOf(t string) string {
 // explicit.
 func cleanSong(s string) string { return s + `.explicit = 0` }
 
-// cleanOf is whether a kid hears t: a song not explicit, an album or
+// CleanOf is whether a kid hears t: a song not explicit, an album or
 // artist with such a song of its own or, for an artist, one it performs.
-func cleanOf(t string) string {
+func CleanOf(t string) string {
 	return `CASE ` + t + `.kind WHEN 'song' THEN ` + cleanSong(t) + `
 		WHEN 'album' THEN EXISTS (SELECT 1 FROM item vs WHERE vs.parent_id = ` + t + `.id AND ` + cleanSong("vs") + `)
 		WHEN 'artist' THEN EXISTS (SELECT 1 FROM item vs WHERE ` + cleanSong("vs") + ` AND +vs.kind = 'song'
@@ -213,24 +213,32 @@ func cleanOf(t string) string {
 		ELSE 0 END`
 }
 
-// VisibleOf is the WHERE fragment over the item alias t for an Audience
-// whose Args are bound to ?6 to ?10. A kid hears music but explicit songs
-// and what holds only them; sees YouTube channels for kids, or on an
-// allow list those on it, with their videos; and sees movies and shows by
-// rating, an unrated one hidden, or on an allow list those on it. An
-// adult hiding kids' content sees everything else.
-func VisibleOf(t string) string {
-	return `(?6 = 0 OR ?6 = 2 AND NOT ` + kidsContentOf(t) + ` OR ?6 = 1 AND CASE (SELECT vl.kind FROM library vl WHERE vl.id = ` + t + `.library_id)
-	WHEN 'music' THEN ` + cleanOf(t) + `
-	WHEN 'youtube' THEN CASE WHEN ?8 = 1
-		THEN EXISTS (SELECT 1 FROM account_allow vw WHERE vw.account_id = ?7 AND vw.item_id = ` + rootOf(t) + `)
+// AudienceSQL is the SQL of each value of an Audience's Args.
+type AudienceSQL struct{ Mode, AccountID, AllowList, Movie, TV string }
+
+// VisibleTo is the WHERE fragment over the item alias t for the audience
+// a. A kid hears music but explicit songs and what holds only them; sees
+// YouTube channels for kids, or on an allow list those on it, with their
+// videos; and sees movies and shows by rating, an unrated one hidden, or on
+// an allow list those on it. An adult hiding kids' content sees everything
+// else.
+func VisibleTo(t string, a AudienceSQL) string {
+	return `(` + a.Mode + ` = 0 OR ` + a.Mode + ` = 2 AND NOT ` + KidsContentOf(t) + ` OR ` + a.Mode + ` = 1 AND CASE (SELECT vl.kind FROM library vl WHERE vl.id = ` + t + `.library_id)
+	WHEN 'music' THEN ` + CleanOf(t) + `
+	WHEN 'youtube' THEN CASE WHEN ` + a.AllowList + ` = 1
+		THEN EXISTS (SELECT 1 FROM account_allow vw WHERE vw.account_id = ` + a.AccountID + ` AND vw.item_id = ` + rootOf(t) + `)
 		ELSE EXISTS (SELECT 1 FROM item vc WHERE vc.id = ` + rootOf(t) + ` AND vc.kids_content = 1) END
-	ELSE CASE WHEN ?8 = 1
-		THEN EXISTS (SELECT 1 FROM account_allow vw WHERE vw.account_id = ?7 AND vw.item_id IN (` + t + `.id, ` + t + `.parent_id,
+	ELSE CASE WHEN ` + a.AllowList + ` = 1
+		THEN EXISTS (SELECT 1 FROM account_allow vw WHERE vw.account_id = ` + a.AccountID + ` AND vw.item_id IN (` + t + `.id, ` + t + `.parent_id,
 			(SELECT vp.parent_id FROM item vp WHERE vp.id = ` + t + `.parent_id)))
 		ELSE EXISTS (SELECT 1 FROM item vr JOIN item_shown vm ON vm.item_id = vr.id WHERE vr.id = ` + rootOf(t) + `
-			AND instr(CASE vr.kind WHEN 'movie' THEN ?9 ELSE ?10 END, ',' || vm.content_rating || ',') > 0)
+			AND instr(CASE vr.kind WHEN 'movie' THEN ` + a.Movie + ` ELSE ` + a.TV + ` END, ',' || vm.content_rating || ',') > 0)
 	END END)`
+}
+
+// VisibleOf is VisibleTo with an Audience's Args bound to ?6 to ?10.
+func VisibleOf(t string) string {
+	return VisibleTo(t, AudienceSQL{Mode: "?6", AccountID: "?7", AllowList: "?8", Movie: "?9", TV: "?10"})
 }
 
 // VisibleWhere is VisibleOf over a table named item.

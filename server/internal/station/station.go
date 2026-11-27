@@ -55,10 +55,16 @@ const from = ` FROM station s JOIN account a ON a.id = s.account_id JOIN playlis
 const cols = `SELECT s.id, s.account_id, s.playlist_id, COALESCE(a.household_id, 0), p.kind, s.name, s.shuffled, s.visibility,
 	s.timing, COALESCE(s.rating, ''), s.created_at, s.updated_at` + from
 
-// seen keeps the stations shared with the viewer bound at ?1 (profile)
-// and ?2 (household). What a kid may see of them the play order decides,
-// which the repository cannot read.
-const seen = ` (s.account_id = ?1 OR s.visibility = 'server' OR s.visibility = 'household' AND a.household_id = ?2)`
+// SeenOf keeps the stations s shared with profile, on a device of
+// household, owner being the household of s's owner. What a kid may see of
+// them the play order decides, which the repository cannot read.
+func SeenOf(s, owner, profile, household string) string {
+	return ` (` + s + `.account_id = ` + profile + ` OR ` + s + `.visibility = 'server' OR ` + s + `.visibility = 'household' AND ` +
+		owner + ` = ` + household + `)`
+}
+
+// seen is SeenOf the viewer bound at ?1 (profile) and ?2 (household).
+var seen = SeenOf("s", "a.household_id", "?1", "?2")
 
 func (v Viewer) args(third, limit, offset any) []any {
 	return []any{v.ProfileID, v.HouseholdID, third, limit, offset}
@@ -180,7 +186,7 @@ func (r *Repo) List(v Viewer, kind string, limit, offset int) ([]*Station, error
 }
 
 // listWhere is the rows List pages and Count counts.
-const listWhere = ` WHERE (?3 = '' OR p.kind = ?3) AND` + seen
+var listWhere = ` WHERE (?3 = '' OR p.kind = ?3) AND` + seen
 
 // Count is how many stations List matches, ignoring limit and offset.
 func (r *Repo) Count(v Viewer, kind string) (n int, err error) {

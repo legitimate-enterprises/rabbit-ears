@@ -115,7 +115,7 @@ func (s *Server) toEntry(ctx context.Context, e *playlist.Entry) (api.PlaylistEn
 
 // entryWith is toEntry with the entry's totals already counted.
 func (s *Server) entryWith(ctx context.Context, e *playlist.Entry, t playlist.Total) (api.PlaylistEntry, error) {
-	out := api.PlaylistEntry{Id: e.ID, PlaylistId: e.PlaylistID, Position: e.Position, AddedAt: e.AddedAt, ItemCount: t.Count, DurationMs: t.DurationMs}
+	out := api.PlaylistEntry{Id: e.ID, PlaylistId: e.PlaylistID, Position: e.Position, Rank: &e.Rank, AddedAt: e.AddedAt, ItemCount: t.Count, DurationMs: t.DurationMs}
 	if e.CollectionID != 0 {
 		c, err := s.svc.Collections.Repo().Get(e.CollectionID)
 		if err != nil {
@@ -353,6 +353,10 @@ func (s *Server) AddPlaylistEntry(ctx context.Context, r api.AddPlaylistEntryReq
 	if (in.ItemId == nil) == (in.CollectionId == nil) {
 		return nil, invalid("itemId", "name exactly one of itemId and collectionId")
 	}
+	rank, err := entryRank(*in)
+	if err != nil {
+		return nil, err
+	}
 	var e *playlist.Entry
 	if in.CollectionId != nil {
 		if in.EditionId != nil {
@@ -362,7 +366,7 @@ func (s *Server) AddPlaylistEntry(ctx context.Context, r api.AddPlaylistEntryReq
 		if err != nil {
 			return nil, err
 		}
-		if e, err = s.svc.Playlists.AddCollection(p, &v.Collection, in.Position); errors.Is(err, service.ErrWrongPlaylistKind) {
+		if e, err = s.svc.Playlists.AddCollection(p, &v.Collection, in.Position, rank); errors.Is(err, service.ErrWrongPlaylistKind) {
 			return nil, invalid("collectionId", err.Error())
 		} else if err != nil {
 			return nil, err
@@ -372,7 +376,7 @@ func (s *Server) AddPlaylistEntry(ctx context.Context, r api.AddPlaylistEntryReq
 		if err != nil {
 			return nil, err
 		}
-		if e, err = s.svc.Playlists.AddEntry(p, it, or(in.EditionId, 0), in.Position); err != nil {
+		if e, err = s.svc.Playlists.AddEntry(p, it, or(in.EditionId, 0), in.Position, rank); err != nil {
 			return nil, playlistError(err)
 		}
 	}
@@ -416,7 +420,16 @@ func (s *Server) ReplacePlaylistEntry(ctx context.Context, r api.ReplacePlaylist
 	if r.Body.EditionId != nil && *r.Body.EditionId != e.EditionID {
 		return nil, invalid("editionId", "an entry keeps its edition; add the other edition instead")
 	}
-	if err := s.svc.Playlists.Repo().MoveEntry(e.ID, r.Body.Position); err != nil {
+	rank, err := entryRank(*r.Body)
+	if err != nil {
+		return nil, err
+	}
+	if rank != "" {
+		err = s.svc.Playlists.Repo().RankEntry(e.ID, rank)
+	} else {
+		err = s.svc.Playlists.Repo().MoveEntry(e.ID, r.Body.Position)
+	}
+	if err != nil {
 		return nil, err
 	}
 	if e, err = s.entryOf(p, e.ID); err != nil {
@@ -424,6 +437,20 @@ func (s *Server) ReplacePlaylistEntry(ctx context.Context, r api.ReplacePlaylist
 	}
 	v, err := s.toEntry(ctx, e)
 	return api.ReplacePlaylistEntry200JSONResponse(v), err
+}
+
+// entryRank is the rank an entry input names, "" for none.
+func entryRank(in api.PlaylistEntryInput) (string, error) {
+	if in.Rank == nil {
+		return "", nil
+	}
+	if in.Position != nil {
+		return "", invalid("rank", "send position or rank, not both")
+	}
+	if err := playlist.ValidKey(*in.Rank); err != nil {
+		return "", invalid("rank", err.Error())
+	}
+	return *in.Rank, nil
 }
 
 // RemovePlaylistEntry removes one entry; later ones move up.

@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"sync"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/api"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db"
@@ -21,6 +22,12 @@ const BasePath = "/api/v1"
 type Server struct {
 	svc     *service.Services
 	version string
+	guard   *guard
+	// replay is the guarded chain every API request runs, which replayed
+	// actions run too; batches holds a *sync.Mutex per device, so one
+	// device's batches replay one at a time.
+	replay  http.Handler
+	batches sync.Map
 }
 
 var _ api.StrictServerInterface = (*Server)(nil)
@@ -32,14 +39,15 @@ func NewHandler(version string, svc *service.Services) (http.Handler, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{svc, version}
+	s := &Server{svc: svc, version: version, guard: g}
 	strict := api.NewStrictHandlerWithOptions(s, []api.StrictMiddlewareFunc{s.announcePlaylists}, api.StrictHTTPServerOptions{
 		RequestErrorHandlerFunc:  badRequest,
 		ResponseErrorHandlerFunc: responseError,
 	})
 	inner := api.HandlerWithOptions(strict, api.StdHTTPServerOptions{BaseURL: BasePath, ErrorHandlerFunc: badRequest})
+	s.replay = g.wrap(inner)
 	mux := http.NewServeMux()
-	mux.Handle("/", s.announceArtwork(gzipJSON(g.wrap(inner))))
+	mux.Handle("/", s.announceArtwork(gzipJSON(s.replay)))
 	(&streams{svc}).register(mux)
 	(&downloadFiles{svc}).register(mux)
 	return mux, nil

@@ -224,7 +224,7 @@ func TestScanMusic(t *testing.T) {
 	must(t, err)
 	_, err = e.d.Exec(`INSERT INTO playlist (account_id, name, kind, created_at, updated_at) VALUES (1, 'P', 'music', 0, 0)`)
 	must(t, err)
-	_, err = e.d.Exec(`INSERT INTO playlist_entry (playlist_id, item_id, position, added_at) VALUES (1, ?, 0, 0)`, song.ID)
+	_, err = e.d.Exec(`INSERT INTO playlist_entry (playlist_id, item_id, rank, added_at) VALUES (1, ?, 'a0', 0)`, song.ID)
 	must(t, err)
 	retagged := filepath.Join(t.TempDir(), "x.flac")
 	if out, err := exec.Command("ffmpeg", "-v", "error", "-i", opening, "-map", "0", "-c", "copy", "-metadata", "album=Second Album", retagged).CombinedOutput(); err != nil { //nolint:gosec // fixture and temp paths

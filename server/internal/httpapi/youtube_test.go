@@ -118,6 +118,21 @@ func TestYouTubeBrowsing(t *testing.T) {
 	e.expect(404, "PUT", "/profiles/"+itoa(e.admin.account.ID)+"/youtube/channels/"+itoa(tb.channel)+"/watch-state", tok, map[string]any{"watched": true}, nil)
 }
 
+// Marking a channel's videos as of an instant leaves a video changed after
+// it.
+func TestPutYouTubeChannelWatchStateAt(t *testing.T) {
+	e := newEnv(t)
+	tb := e.youtubeLibrary()
+	p := "/profiles/" + itoa(e.plain.account.ID)
+	minuteAgo := time.Now().UTC().Add(-time.Minute)
+	e.expect(200, "PUT", p+"/watch-state/"+itoa(tb.newer), e.plain.token, map[string]any{"watched": false, "positionMs": 5000, "at": minuteAgo}, nil)
+	e.expect(204, "PUT", p+"/youtube/channels/"+itoa(tb.channel)+"/watch-state", e.plain.token,
+		map[string]any{"watched": true, "at": minuteAgo.Add(-time.Hour)}, nil)
+	if watched(t, e, e.plain.account.ID, tb.newer) || !watched(t, e, e.plain.account.ID, tb.older) {
+		t.Fatal("an older mark overwrote a newer state, or skipped one without")
+	}
+}
+
 // Marking a channel's videos watched is all or nothing.
 func TestPutYouTubeChannelWatchStateFailsWhole(t *testing.T) {
 	e := newEnv(t)

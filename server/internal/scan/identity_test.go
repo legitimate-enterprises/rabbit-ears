@@ -275,7 +275,7 @@ func TestMatchedDuplicateMoviesFold(t *testing.T) {
 		`INSERT INTO account (id, kind, name, household_id, created_at, updated_at) VALUES (2,'kid','K',1,0,0)`,
 		`INSERT INTO account_allow (account_id, item_id) VALUES (2,NEWER)`,
 		`INSERT INTO playlist (id, account_id, name, kind, created_at, updated_at) VALUES (1,1,'P','movies',0,0)`,
-		`INSERT INTO playlist_entry (id, playlist_id, item_id, edition_id, position, added_at) VALUES (1,1,NEWER,ED,0,0)`,
+		`INSERT INTO playlist_entry (id, playlist_id, item_id, edition_id, rank, added_at) VALUES (1,1,NEWER,ED,'a0',0)`,
 		`INSERT INTO collection (id, source, household_id, name, created_at, updated_at) VALUES (1,'custom',1,'C',0,0)`,
 		`INSERT INTO collection_movie (collection_id, item_id) VALUES (1,NEWER)`,
 		`INSERT INTO station (id, account_id, playlist_id, name, visibility, created_at, updated_at) VALUES (1,1,1,'S','private',0,0)`,

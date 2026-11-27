@@ -37,6 +37,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/occasion"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/person"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/playback"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/replica"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/review"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/scan"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/seekpreview"
@@ -95,7 +96,8 @@ func dataDir(dbFile string) string {
 // reports each finished loop on wg. While client has no TMDB key, scans
 // skip TMDB, and while the metadata settings use no remote data they call
 // no provider. The scheduler also runs stations, the hourly Schedule
-// stations task, and tells events of each scan that changed its library.
+// stations task, and the daily purge of sync history, and tells events of
+// each scan that changed its library.
 func startScanning(ctx context.Context, wg *sync.WaitGroup, d *sql.DB, client *tmdb.Client, data string, stations func(context.Context) (string, error), events *live.Hub) error {
 	if !client.Enabled() {
 		logstore.Log("server").Info("No TMDB key is set; library scans will not fetch metadata until one is saved in Settings")
@@ -109,6 +111,7 @@ func startScanning(ctx context.Context, wg *sync.WaitGroup, d *sql.DB, client *t
 		Avatars: youtube.NewAvatars(filepath.Join(data, "cache", "youtube")), Settings: info, Reviews: review.New(d)})
 	runner := scan.NewRunner(sc, task.New(d))
 	runner.Stations, runner.Events = stations, events
+	runner.Purge = func(context.Context) (string, error) { return replica.Purge(d, time.Now()) }
 	runner.Paused = func() bool {
 		i, err := info.Get()
 		return err == nil && i.TasksPaused
@@ -225,7 +228,11 @@ func resetPassword(args []string, out io.Writer) error {
 		return err
 	}
 	defer func() { _ = d.Close() }()
-	if err := db.Migrate(d); err != nil {
+	doc, err := api.GetSpec()
+	if err != nil {
+		return err
+	}
+	if err := replica.Migrate(d, doc.Info.Version); err != nil {
 		return err
 	}
 	a, err := account.New(d).ByEmail(args[0])
@@ -294,7 +301,14 @@ func run() error {
 		return err
 	}
 	defer func() { _ = d.Close() }()
-	if err := db.Migrate(d); err != nil {
+	// The server and its API are one release with one version; the spec
+	// states it.
+	doc, err := api.GetSpec()
+	if err != nil {
+		return err
+	}
+	version := doc.Info.Version
+	if err := replica.Migrate(d, version); err != nil {
 		return err
 	}
 	if err := occasion.New(d).SeedBuiltIns(); err != nil {
@@ -318,8 +332,13 @@ func run() error {
 			return err
 		}
 	}
-	if err := os.RemoveAll(cache); err != nil {
-		return err
+	// Snapshots are rebuilt on demand; one from before a restart may hold
+	// a release's schema no longer served.
+	svc.Sync.Dir = filepath.Join(data, "cache", "sync")
+	for _, dir := range []string{cache, svc.Sync.Dir} {
+		if err := os.RemoveAll(dir); err != nil {
+			return err
+		}
 	}
 	maxVideo, cacheCap, err := svc.Server.TranscodeLimits()
 	if err != nil {
@@ -338,13 +357,6 @@ func run() error {
 	svc.Channels.IdentDir = filepath.Join(data, "cache", "idents")
 	defer svc.Playback.Engine.Close()
 	defer svc.Channels.Close()
-	// The server and its API are one release with one version; the spec
-	// states it.
-	doc, err := api.GetSpec()
-	if err != nil {
-		return err
-	}
-	version := doc.Info.Version
 	h, err := httpapi.NewHandler(version, svc)
 	if err != nil {
 		return err

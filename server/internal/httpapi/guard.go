@@ -30,6 +30,10 @@ const adminScope = "admin"
 // Who's watching may still call.
 const whileLocked = "x-while-locked"
 
+// replayable is the spec extension marking the operations replaySyncActions
+// may run.
+const replayable = "x-replayable"
+
 // maxBody is the largest request body accepted, the spec's 1 MiB, and
 // maxUpload that of an operation the spec marks upload.
 const (
@@ -161,13 +165,24 @@ func (g *guard) wrap(next http.Handler) http.Handler {
 		if route.Operation.Security != nil {
 			security = *route.Operation.Security
 		}
-		scheme := "http"
-		if r.TLS != nil || fromProxy(r) && r.Header.Get("X-Forwarded-Proto") == "https" {
-			scheme = "https"
+		ctx := r.Context()
+		// A replayed request keeps the source and origin of its batch's.
+		replay, replayed := ctx.Value(replayKey{}).(principal)
+		if !replayed {
+			scheme := "http"
+			if r.TLS != nil || fromProxy(r) && r.Header.Get("X-Forwarded-Proto") == "https" {
+				scheme = "https"
+			}
+			ctx = context.WithValue(context.WithValue(ctx, remoteKey{}, sourceAddr(r)), originKey{}, scheme+"://"+r.Host)
 		}
-		ctx := context.WithValue(context.WithValue(r.Context(), remoteKey{}, sourceAddr(r)), originKey{}, scheme+"://"+r.Host)
 		if len(security) > 0 {
-			p, err := g.authenticate(r, security, route.Operation.Extensions[whileLocked] == true)
+			p, err := replay, error(nil)
+			if !replayed {
+				p, err = g.authenticate(r, route.Operation.Extensions[whileLocked] == true)
+			}
+			if err == nil {
+				p, err = permitted(p, security)
+			}
 			if err != nil {
 				responseError(w, r, err)
 				return
@@ -243,10 +258,16 @@ func withoutNulls(v any) any {
 	return v
 }
 
-// authenticate accepts the device token when any one requirement is met, as
-// OpenAPI defines alternatives; the spec only ever lists one. A locked device
-// meets none unless the operation is open while locked.
-func (g *guard) authenticate(r *http.Request, security openapi3.SecurityRequirements, openWhileLocked bool) (principal, error) {
+// replayable reports whether r calls the operation named id, in any case,
+// and the spec marks it replayable.
+func (g *guard) replayable(r *http.Request, id string) bool {
+	route, _, err := g.router.FindRoute(r)
+	return err == nil && strings.EqualFold(route.Operation.OperationID, id) && route.Operation.Extensions[replayable] == true
+}
+
+// authenticate resolves the device token to its principal. A locked device
+// is refused unless the operation is open while locked.
+func (g *guard) authenticate(r *http.Request, openWhileLocked bool) (principal, error) {
 	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	if !ok || token == "" {
 		return principal{}, service.ErrUnauthenticated
@@ -262,6 +283,12 @@ func (g *guard) authenticate(r *http.Request, security openapi3.SecurityRequirem
 	if d.LockedAt != nil && !openWhileLocked {
 		return principal{}, errLocked
 	}
+	return p, nil
+}
+
+// permitted admits p when any one requirement is met, as OpenAPI defines
+// alternatives; the spec only ever lists one.
+func permitted(p principal, security openapi3.SecurityRequirements) (principal, error) {
 	for _, req := range security {
 		if scopes, ok := req["device"]; ok && (!slices.Contains(scopes, adminScope) || p.asAdmin()) {
 			p.adminOp = slices.Contains(scopes, adminScope)

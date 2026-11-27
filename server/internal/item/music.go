@@ -63,13 +63,13 @@ func letterOf(a string) string {
 	return `CASE WHEN ` + first + ` BETWEEN 'A' AND 'Z' THEN ` + first + ` ELSE '#' END`
 }
 
-// counted keeps a song alias s that ?11, Clean, lets count.
-func counted(s string) string { return `(?11 = 0 OR ` + cleanSong(s) + `)` }
+// counted keeps a song alias s that clean, an SQL truth value, lets count.
+func counted(s, clean string) string { return `(` + clean + ` = 0 OR ` + cleanSong(s) + `)` }
 
 // common is the WHERE shared by the views over item alias a: library,
 // genre (on a or on g, its album), letter, query, ids and Clean.
 func common(f MusicFilter, a, g string) string {
-	w := `(?1 = 0 OR ` + a + `.library_id = ?1) AND (?11 = 0 OR ` + cleanOf(a) + `)
+	w := `(?1 = 0 OR ` + a + `.library_id = ?1) AND (?11 = 0 OR ` + CleanOf(a) + `)
 		AND (?4 = 0 OR EXISTS (SELECT 1 FROM item_genre_shown ig WHERE ig.item_id IN (` + a + `.id, ` + g + `.id) AND ig.genre_id = ?4))
 		AND (?5 = '' OR ` + letterOf(a) + ` = ?5)
 		AND (?6 = '' OR instr(lower(` + a + `.parsed_title), lower(?6)) > 0)`
@@ -110,15 +110,22 @@ func artistsFrom(f MusicFilter) string {
 	return ` FROM item a WHERE ` + kind(f, "a") + ` = 'artist' AND ` + common(f, "a", "a")
 }
 
+// AlbumRows are the albums al with their album artists ar.
+const AlbumRows = `item al JOIN item ar ON ar.id = al.parent_id`
+
+// SongRows are the songs s with their albums al, album artists ar and
+// performers pa.
+const SongRows = `item s JOIN item al ON al.id = s.parent_id JOIN item ar ON ar.id = al.parent_id LEFT JOIN item pa ON pa.id = s.artist_id`
+
 // albumsFrom is the rows Albums pages and CountAlbums counts.
 func albumsFrom(f MusicFilter) string {
-	return ` FROM item al JOIN item ar ON ar.id = al.parent_id
+	return ` FROM ` + AlbumRows + `
 		WHERE ` + kind(f, "al") + ` = 'album' AND (?2 = 0 OR al.parent_id = ?2) AND ` + common(f, "al", "al")
 }
 
 // songsFrom is the rows Songs pages and CountSongs counts.
 func songsFrom(f MusicFilter) string {
-	return ` FROM item s JOIN item al ON al.id = s.parent_id JOIN item ar ON ar.id = al.parent_id LEFT JOIN item pa ON pa.id = s.artist_id
+	return ` FROM ` + SongRows + `
 		WHERE ` + kind(f, "s") + ` = 'song' AND (?2 = 0 OR al.parent_id = ?2 OR s.artist_id = ?2) AND (?3 = 0 OR s.parent_id = ?3)
 			AND ` + common(f, "s", "al")
 }
@@ -136,15 +143,25 @@ func (r *Repo) CountAlbums(f MusicFilter) (int, error) { return r.count(albumsFr
 // CountSongs is how many songs f matches, ignoring Limit and Offset.
 func (r *Repo) CountSongs(f MusicFilter) (int, error) { return r.count(songsFrom(f), f) }
 
+// ArtistAlbumsOf is how many albums artist a is the album artist of,
+// only those a kid hears while clean, an SQL truth value, holds.
+func ArtistAlbumsOf(a, clean string) string {
+	return `(SELECT COUNT(*) FROM item al WHERE al.parent_id = ` + a + `.id AND al.kind = 'album' AND (` + clean + ` = 0 OR ` + CleanOf("al") + `))`
+}
+
+// ArtistSongsOf is how many songs are on artist a's albums or performed by
+// a, only those not explicit while clean holds.
+func ArtistSongsOf(a, clean string) string {
+	// Two counts so each walks one artist's rows by index; +s.kind keeps
+	// SQLite off the kind index, which walks every song.
+	return `((SELECT COUNT(*) FROM item al JOIN item s ON s.parent_id = al.id WHERE al.parent_id = ` + a + `.id AND +s.kind = 'song' AND ` + counted("s", clean) + `)
+		+ (SELECT COUNT(*) FROM item s JOIN item al ON al.id = s.parent_id
+			WHERE s.artist_id = ` + a + `.id AND +s.kind = 'song' AND al.parent_id IS NOT ` + a + `.id AND ` + counted("s", clean) + `))`
+}
+
 // Artists pages artists A to Z by sort name.
 func (r *Repo) Artists(f MusicFilter) ([]*ArtistView, error) {
-	// The song count is two counts so each walks one artist's rows by index;
-	// +s.kind keeps SQLite off the kind index, which walks every song.
-	rows, err := r.d.Query(`SELECT `+prefixed("a")+`,
-			(SELECT COUNT(*) FROM item al WHERE al.parent_id = a.id AND al.kind = 'album' AND (?11 = 0 OR `+cleanOf("al")+`)),
-			(SELECT COUNT(*) FROM item al JOIN item s ON s.parent_id = al.id WHERE al.parent_id = a.id AND +s.kind = 'song' AND `+counted("s")+`)
-				+ (SELECT COUNT(*) FROM item s JOIN item al ON al.id = s.parent_id
-					WHERE s.artist_id = a.id AND +s.kind = 'song' AND al.parent_id IS NOT a.id AND `+counted("s")+`)
+	rows, err := r.d.Query(`SELECT `+prefixed("a")+`, `+ArtistAlbumsOf("a", "?11")+`, `+ArtistSongsOf("a", "?11")+`
 		`+artistsFrom(f)+order(f, "a", sortKey("a")+`, a.id`), f.args()...)
 	return db.Collect(rows, err, func(s db.Scanner) (*ArtistView, error) {
 		v := &ArtistView{Item: &Item{}}
@@ -162,6 +179,27 @@ type AlbumView struct {
 	LastPlayedAt *time.Time
 }
 
+// AlbumSongsOf is how many songs album al holds, only those not explicit
+// while clean, an SQL truth value, holds.
+func AlbumSongsOf(al, clean string) string {
+	return `(SELECT COUNT(*) FROM item s WHERE s.parent_id = ` + al + `.id AND ` + counted("s", clean) + `)`
+}
+
+// AlbumDurationOf is the length of every file of album al's songs, only
+// those not explicit while clean holds.
+func AlbumDurationOf(al, clean string) string {
+	return `(SELECT COALESCE(SUM(f.duration_ms), 0) FROM item s JOIN item_file x ON x.item_id = s.id JOIN media_file f ON f.id = x.media_file_id
+		WHERE s.parent_id = ` + al + `.id AND ` + counted("s", clean) + `)`
+}
+
+// AlbumLosslessOf is whether album al has songs and each has a lossless
+// audio track.
+func AlbumLosslessOf(al string) string {
+	return `(EXISTS (SELECT 1 FROM item s WHERE s.parent_id = ` + al + `.id) AND NOT EXISTS (SELECT 1 FROM item s WHERE s.parent_id = ` + al + `.id
+		AND NOT EXISTS (SELECT 1 FROM item_file x JOIN track t ON t.media_file_id = x.media_file_id
+			WHERE x.item_id = s.id AND t.kind = 'audio' AND ` + losslessTrack + `)))`
+}
+
 // Albums pages albums; sorts are title (default), artist, year and added.
 func (r *Repo) Albums(f MusicFilter) ([]*AlbumView, error) {
 	by := map[string]string{
@@ -172,13 +210,8 @@ func (r *Repo) Albums(f MusicFilter) ([]*AlbumView, error) {
 	if by == "" {
 		by = sortKey("al") + `, al.id`
 	}
-	rows, err := r.d.Query(`SELECT `+prefixed("al")+`, ar.parsed_title,
-			(SELECT COUNT(*) FROM item s WHERE s.parent_id = al.id AND `+counted("s")+`),
-			(SELECT COALESCE(SUM(f.duration_ms), 0) FROM item s JOIN item_file x ON x.item_id = s.id JOIN media_file f ON f.id = x.media_file_id
-				WHERE s.parent_id = al.id AND `+counted("s")+`),
-			EXISTS (SELECT 1 FROM item s WHERE s.parent_id = al.id) AND NOT EXISTS (SELECT 1 FROM item s WHERE s.parent_id = al.id
-				AND NOT EXISTS (SELECT 1 FROM item_file x JOIN track t ON t.media_file_id = x.media_file_id
-					WHERE x.item_id = s.id AND t.kind = 'audio' AND `+losslessTrack+`)),
+	rows, err := r.d.Query(`SELECT `+prefixed("al")+`, ar.parsed_title, `+AlbumSongsOf("al", "?11")+`, `+AlbumDurationOf("al", "?11")+`,
+			`+AlbumLosslessOf("al")+`,
 			(SELECT MAX(p.started_at) FROM playback_session p JOIN item s ON s.id = p.item_id WHERE s.parent_id = al.id AND p.account_id = ?8 AND p.station = 0)
 		`+albumsFrom(f)+order(f, "al", by), f.args()...)
 	return db.Collect(rows, err, func(s db.Scanner) (*AlbumView, error) {
@@ -204,6 +237,14 @@ type SongView struct {
 	Unavailable   bool // it has files, all marked missing
 }
 
+// SongColumns are what SongView adds to a song, over SongRows.
+var SongColumns = `al.parsed_title AS album_title, al.parent_id AS album_artist_id, COALESCE(s.artist_id, al.parent_id) AS performer_id,
+	COALESCE(pa.parsed_title, ar.parsed_title) AS artist_name,
+	(SELECT f.duration_ms FROM item_file x JOIN media_file f ON f.id = x.media_file_id WHERE x.item_id = s.id ORDER BY f.id LIMIT 1) AS duration_ms,
+	COALESCE(s.parsed_year, al.parsed_year) AS year,
+	(SELECT t.codec FROM item_file x JOIN track t ON t.media_file_id = x.media_file_id WHERE x.item_id = s.id AND t.kind = 'audio'
+		ORDER BY x.media_file_id, t.stream_index LIMIT 1) AS codec, ` + mediafile.UnavailableOf("s.id") + ` AS unavailable`
+
 // Songs pages songs. With AlbumID and no sort they come in disc then track
 // order; sorts are title (the default otherwise), artist, album, added and
 // popular, which is most played sessions across every profile first.
@@ -223,12 +264,7 @@ func (r *Repo) Songs(f MusicFilter) ([]*SongView, error) {
 	default:
 		by = sortKey("s") + `, s.id`
 	}
-	rows, err := r.d.Query(`SELECT `+prefixed("s")+`, al.parsed_title, al.parent_id, COALESCE(s.artist_id, al.parent_id),
-			COALESCE(pa.parsed_title, ar.parsed_title),
-			(SELECT f.duration_ms FROM item_file x JOIN media_file f ON f.id = x.media_file_id WHERE x.item_id = s.id ORDER BY f.id LIMIT 1),
-			COALESCE(s.parsed_year, al.parsed_year),
-			(SELECT t.codec FROM item_file x JOIN track t ON t.media_file_id = x.media_file_id WHERE x.item_id = s.id AND t.kind = 'audio'
-				ORDER BY x.media_file_id, t.stream_index LIMIT 1), `+mediafile.UnavailableOf("s.id")+`
+	rows, err := r.d.Query(`SELECT `+prefixed("s")+`, `+SongColumns+`
 		`+songsFrom(f)+order(f, "s", by), f.args()...)
 	return db.Collect(rows, err, func(sc db.Scanner) (*SongView, error) {
 		v := &SongView{Item: &Item{}}
@@ -252,7 +288,7 @@ type LetterCount struct {
 // clean counts only what a kid hears.
 func (r *Repo) Letters(libraryID int64, kind string, clean bool) ([]LetterCount, error) {
 	rows, err := r.d.Query(`SELECT `+letterOf("i")+` AS letter, COUNT(*) FROM item i
-		WHERE i.kind = ?2 AND (?1 = 0 OR i.library_id = ?1) AND (?3 = 0 OR `+cleanOf("i")+`) GROUP BY letter`, libraryID, kind, clean)
+		WHERE i.kind = ?2 AND (?1 = 0 OR i.library_id = ?1) AND (?3 = 0 OR `+CleanOf("i")+`) GROUP BY letter`, libraryID, kind, clean)
 	out, err := db.Collect(rows, err, func(s db.Scanner) (LetterCount, error) {
 		var c LetterCount
 		return c, db.Wrap(s.Scan(&c.Letter, &c.Count))

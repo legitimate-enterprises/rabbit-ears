@@ -14,6 +14,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db/dbtest"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/mediafile"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/playlist"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/seekpreview"
 )
 
@@ -573,6 +574,66 @@ func TestDataPathsBecomeRelative(t *testing.T) {
 	}
 	if lib, err := items.LocalRow(4); err != nil || lib.PosterPath != "/y/C/poster.jpg" {
 		t.Fatalf("%v %+v", err, lib)
+	}
+}
+
+// Entries take ranks in their old order, the keys rank generation makes
+// for a list built from empty, ties in position by id; every row keeps its
+// id and columns, and position goes.
+func TestPlaylistEntriesTakeRanks(t *testing.T) {
+	d := open(t)
+	if err := db.MigrateTo(d, 57); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`INSERT INTO library (id, name, kind, created_at, updated_at) VALUES (1,'M','movies',1,1)`,
+		`INSERT INTO item (id, library_id, kind, parsed_title, added_at, updated_at) VALUES (1,1,'movie','A',1,1), (2,1,'movie','B',1,1)`,
+		`INSERT INTO account (id, kind, name, created_at, updated_at) VALUES (1,'adult','A',1,1)`,
+		`INSERT INTO playlist (id, account_id, name, kind, created_at, updated_at) VALUES (1,1,'Long','movies',1,1), (2,1,'Short','movies',1,1)`,
+		// 64 entries, ids running against their positions, cross from the
+		// one-digit integers into the two-digit ones.
+		`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 63)
+			INSERT INTO playlist_entry (id, playlist_id, item_id, position, added_at) SELECT 100 - i, 1, 1 + i % 2, i, 1000 + i FROM n`,
+		`INSERT INTO playlist_entry (id, playlist_id, item_id, position, added_at) VALUES (7,2,2,5,1), (6,2,1,5,2), (5,2,1,9,3)`,
+	} {
+		if _, err := d.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Migrate(d); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := d.Query(`SELECT id, item_id, added_at, rank FROM playlist_entry WHERE playlist_id = 1 ORDER BY rank`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	want, err := playlist.NKeysBetween("", "", 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := 0
+	for ; rows.Next(); i++ {
+		var id, itemID, added int64
+		var rank string
+		if err := rows.Scan(&id, &itemID, &added, &rank); err != nil {
+			t.Fatal(err)
+		}
+		if id != int64(100-i) || itemID != int64(1+i%2) || added != int64(1000+i) || rank != want[i] {
+			t.Fatalf("row %d: id %d item %d added %d rank %s, want rank %s", i, id, itemID, added, rank, want[i])
+		}
+	}
+	if i != 64 {
+		t.Fatalf("%d entries", i)
+	}
+	var short string
+	var cols int
+	if err := d.QueryRow(`SELECT (SELECT group_concat(id || ':' || rank, ' ') FROM (SELECT * FROM playlist_entry WHERE playlist_id = 2 ORDER BY rank)),
+		(SELECT COUNT(*) FROM pragma_table_info('playlist_entry') WHERE name = 'position')`).Scan(&short, &cols); err != nil {
+		t.Fatal(err)
+	}
+	if short != "6:a0 7:a1 5:a2" || cols != 0 {
+		t.Fatalf("short playlist %s, position columns %d", short, cols)
 	}
 }
 

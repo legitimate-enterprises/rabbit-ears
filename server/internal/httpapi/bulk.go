@@ -156,15 +156,7 @@ func (s *Server) AddPlaylistEntries(ctx context.Context, r api.AddPlaylistEntrie
 		}
 		entries = append(entries, e)
 	}
-	err = s.svc.Playlists.Repo().InTx(func(repo *playlist.Repo) error {
-		for _, e := range entries {
-			if err := repo.AddEntry(e, nil); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-	if err != nil {
+	if err := s.svc.Playlists.Repo().AddEntries(entries); err != nil {
 		return nil, err
 	}
 	return api.AddPlaylistEntries204Response{}, nil

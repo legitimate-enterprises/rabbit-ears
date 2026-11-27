@@ -197,13 +197,14 @@ func (s *PlaylistService) Rename(p *playlist.Playlist, name, kind string) error 
 	return s.repo.Update(p)
 }
 
-// AddEntry puts it into p at position at (nil appends) if p can hold it, as
-// EntryFor describes.
-func (s *PlaylistService) AddEntry(p *playlist.Playlist, it *item.Item, editionID int64, at *int) (*playlist.Entry, error) {
+// AddEntry puts it into p at rank, or with none at position at (nil
+// appends), if p can hold it, as EntryFor describes.
+func (s *PlaylistService) AddEntry(p *playlist.Playlist, it *item.Item, editionID int64, at *int, rank string) (*playlist.Entry, error) {
 	e, err := s.EntryFor(p, it, editionID)
 	if err != nil {
 		return nil, err
 	}
+	e.Rank = rank
 	return e, s.repo.AddEntry(e, at)
 }
 
@@ -242,12 +243,12 @@ func (s *PlaylistService) EntryFor(p *playlist.Playlist, it *item.Item, editionI
 	return e, nil
 }
 
-// AddCollection puts collection c into p at position at (nil appends) if p
-// is a movies playlist.
-func (s *PlaylistService) AddCollection(p *playlist.Playlist, c *collection.Collection, at *int) (*playlist.Entry, error) {
+// AddCollection puts collection c into p at rank, or with none at position
+// at (nil appends), if p is a movies playlist.
+func (s *PlaylistService) AddCollection(p *playlist.Playlist, c *collection.Collection, at *int, rank string) (*playlist.Entry, error) {
 	if p.Kind != playlist.Movies {
 		return nil, ErrWrongPlaylistKind
 	}
-	e := &playlist.Entry{PlaylistID: p.ID, CollectionID: c.ID}
+	e := &playlist.Entry{PlaylistID: p.ID, CollectionID: c.ID, Rank: rank}
 	return e, s.repo.AddEntry(e, at)
 }

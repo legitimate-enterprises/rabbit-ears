@@ -28,6 +28,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/occasion"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/person"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/playlist"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/replica"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/review"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/scan"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/seekpreview"
@@ -82,6 +83,9 @@ type Services struct {
 	// how long a poll of it waits for something to tell.
 	Events    *live.Hub
 	EventHold time.Duration
+	// Sync serves native clients' replicas; its long poll holds for
+	// EventHold too.
+	Sync *replica.Sync
 	// ArtworkSettle is how long images must have stopped changing before
 	// clients are told of the change.
 	ArtworkSettle time.Duration
@@ -111,6 +115,7 @@ func New(d *sql.DB) *Services {
 	s := &Services{
 		Events:        events,
 		EventHold:     Hold,
+		Sync:          replica.New(d),
 		ArtworkSettle: 10 * time.Second,
 		Libraries:     NewLibraryService(library.New(d), task.New(d)),
 		Items:         items,

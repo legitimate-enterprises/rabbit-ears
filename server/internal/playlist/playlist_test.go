@@ -193,6 +193,92 @@ func TestEntriesOrder(t *testing.T) {
 	}
 }
 
+// Adding, moving and removing by position write only the entry itself, so a
+// replica sees one changed row; a rank is taken as given, ties by id, and a
+// position between equal ranks lands after them.
+func TestEntryWritesTouchOnlyTheEntry(t *testing.T) {
+	f := setup(t)
+	p := &playlist.Playlist{AccountID: f.adult, Name: "P", Kind: playlist.Music}
+	if err := f.r.Create(p); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`CREATE TEMP TABLE written (id INTEGER)`,
+		// The sync triggers' own stamps are not writes of the entry.
+		`CREATE TEMP TRIGGER entry_written AFTER UPDATE ON playlist_entry WHEN OLD.sync_version IS NEW.sync_version
+			BEGIN INSERT INTO written VALUES (NEW.id); END`,
+	} {
+		if _, err := f.d.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	written := func() []int64 {
+		t.Helper()
+		rows, err := f.d.Query(`SELECT id FROM written ORDER BY rowid`)
+		ids, err := db.Collect(rows, err, db.Column[int64])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.d.Exec(`DELETE FROM written`); err != nil {
+			t.Fatal(err)
+		}
+		return ids
+	}
+	es := make([]*playlist.Entry, 4)
+	for i, s := range f.songs {
+		es[i] = &playlist.Entry{PlaylistID: p.ID, ItemID: s}
+	}
+	if err := f.r.AddEntries(es[:3]); err != nil {
+		t.Fatal(err)
+	}
+	if es[0].Rank != "a0" || es[2].Rank != "a2" || es[2].Position != 2 {
+		t.Fatalf("batch %+v %+v", es[0], es[2])
+	}
+	one := 1
+	if err := f.r.AddEntry(es[3], &one); err != nil || es[3].Rank != "a0V" || es[3].Position != 1 {
+		t.Fatalf("%+v %v", es[3], err)
+	}
+	if err := f.r.MoveEntry(es[0].ID, &one); err != nil {
+		t.Fatal(err)
+	}
+	if got := written(); !slices.Equal(got, []int64{es[0].ID}) {
+		t.Fatalf("a move wrote %v", got)
+	}
+	if got := order(t, f, p.ID); !slices.Equal(got, []int64{f.songs[3], f.songs[0], f.songs[1], f.songs[2]}) {
+		t.Fatalf("after move %v", got)
+	}
+	if err := f.r.RemoveEntry(es[3].ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := written(); len(got) != 0 {
+		t.Fatalf("a removal wrote %v", got)
+	}
+	// Two devices that ranked apart alike leave a tie, which id breaks.
+	if err := f.r.RankEntry(es[2].ID, "a1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.r.RankEntry(es[1].ID, "a1"); err != nil {
+		t.Fatal(err)
+	}
+	written()
+	zero := 0
+	if err := f.r.MoveEntry(es[0].ID, &one); err != nil {
+		t.Fatal(err)
+	}
+	if got := written(); !slices.Equal(got, []int64{es[0].ID}) {
+		t.Fatalf("a move between ties wrote %v", got)
+	}
+	if got := order(t, f, p.ID); !slices.Equal(got, []int64{f.songs[1], f.songs[2], f.songs[0]}) {
+		t.Fatalf("after a move between ties %v", got)
+	}
+	if err := f.r.MoveEntry(es[0].ID, &zero); err != nil {
+		t.Fatal(err)
+	}
+	if e, err := f.r.Entry(es[0].ID); err != nil || e.Rank >= "a1" || e.Position != 0 {
+		t.Fatalf("%+v %v", e, err)
+	}
+}
+
 // Totals counts the play order, adds up its first files' durations and names
 // the first entry's item, whose art stands for the playlist.
 func TestTotals(t *testing.T) {

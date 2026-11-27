@@ -612,20 +612,9 @@ func (s *Server) PutWatchState(ctx context.Context, r api.PutWatchStateRequestOb
 	if err := s.watchable(ctx, r.ProfileId, r.ItemId); err != nil {
 		return nil, err
 	}
-	var def *int64
-	if r.Body.EditionId != nil {
-		ed, err := s.edition(r.ItemId, *r.Body.EditionId)
-		if err != nil {
-			return nil, err
-		}
-		def = &ed
-	} else {
-		switch ed, err := s.svc.Editions.Repo().Default(r.ItemId); {
-		case err == nil:
-			def = &ed.ID
-		case !errors.Is(err, db.ErrNotFound):
-			return nil, err
-		}
+	def, err := s.watchedEdition(r.ItemId, r.Body.EditionId)
+	if err != nil {
+		return nil, err
 	}
 	w, err := s.saveWatchStateAt(r.ProfileId, r.ItemId, watchedAt(r.Body.At), func(w *watchstate.State) {
 		w.Mark(r.Body.Watched, or(r.Body.PositionMs, 0))
@@ -635,6 +624,39 @@ func (s *Server) PutWatchState(ctx context.Context, r api.PutWatchStateRequestOb
 		return nil, err
 	}
 	return api.PutWatchState200JSONResponse(toWatchState(w)), nil
+}
+
+// RecordPlay counts one finished play the server did not stream.
+func (s *Server) RecordPlay(ctx context.Context, r api.RecordPlayRequestObject) (api.RecordPlayResponseObject, error) {
+	if err := s.watchable(ctx, r.ProfileId, r.ItemId); err != nil {
+		return nil, err
+	}
+	ed, err := s.watchedEdition(r.ItemId, r.Body.EditionId)
+	if err != nil {
+		return nil, err
+	}
+	w, err := s.svc.WatchStates.Repo().RecordPlay(r.ProfileId, r.ItemId, ed, *watchedAt(&r.Body.At))
+	if err != nil {
+		return nil, err
+	}
+	s.watchStateChanged(r.ProfileId, r.ItemId)
+	return api.RecordPlay200JSONResponse(toWatchState(w)), nil
+}
+
+// watchedEdition is the edition id, of the item, a watch state names: the
+// default for nil, and nil when the item has none.
+func (s *Server) watchedEdition(itemID int64, id *int64) (*int64, error) {
+	if id != nil {
+		ed, err := s.edition(itemID, *id)
+		return &ed, err
+	}
+	switch ed, err := s.svc.Editions.Repo().Default(itemID); {
+	case err == nil:
+		return &ed.ID, nil
+	case !errors.Is(err, db.ErrNotFound):
+		return nil, err
+	}
+	return nil, nil
 }
 
 // watchable resolves a profile of the device and an item that profile may
@@ -733,7 +755,14 @@ func (s *Server) DeleteWatchState(ctx context.Context, r api.DeleteWatchStateReq
 	if err := s.watchable(ctx, r.ProfileId, r.ItemId); err != nil {
 		return nil, err
 	}
-	if err := s.svc.WatchStates.Repo().Delete(r.ProfileId, r.ItemId); err != nil {
+	repo := s.svc.WatchStates.Repo()
+	var err error
+	if at := watchedAt(r.Params.At); at != nil {
+		err = repo.DeleteAt(r.ProfileId, r.ItemId, *at)
+	} else {
+		err = repo.Delete(r.ProfileId, r.ItemId)
+	}
+	if err != nil {
 		return nil, err
 	}
 	s.watchStateChanged(r.ProfileId, r.ItemId)

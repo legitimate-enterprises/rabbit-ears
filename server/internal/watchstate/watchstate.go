@@ -116,6 +116,39 @@ func (r *Repo) Delete(accountID, itemID int64) error {
 	return db.ExecOne(r.d, `DELETE FROM watch_state WHERE account_id = ? AND item_id = ?`, accountID, itemID)
 }
 
+// DeleteAt forgets the state as of instant at, unless it changed later;
+// one never saved is db.ErrNotFound.
+func (r *Repo) DeleteAt(accountID, itemID int64, at time.Time) error {
+	res, err := r.d.Exec(`DELETE FROM watch_state WHERE account_id = ? AND item_id = ? AND updated_at <= ?`, accountID, itemID, db.Ms(at))
+	if err != nil {
+		return db.Wrap(err)
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		return nil
+	}
+	_, err = r.Get(accountID, itemID)
+	return err
+}
+
+// RecordPlay counts one play of editionID (nil for none) that ended at
+// instant at. The count only adds and the rest goes to the later instant,
+// so plays and SaveAt commute.
+func (r *Repo) RecordPlay(accountID, itemID int64, editionID *int64, at time.Time) (*State, error) {
+	_, err := r.d.Exec(`INSERT INTO watch_state (`+cols+`) VALUES (?1, ?2, 0, 1, 1, ?3, ?3, ?4)
+		ON CONFLICT (account_id, item_id) DO UPDATE SET
+			play_count = play_count + 1,
+			last_played_at = MAX(COALESCE(last_played_at, 0), excluded.last_played_at),
+			watched = CASE WHEN updated_at <= excluded.updated_at THEN 1 ELSE watched END,
+			position_ms = CASE WHEN updated_at <= excluded.updated_at THEN 0 ELSE position_ms END,
+			edition_id = CASE WHEN updated_at <= excluded.updated_at THEN excluded.edition_id ELSE edition_id END,
+			updated_at = MAX(updated_at, excluded.updated_at)`,
+		accountID, itemID, db.Ms(at), editionID)
+	if err != nil {
+		return nil, db.Wrap(err)
+	}
+	return r.Get(accountID, itemID)
+}
+
 func (r *Repo) list(q string, args ...any) ([]*State, error) {
 	rows, err := r.d.Query(q, args...)
 	return db.Collect(rows, err, scan)

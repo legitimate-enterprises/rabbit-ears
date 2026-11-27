@@ -368,3 +368,43 @@ func TestPlaylistsAreOwnedAndNotForKids(t *testing.T) {
 		t.Fatal("a kid deleted an adult's playlist")
 	}
 }
+
+// An entry carries its rank; a client that ranks an entry itself places it
+// there, adding or moving, and a key that is not one answers 400.
+func TestPlaylistEntryRanks(t *testing.T) {
+	e := newEnv(t)
+	tok := e.plain.token
+	films := e.library("movies")
+	a, b, c := e.movie(films, "A"), e.movie(films, "B"), e.movie(films, "C")
+	var pl api.Playlist
+	e.expect(201, "POST", "/profiles/"+itoa(e.plain.account.ID)+"/playlists", tok, map[string]any{"name": "P", "kind": "movies"}, &pl)
+	one := "/profiles/" + itoa(e.plain.account.ID) + "/playlists/" + itoa(pl.Id)
+	e.expect(204, "POST", one+"/entries/batch", tok, map[string]any{"entries": []map[string]any{{"itemId": a}, {"itemId": b}}}, nil)
+	var en api.PlaylistEntry
+	e.expect(201, "POST", one+"/entries", tok, map[string]any{"itemId": c, "rank": "a0V"}, &en)
+	if en.Position != 1 || en.Rank == nil || *en.Rank != "a0V" {
+		t.Fatalf("%+v", en)
+	}
+	e.expect(200, "PUT", one+"/entries/"+itoa(en.Id), tok, map[string]any{"itemId": c, "rank": "Zz"}, &en)
+	if en.Position != 0 || *en.Rank != "Zz" {
+		t.Fatalf("%+v", en)
+	}
+	var page api.PlaylistEntryPage
+	e.expect(200, "GET", one+"/entries", tok, nil, &page)
+	var ranks []string
+	for _, x := range page.Items {
+		ranks = append(ranks, *x.Rank)
+	}
+	if !slices.Equal(entryIDs(page), []int64{c, a, b}) || !slices.Equal(ranks, []string{"Zz", "a0", "a1"}) {
+		t.Fatalf("%v %v", entryIDs(page), ranks)
+	}
+	for _, body := range []map[string]any{
+		{"itemId": c, "rank": "a0V", "position": 1},
+		{"itemId": c, "rank": "a!"},
+		{"itemId": c, "rank": "a00"},
+		{"itemId": c, "rank": "b0"},
+	} {
+		e.expect(400, "POST", one+"/entries", tok, body, nil)
+		e.expect(400, "PUT", one+"/entries/"+itoa(en.Id), tok, body, nil)
+	}
+}

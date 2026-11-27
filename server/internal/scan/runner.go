@@ -30,6 +30,9 @@ const (
 	// stationsEvery keeps a schedule written a day ahead at least 23 hours
 	// ahead; Schedule stations runs at the top of each hour.
 	stationsEvery = time.Hour
+	PurgeKind     = "sync_purge" // kind of the Purge sync history task
+	purgeName     = "Purge sync history"
+	purgeEvery    = 24 * time.Hour
 )
 
 // Runner owns the scan and metadata tasks: it keeps their rows in step with
@@ -46,6 +49,9 @@ type Runner struct {
 	// every station's schedule a day ahead and its rating, and reports what
 	// it did.
 	Stations func(context.Context) (string, error)
+	// Purge, when set, is the daily Purge sync history task, and reports
+	// what it purged.
+	Purge func(context.Context) (string, error)
 	// Events, when set, hears of each scan that changed its library.
 	Events *live.Hub
 	wake   chan struct{}
@@ -72,8 +78,9 @@ func ScanKind(libraryID int64) string { return scanKindPrefix + strconv.FormatIn
 
 // Sync creates a nightly scan task for each library (due at once, so a new
 // library scans promptly), the hourly metadata task, the on-demand Seek
-// previews and Local metadata tasks and, with Stations set, the hourly
-// Schedule stations task, and removes the scan tasks of deleted libraries.
+// previews and Local metadata tasks, with Stations set the hourly Schedule
+// stations task and with Purge set the daily Purge sync history task, and
+// removes the scan tasks of deleted libraries.
 func (r *Runner) Sync() error {
 	libs, err := r.S.Libraries.List()
 	if err != nil {
@@ -111,6 +118,11 @@ func (r *Runner) Sync() error {
 	case t.IntervalSeconds == nil || *t.IntervalSeconds != hourly:
 		t.IntervalSeconds = &hourly
 		if err := r.Tasks.Update(t); err != nil {
+			return err
+		}
+	}
+	if r.Purge != nil && byKind[PurgeKind] == nil {
+		if err := r.Tasks.Create(&task.Task{Name: purgeName, Kind: PurgeKind, IntervalSeconds: ptr(int(purgeEvery.Seconds())), Enabled: true, NextRunAt: &now}); err != nil {
 			return err
 		}
 	}
@@ -258,6 +270,8 @@ func (r *Runner) work(ctx context.Context, t *task.Task, progress func(float64))
 		return "", err
 	case t.Kind == StationsKind && r.Stations != nil:
 		return r.Stations(ctx)
+	case t.Kind == PurgeKind && r.Purge != nil:
+		return r.Purge(ctx)
 	case t.Kind == PreviewsKind || t.Kind == LocalKind:
 		makeAll := r.S.MakePreviews
 		if t.Kind == LocalKind {
