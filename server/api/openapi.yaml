@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Rabbit Ears API
-  version: 0.21.0
+  version: 0.22.0
   description: |
     REST API of the Rabbit Ears media server. This document's version is the
     server's. A breaking change takes a new path; additive changes bump the
