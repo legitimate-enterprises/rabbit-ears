@@ -9,6 +9,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/account"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/adultlink"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // Adult links: an admin lets two adults of different households see each
@@ -20,7 +21,7 @@ func toAdultLink(l *adultlink.Link) api.AdultLink {
 
 // linkable resolves an adult who may be linked: one who has joined and is
 // not revoked.
-func (s *Server) linkable(id int64, field string) (*account.Account, error) {
+func (s *Server) linkable(id uid.ID, field string) (*account.Account, error) {
 	a, err := s.svc.Accounts.Repo().Get(id)
 	if errors.Is(err, db.ErrNotFound) || err == nil && (a.Kind != account.Adult || a.Pending() || a.RevokedAt != nil) {
 		return nil, invalid(field, "not an adult who has joined")

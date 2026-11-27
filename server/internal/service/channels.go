@@ -25,6 +25,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/session"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/station"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/transcode"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 const (
@@ -73,12 +74,11 @@ type ChannelService struct {
 	// IdentDir keeps rendered idents; a temporary directory when empty.
 	IdentDir string
 
-	mu      sync.Mutex
-	tuned   map[int64]*tuned
+	mu    sync.Mutex
+	tuned map[uid.ID]*tuned
+	// sources are the engine's sessions under ids of their own, which no
+	// playback session has.
 	sources map[string]*source
-	// lastID counts down: a source is the engine's session under a
-	// negative id, which no playback session has.
-	lastID int64
 	// unbounded is when each file's keyframe probe last failed.
 	unbounded map[string]time.Time
 	renders   singleflight.Group
@@ -93,7 +93,7 @@ type ChannelService struct {
 // and at most one transcode slot, for as long as a session lists it.
 type source struct {
 	stream    transcode.Stream
-	listeners map[int64]bool
+	listeners map[uid.ID]bool
 }
 
 // piece is a channel.Piece and where its segments come from.
@@ -104,15 +104,15 @@ type piece struct {
 	dir  string
 	card ident.Card
 	// A program's item and file, and the plan from the entry in use on.
-	itemID, fileID int64
+	itemID, fileID uid.ID
 	plan           []*session.PlanEntry
 }
 
 // tuned is one session on a channel.
 type tuned struct {
 	mu      sync.Mutex
-	session int64
-	station int64
+	session uid.ID
+	station uid.ID
 	viewer  station.Viewer
 	// key is the stream key the timeline was written for; a session that
 	// restarted has another, and starts another timeline.
@@ -127,7 +127,7 @@ type tuned struct {
 func NewChannelService(stations *StationService, pb *PlaybackService, playlists *playlist.Repo, items *item.Repo, files *mediafile.Repo,
 	sessions *session.Repo) *ChannelService {
 	c := &ChannelService{stations: stations, playback: pb, playlists: playlists, items: items, files: files, sessions: sessions,
-		tuned: map[int64]*tuned{}, sources: map[string]*source{}, unbounded: map[string]time.Time{}}
+		tuned: map[uid.ID]*tuned{}, sources: map[string]*source{}, unbounded: map[string]time.Time{}}
 	c.ctx, c.stop = context.WithCancel(context.Background())
 	pb.channels = c
 	return c
@@ -153,9 +153,9 @@ func (c *ChannelService) identDir() string {
 }
 
 // Tuned reports a session that is on a channel.
-func (c *ChannelService) Tuned(sessionID int64) bool { return c.of(sessionID) != nil }
+func (c *ChannelService) Tuned(sessionID uid.ID) bool { return c.of(sessionID) != nil }
 
-func (c *ChannelService) of(sessionID int64) *tuned {
+func (c *ChannelService) of(sessionID uid.ID) *tuned {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.tuned[sessionID]
@@ -254,16 +254,15 @@ func deref(p *int64) int64 {
 // listen adds a session to the source named by key, making it from stream
 // when it is new, with a transcode slot when it converts video. A full
 // engine first takes back the slots of sources whose encoders ran out.
-func (c *ChannelService) listen(sessionID int64, key string, stream transcode.Stream, convert bool) (*source, error) {
+func (c *ChannelService) listen(sessionID uid.ID, key string, stream transcode.Stream, convert bool) (*source, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	src := c.sources[key]
 	if src == nil {
-		c.lastID--
-		stream.SessionID = c.lastID
+		stream.SessionID = uid.New()
 		engine := c.playback.Engine
 		if convert && engine.Acquire(stream.SessionID) != nil {
-			ids := make([]int64, 0, len(c.sources))
+			ids := make([]uid.ID, 0, len(c.sources))
 			for _, o := range c.sources {
 				ids = append(ids, o.stream.SessionID)
 			}
@@ -282,7 +281,7 @@ func (c *ChannelService) listen(sessionID int64, key string, stream transcode.St
 			}
 		}
 		if src == nil {
-			src = &source{stream: stream, listeners: map[int64]bool{}}
+			src = &source{stream: stream, listeners: map[uid.ID]bool{}}
 			c.sources[key] = src
 		}
 	}
@@ -292,7 +291,19 @@ func (c *ChannelService) listen(sessionID int64, key string, stream transcode.St
 
 // drop takes a session off a source; the last to go stops its encoder and
 // frees its slot and segments.
-func (c *ChannelService) drop(sessionID int64, src *source) {
+// sourcing reports an engine session that is a source's.
+func (c *ChannelService) sourcing(id uid.ID) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, src := range c.sources {
+		if src.stream.SessionID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *ChannelService) drop(sessionID uid.ID, src *source) {
 	c.mu.Lock()
 	delete(src.listeners, sessionID)
 	last := len(src.listeners) == 0
@@ -311,7 +322,7 @@ func (c *ChannelService) drop(sessionID int64, src *source) {
 }
 
 // leave takes a session off its channel.
-func (c *ChannelService) leave(sessionID int64) {
+func (c *ChannelService) leave(sessionID uid.ID) {
 	c.mu.Lock()
 	t := c.tuned[sessionID]
 	delete(c.tuned, sessionID)
@@ -553,12 +564,12 @@ func identParts(from, until time.Time) []time.Time {
 	return append(parts, until)
 }
 
-func (c *ChannelService) dir(stationID int64, card ident.Card, from time.Time, ts bool) string {
+func (c *ChannelService) dir(stationID uid.ID, card ident.Card, from time.Time, ts bool) string {
 	name := card.Key(from)
 	if ts {
 		name += "-ts"
 	}
-	return filepath.Join(c.identDir(), strconv.FormatInt(stationID, 10), name)
+	return filepath.Join(c.identDir(), stationID.String(), name)
 }
 
 // program is the piece of a program for t, made once: the file and plan
@@ -569,7 +580,7 @@ func (c *ChannelService) dir(stationID int64, card ident.Card, from time.Time, t
 // it.
 func (c *ChannelService) program(t *tuned, st *station.Station, p *station.Program, at, now time.Time) (*piece, error) {
 	// A schedule written again may put another program at the same start.
-	id := fmt.Sprintf("p%d-%d-%d", p.Start.UnixMilli(), p.ItemID, p.EditionID)
+	id := fmt.Sprintf("p%d-%s-%s", p.Start.UnixMilli(), p.ItemID, p.EditionID)
 	if pc := t.pieces[id]; pc != nil {
 		return pc, nil
 	}
@@ -642,9 +653,14 @@ func (c *ChannelService) program(t *tuned, st *station.Station, p *station.Progr
 // sourceKey names what a plan entry makes of one program's file: sessions
 // whose keys match share one encoder. A sidecar forks no stream, so no
 // subtitle is in the key but one burned in.
-func sourceKey(stationID int64, p *station.Program, fileID int64, e *session.PlanEntry) string {
-	id := func(p *int64) int64 { return deref(p) }
-	return fmt.Sprintf("%d/%d/%d/%s/%s/%s/%d/%d/%d/%s/%s/%t/%d/%d/%t", stationID, p.Start.UnixMilli(), fileID, e.VideoAction, e.AudioAction,
+func sourceKey(stationID uid.ID, p *station.Program, fileID uid.ID, e *session.PlanEntry) string {
+	id := func(p *uid.ID) string {
+		if p == nil {
+			return ""
+		}
+		return p.String()
+	}
+	return fmt.Sprintf("%s/%d/%s/%s/%s/%s/%s/%s/%d/%s/%s/%t/%d/%d/%t", stationID, p.Start.UnixMilli(), fileID, e.VideoAction, e.AudioAction,
 		e.SubtitleAction, id(e.SubtitleTrackID), id(e.AudioTrackID), e.AudioChannels, e.VideoCodec, e.Encoder, e.ToneMap, e.TopHeight, e.TopBitrate, e.TS)
 }
 
@@ -880,7 +896,7 @@ func (c *ChannelService) Prerender(ctx context.Context) (int, error) {
 					return n, err
 				}
 				if _, err, _ := c.renders.Do(dir, func() (any, error) { return nil, ident.Render(ctx, dir, card, from, until, false) }); err != nil {
-					errs = append(errs, fmt.Errorf("station %d: %w", st.ID, err))
+					errs = append(errs, fmt.Errorf("station %s: %w", st.ID, err))
 					continue
 				}
 				n++

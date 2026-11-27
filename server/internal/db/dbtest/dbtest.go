@@ -88,7 +88,7 @@ func OpenPreferLocal(t *testing.T) *sql.DB {
 // settings.
 func Sources(t *testing.T, d *sql.DB, source, mode string) {
 	t.Helper()
-	if _, err := d.Exec(`INSERT OR IGNORE INTO server_info (id, name, created_at, updated_at) VALUES (1, 'Test', 0, 0)`); err != nil {
+	if _, err := d.Exec(`INSERT OR IGNORE INTO server_info (id, name, created_at, modified_at) VALUES (1, 'Test', 0, 0)`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := d.Exec(`UPDATE server_info SET metadata_source = ?, metadata_mode = ? WHERE id = 1`, source, mode); err != nil {

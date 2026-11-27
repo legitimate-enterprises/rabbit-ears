@@ -9,7 +9,7 @@ const year = (i: Item) => (i.parsedYear ? String(i.parsedYear) : "");
 
 /** Every member of the occasion the profile can see, under its name, washed in its colors when it has them. */
 export async function occasion(ctx: Ctx, [id]: string[]): Promise<HTMLElement[]> {
-  const occasionId = Number(id);
+  const occasionId = id;
   const [o, members] = await Promise.all([
     ok(ctx.api.GET("/occasions/{occasionId}", { params: { path: { occasionId } } })),
     items(ctx.api, { occasionId }),
@@ -39,7 +39,7 @@ export async function occasion(ctx: Ctx, [id]: string[]): Promise<HTMLElement[]>
  * A row per occasion in season that the title belongs to, of its other members, linked to the
  * occasion's page; none when it has no others, and none at all when the server errs.
  */
-export async function occasionRows(ctx: Ctx, itemId: number): Promise<HTMLElement[]> {
+export async function occasionRows(ctx: Ctx, itemId: string): Promise<HTMLElement[]> {
   try {
     const { items: active } = await ok(
       ctx.api.GET("/profiles/{profileId}/occasions", {

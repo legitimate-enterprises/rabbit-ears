@@ -6,6 +6,7 @@ import { boot } from "./app";
 import { music } from "./audio";
 import { localDate } from "./stations";
 import { at, calls, json, mockFetch, none, root, until } from "./testSupport";
+import { uid } from "../api/uid";
 
 vi.mock("hls.js", () => ({
   default: class {
@@ -18,7 +19,7 @@ const button = (r: ParentNode, label: string) =>
   [...r.querySelectorAll<HTMLElement>("button, a")].find((b) => b.textContent === label);
 const ts = "2026-01-01T00:00:00Z";
 const acct = (id: number, name: string, kind = "adult") => ({
-  id,
+  id: uid(id),
   kind,
   name,
   isAdmin: false,
@@ -27,44 +28,45 @@ const acct = (id: number, name: string, kind = "adult") => ({
   pending: false,
   filterMode: "ratings",
   createdAt: ts,
-  updatedAt: ts,
+  modifiedAt: ts,
 });
 const me = (active: number) => ({
-  device: { id: 1 },
+  device: { id: uid(1) },
   account: acct(1, "Heidi"),
-  activeProfileId: active,
-  household: { id: 1, name: "Heidi", adultId: 1, createdAt: ts },
+  activeProfileId: uid(active),
+  household: { id: uid(1), name: "Heidi", adultId: uid(1), createdAt: ts },
   profiles: [acct(1, "Heidi"), acct(2, "Jax", "kid"), acct(3, "Sam")],
 });
 const page = (items: unknown[]) => ({ items });
 const base = (active = 1) => ({
   "GET /health": { status: "ok", version: "1.0.0", setupRequired: false },
   "GET /me": me(active),
-  "GET /profiles/1/watch-state": page([]),
-  "GET /profiles/2/watch-state": page([]),
-  "GET /profiles/1/show-progress": page([]),
-  "GET /profiles/2/show-progress": page([]),
+  [`GET /profiles/${uid(1)}/watch-state`]: page([]),
+  [`GET /profiles/${uid(2)}/watch-state`]: page([]),
+  [`GET /profiles/${uid(1)}/show-progress`]: page([]),
+  [`GET /profiles/${uid(2)}/show-progress`]: page([]),
   "GET /genres": page([]),
   "GET /items": page([]),
   "GET /youtube/videos": page([]),
   "GET /media-files": page([]),
-  "GET /profiles/1/playlists/9/entries": page([]),
-  "GET /profiles/1/playlists/9/play-order": page([]),
-  "GET /profiles/1/playlists/9": { id: 9, kind: "movies", access: "owner" },
+  [`GET /profiles/${uid(1)}/playlists/${uid(9)}/entries`]: page([]),
+  [`GET /profiles/${uid(1)}/playlists/${uid(9)}/play-order`]: page([]),
+  [`GET /profiles/${uid(1)}/playlists/${uid(9)}`]: { id: uid(9), kind: "movies", access: "owner" },
 });
 
 const later = (min: number) => new Date(Date.now() + min * 60000).toISOString();
 const item = (id: number, name: string) => ({
-  id,
-  libraryId: 1,
+  id: uid(id),
+  libraryId: uid(1),
   kind: "movie",
   parsedTitle: name,
   addedAt: ts,
-  updatedAt: ts,
+  createdAt: ts,
+  modifiedAt: ts,
 });
 const program = (id: number, name: string, startsAt: string, endsAt = later(60)) => ({
-  itemId: id,
-  editionId: id * 10,
+  itemId: uid(id),
+  editionId: uid(id * 10),
   kind: "movie",
   startsAt,
   endsAt,
@@ -72,21 +74,21 @@ const program = (id: number, name: string, startsAt: string, endsAt = later(60))
   item: item(id, name),
 });
 const tune = (id: number, title: string, albumId = 5) => ({
-  id,
+  id: uid(id),
   title,
-  artistId: 4,
+  artistId: uid(4),
   artistName: "The Hollow Pines",
-  libraryId: 3,
-  albumArtistId: 4,
+  libraryId: uid(3),
+  albumArtistId: uid(4),
   lossless: true,
-  albumId,
+  albumId: uid(albumId),
   albumTitle: "Low Country",
   durationMs: 200_000,
   addedAt: ts,
 });
 const songProgram = (id: number, title: string, startsAt: string, endsAt = later(3)) => ({
-  itemId: id,
-  editionId: id * 10,
+  itemId: uid(id),
+  editionId: uid(id * 10),
   kind: "song",
   startsAt,
   endsAt,
@@ -104,12 +106,12 @@ const onNow = (
   upNext: [next],
 });
 const station = (id: number, name: string, extra: Record<string, unknown> = {}) => ({
-  id,
+  id: uid(id),
   name,
   kind: "movies",
-  ownerId: 1,
-  householdId: 1,
-  playlistId: 9,
+  ownerId: uid(1),
+  householdId: uid(1),
+  playlistId: uid(9),
   order: "playlist",
   visibility: "household",
   timing: "hour",
@@ -117,22 +119,22 @@ const station = (id: number, name: string, extra: Record<string, unknown> = {}) 
   times: [],
   onAir: onNow(),
   createdAt: ts,
-  updatedAt: ts,
+  modifiedAt: ts,
   ...extra,
 });
 const playlist = (id: number, name: string, kind = "movies") => ({
-  id,
-  profileId: 1,
+  id: uid(id),
+  profileId: uid(1),
   access: "owner",
   name,
   kind,
   itemCount: 2,
   durationMs: 0,
   createdAt: ts,
-  updatedAt: ts,
+  modifiedAt: ts,
 });
 const stream = (sessionId: number) => ({
-  sessionId,
+  sessionId: uid(sessionId),
   entry: {
     position: 0,
     verdict: "direct_play",
@@ -141,7 +143,7 @@ const stream = (sessionId: number) => ({
     subtitleAction: "none",
     bad: false,
   },
-  streamUrl: `/api/v1/streams/k${sessionId}/0/file`,
+  streamUrl: `/api/v2/streams/k${sessionId}/0/file`,
   streamKind: "file",
   positionMs: 1_800_000,
   negotiated: { verdict: "direct_play", width: 1920, height: 1080, bitrate: 8e6 },
@@ -213,10 +215,10 @@ describe("Stations lists", () => {
       "Creature Double",
     ]);
     const tiles = [...r.querySelectorAll(".grid .wide")];
-    expect(tiles[0].getAttribute("href")).toBe("#/station/4");
-    expect(tiles[0].querySelector(".art")!.getAttribute("data-art")).toBe("30/backdrop");
+    expect(tiles[0].getAttribute("href")).toBe(`#/station/${uid(4)}`);
+    expect(tiles[0].querySelector(".art")!.getAttribute("data-art")).toBe(`${uid(30)}/backdrop`);
     expect(text(tiles[0].querySelectorAll(".sub"))[0]).toBe("On now: The Lantern Keeper");
-    expect(tiles[1].querySelector(".art")!.getAttribute("data-art")).toBe("32/backdrop");
+    expect(tiles[1].querySelector(".art")!.getAttribute("data-art")).toBe(`${uid(32)}/backdrop`);
     expect(text(tiles[1].querySelectorAll(".sub"))[0]).toMatch(/^Up next at .+: Moon Pie$/);
     // Nothing on or next: the station's own tile, carrying its name.
     expect(tiles[2].querySelector(".art")!.hasAttribute("data-art")).toBe(false);
@@ -257,7 +259,7 @@ describe("Stations lists", () => {
       "Playlists",
       "Stations",
     ]);
-    expect(r.querySelector(".grid .art.sq")!.getAttribute("data-art")).toBe("5/poster");
+    expect(r.querySelector(".grid .art.sq")!.getAttribute("data-art")).toBe(`${uid(5)}/poster`);
     expect(text(r.querySelectorAll(".grid .poster .sub"))).toEqual([
       "On now: Paper Lanterns",
       "Next: Slow Tide",
@@ -310,7 +312,10 @@ describe("Home's On now row", () => {
     expect(row.querySelectorAll(".art .bar")).toHaveLength(2);
     // A tile tunes in and says so; its arrow shows over the art.
     const tiles = [...row.querySelectorAll(".strip > a")];
-    expect(tiles.map((t) => t.getAttribute("href"))).toEqual(["#/tune/4", "#/tune/5"]);
+    expect(tiles.map((t) => t.getAttribute("href"))).toEqual([
+      `#/tune/${uid(4)}`,
+      `#/tune/${uid(5)}`,
+    ]);
     expect(tiles.map((t) => t.getAttribute("aria-label"))).toEqual([
       "Watch Movies: The Big Screen",
       "Listen to Music: Kitchen Radio",
@@ -332,9 +337,9 @@ describe("Home's On now row", () => {
             u.searchParams.get("unwatched")
               ? [
                   {
-                    id: 50,
-                    libraryId: 5,
-                    channelId: 40,
+                    id: uid(50),
+                    libraryId: uid(5),
+                    channelId: uid(40),
                     channelTitle: "Workbench Weekly",
                     title: "Shelves",
                     durationMs: 60000,
@@ -377,21 +382,21 @@ describe("Home's On now row", () => {
 describe("Station page", () => {
   const lantern = program(30, "The Lantern Keeper", later(-30));
   const entry = (id: number, itemId: number, name: string) => ({
-    id,
-    playlistId: 9,
+    id: uid(id),
+    playlistId: uid(9),
     position: id - 1,
     kind: "movie",
-    itemId,
+    itemId: uid(itemId),
     item: item(itemId, name),
     itemCount: 1,
     durationMs: 0,
   });
   let entries = [entry(1, 30, "The Lantern Keeper"), entry(2, 31, "Salt and Ember")];
   const routes = (extra: Record<string, unknown> = {}) => ({
-    "GET /profiles/1/playlists/9/entries": () => page(entries),
-    "GET /profiles/1/playlists/9/play-order": page([]),
-    "GET /stations/4": station(4, "The Big Screen", { onAir: onNow(lantern), ...extra }),
-    "GET /stations/4/schedule": page([
+    [`GET /profiles/${uid(1)}/playlists/${uid(9)}/entries`]: () => page(entries),
+    [`GET /profiles/${uid(1)}/playlists/${uid(9)}/play-order`]: page([]),
+    [`GET /stations/${uid(4)}`]: station(4, "The Big Screen", { onAir: onNow(lantern), ...extra }),
+    [`GET /stations/${uid(4)}/schedule`]: page([
       program(29, "Northbound", later(-120), later(-30)),
       lantern,
       program(31, "Salt and Ember", later(40)),
@@ -399,7 +404,7 @@ describe("Station page", () => {
   });
 
   it("shows type, rating, visibility, Tune in and today's schedule, and Edit for its owner", async () => {
-    await at("#/station/4");
+    await at(`#/station/${uid(4)}`);
     const r = root();
     await boot(r, { fetch: mockFetch({ ...base(), ...routes() }) });
     await until(() => r.querySelector("h1")?.textContent === "The Big Screen");
@@ -408,9 +413,9 @@ describe("Station page", () => {
       "None",
       "Household",
     ]);
-    expect(button(r, "Tune in")!.getAttribute("href")).toBe("#/tune/4");
-    expect(button(r, "Edit station")!.getAttribute("href")).toBe("#/station-edit/4");
-    expect(calls.find((c) => c.key === "GET /stations/4/schedule")!.query).toContain(
+    expect(button(r, "Tune in")!.getAttribute("href")).toBe(`#/tune/${uid(4)}`);
+    expect(button(r, "Edit station")!.getAttribute("href")).toBe(`#/station-edit/${uid(4)}`);
+    expect(calls.find((c) => c.key === `GET /stations/${uid(4)}/schedule`)!.query).toContain(
       `date=${localDate()}`,
     );
     const rows = [...r.querySelectorAll("section[aria-label='Today'] li")];
@@ -425,17 +430,17 @@ describe("Station page", () => {
 
   it("lists what the station plays and edits it like a playlist, for its owner", async () => {
     entries = [entry(1, 30, "The Lantern Keeper"), entry(2, 31, "Salt and Ember")];
-    await at("#/station/4");
+    await at(`#/station/${uid(4)}`);
     const r = root();
     await boot(r, {
       fetch: mockFetch({
         ...base(),
         ...routes(),
-        "DELETE /profiles/1/playlists/9/entries/1": () => {
+        [`DELETE /profiles/${uid(1)}/playlists/${uid(9)}/entries/${uid(1)}`]: () => {
           entries = [entries[1]];
           return none();
         },
-        "PUT /profiles/1/playlists/9/entries/2": none,
+        [`PUT /profiles/${uid(1)}/playlists/${uid(9)}/entries/${uid(2)}`]: none,
       }),
     });
     const contents = "section[aria-label='Contents']";
@@ -447,9 +452,14 @@ describe("Station page", () => {
     r.querySelectorAll(`${contents} li .tr`)[1].dispatchEvent(
       new KeyboardEvent("keydown", { key: "ArrowUp", altKey: true, bubbles: true }),
     );
-    await until(() => calls.some((c) => c.key === "PUT /profiles/1/playlists/9/entries/2"));
-    expect(calls.find((c) => c.key === "PUT /profiles/1/playlists/9/entries/2")!.body).toEqual({
-      itemId: 31,
+    await until(() =>
+      calls.some((c) => c.key === `PUT /profiles/${uid(1)}/playlists/${uid(9)}/entries/${uid(2)}`),
+    );
+    expect(
+      calls.find((c) => c.key === `PUT /profiles/${uid(1)}/playlists/${uid(9)}/entries/${uid(2)}`)!
+        .body,
+    ).toEqual({
+      itemId: uid(31),
       position: 0,
     });
     r.querySelector<HTMLElement>(`${contents} [aria-label='Remove The Lantern Keeper']`)!.click();
@@ -457,13 +467,13 @@ describe("Station page", () => {
   });
 
   it("shows the rating and offers no Edit to another adult of the household", async () => {
-    await at("#/station/4");
+    await at(`#/station/${uid(4)}`);
     const r = root();
     await boot(r, {
       fetch: mockFetch({
         ...base(3),
         ...routes({ rating: "PG-13" }),
-        "GET /profiles/3/watch-state": page([]),
+        [`GET /profiles/${uid(3)}/watch-state`]: page([]),
       }),
     });
     await until(() => r.querySelector("h1")?.textContent === "The Big Screen");
@@ -480,12 +490,12 @@ describe("Station page", () => {
 
 describe("music station page", () => {
   it("lists no day of songs, only what is on and next", async () => {
-    await at("#/station/5");
+    await at(`#/station/${uid(5)}`);
     const r = root();
     await boot(r, {
       fetch: mockFetch({
         ...base(),
-        "GET /stations/5": station(5, "Kitchen Radio", {
+        [`GET /stations/${uid(5)}`]: station(5, "Kitchen Radio", {
           kind: "music",
           onAir: onNow(
             songProgram(40, "Paper Lanterns", later(-1)),
@@ -499,21 +509,21 @@ describe("music station page", () => {
       "On now: Paper Lanterns · Next: Slow Tide",
     );
     expect(r.querySelector("section[aria-label='Today']")).toBeNull();
-    expect(calls.some((c) => c.key === "GET /stations/5/schedule")).toBe(false);
+    expect(calls.some((c) => c.key === `GET /stations/${uid(5)}/schedule`)).toBe(false);
   });
 });
 
 describe("Station editor", () => {
   const editorRoutes = {
-    "GET /profiles/1/playlists": page([
+    [`GET /profiles/${uid(1)}/playlists`]: page([
       playlist(9, "Movie night"),
       playlist(10, "Creature features"),
     ]),
-    "GET /profiles/1/playlists/10": playlist(10, "Creature features"),
-    "GET /profiles/1/playlists/10/entries": page([]),
-    "GET /profiles/1/playlists/10/play-order": page([]),
-    "GET /stations/8": station(8, "Creature Double"),
-    "GET /stations/8/schedule": page([]),
+    [`GET /profiles/${uid(1)}/playlists/${uid(10)}`]: playlist(10, "Creature features"),
+    [`GET /profiles/${uid(1)}/playlists/${uid(10)}/entries`]: page([]),
+    [`GET /profiles/${uid(1)}/playlists/${uid(10)}/play-order`]: page([]),
+    [`GET /stations/${uid(8)}`]: station(8, "Creature Double"),
+    [`GET /stations/${uid(8)}/schedule`]: page([]),
   };
 
   it("makes a station of its own: name, kind chosen once, order, visibility and schedule", async () => {
@@ -532,7 +542,7 @@ describe("Station editor", () => {
     await until(() => r.querySelector("form.station"));
     const f = r.querySelector("form.station")!;
     expect(f.querySelector("select[name=playlistId]")).toBeNull();
-    expect(calls.some((c) => c.key === "GET /profiles/1/playlists")).toBe(false);
+    expect(calls.some((c) => c.key === `GET /profiles/${uid(1)}/playlists`)).toBe(false);
     const kind = f.querySelector<HTMLSelectElement>("select[name=kind]")!;
     expect(kind.value).toBe("movies");
     expect(text(kind.querySelectorAll("option"))).toEqual(["Movies", "TV", "Music"]);
@@ -554,7 +564,7 @@ describe("Station editor", () => {
     to.value = "02:00";
     to.dispatchEvent(new Event("input"));
     (f as HTMLFormElement).requestSubmit();
-    await until(() => location.hash === "#/station/8");
+    await until(() => location.hash === `#/station/${uid(8)}`);
     expect(calls.find((c) => c.key === "POST /stations")!.body).toEqual({
       name: "Creature Double",
       kind: "tv",
@@ -567,7 +577,7 @@ describe("Station editor", () => {
   });
 
   it("offers no Make a station on a playlist", async () => {
-    await at("#/playlist/10");
+    await at(`#/playlist/${uid(10)}`);
     const r = root();
     await boot(r, { fetch: mockFetch({ ...base(), ...editorRoutes }) });
     await until(() => button(r, "Rename"));
@@ -605,17 +615,17 @@ describe("Station editor", () => {
   });
 
   it("edits a server station without its visibility, asks to reschedule and deletes on confirmation", async () => {
-    await at("#/station-edit/8");
+    await at(`#/station-edit/${uid(8)}`);
     const r = root();
     const server = station(8, "Westerns", { visibility: "server", rating: "PG-13" });
     await boot(r, {
       fetch: mockFetch({
         ...base(),
         ...editorRoutes,
-        "GET /stations/8": server,
-        "PUT /stations/8": server,
-        "POST /stations/8/reschedule": server,
-        "DELETE /stations/8": none,
+        [`GET /stations/${uid(8)}`]: server,
+        [`PUT /stations/${uid(8)}`]: server,
+        [`POST /stations/${uid(8)}/reschedule`]: server,
+        [`DELETE /stations/${uid(8)}`]: none,
         "GET /stations": page([]),
       }),
     });
@@ -630,30 +640,30 @@ describe("Station editor", () => {
     await until(() => document.querySelector("[role=dialog]"));
     const ask = document.querySelector("[role=dialog]")!;
     expect(ask.textContent).toContain("Reschedule now?");
-    expect(calls.some((c) => c.key === "POST /stations/8/reschedule")).toBe(false);
+    expect(calls.some((c) => c.key === `POST /stations/${uid(8)}/reschedule`)).toBe(false);
     button(ask, "Now")!.click();
-    await until(() => location.hash === "#/station/8");
-    const put = calls.find((c) => c.key === "PUT /stations/8")!;
+    await until(() => location.hash === `#/station/${uid(8)}`);
+    const put = calls.find((c) => c.key === `PUT /stations/${uid(8)}`)!;
     expect(put.body).toHaveProperty("timing", "continuous");
     expect(put.body).not.toHaveProperty("visibility");
     expect(put.body).not.toHaveProperty("playlistId");
     expect(f.querySelector("select[name=kind]")).toBeNull();
-    expect(calls.findIndex((c) => c.key === "PUT /stations/8")).toBeLessThan(
-      calls.findIndex((c) => c.key === "POST /stations/8/reschedule"),
+    expect(calls.findIndex((c) => c.key === `PUT /stations/${uid(8)}`)).toBeLessThan(
+      calls.findIndex((c) => c.key === `POST /stations/${uid(8)}/reschedule`),
     );
 
-    await at("#/station-edit/8");
+    await at(`#/station-edit/${uid(8)}`);
     await until(() => button(r, "Delete station"));
     button(r, "Delete station")!.click();
     const dlg = document.querySelector("[role=dialog]")!;
     expect(dlg.textContent).toContain("Delete Westerns?");
     button(dlg, "Delete")!.click();
     await until(() => location.hash === "#/movies?view=stations");
-    expect(calls.some((c) => c.key === "DELETE /stations/8")).toBe(true);
+    expect(calls.some((c) => c.key === `DELETE /stations/${uid(8)}`)).toBe(true);
   });
 
   it("is not offered to a kid", async () => {
-    await at("#/station-edit/8");
+    await at(`#/station-edit/${uid(8)}`);
     const r = root();
     await boot(r, { fetch: mockFetch({ ...base(2), ...editorRoutes }) });
     await until(() => r.querySelector("main")!.textContent !== "Loading");
@@ -663,15 +673,18 @@ describe("Station editor", () => {
 
 describe("deleting a playlist a station plays", () => {
   it("says a station plays it", async () => {
-    await at("#/playlist/10");
+    await at(`#/playlist/${uid(10)}`);
     const r = root();
     await boot(r, {
       fetch: mockFetch({
         ...base(),
-        "GET /profiles/1/playlists/10": playlist(10, "Creature features"),
-        "GET /profiles/1/playlists/10/entries": page([]),
-        "GET /profiles/1/playlists/10/play-order": page([]),
-        "DELETE /profiles/1/playlists/10": json({ code: "conflict", message: "in use" }, 409),
+        [`GET /profiles/${uid(1)}/playlists/${uid(10)}`]: playlist(10, "Creature features"),
+        [`GET /profiles/${uid(1)}/playlists/${uid(10)}/entries`]: page([]),
+        [`GET /profiles/${uid(1)}/playlists/${uid(10)}/play-order`]: page([]),
+        [`DELETE /profiles/${uid(1)}/playlists/${uid(10)}`]: json(
+          { code: "conflict", message: "in use" },
+          409,
+        ),
       }),
     });
     await until(() => button(r, "Delete"));
@@ -687,15 +700,15 @@ describe("deleting a playlist a station plays", () => {
 
 describe("tuned in to a video station", () => {
   it("starts on a click or Space when the browser refused to autoplay, and never pauses", async () => {
-    await at("#/tune/4");
+    await at(`#/tune/${uid(4)}`);
     const r = root();
     await boot(r, {
       fetch: mockFetch({
         ...base(),
-        "GET /stations/4": station(4, "The Big Screen", { onAir: onNow() }),
-        "POST /stations/4/playback": { stream: stream(7), onAir: onNow() },
-        "PUT /playback/sessions/7/position": none,
-        "DELETE /playback/sessions/7": none,
+        [`GET /stations/${uid(4)}`]: station(4, "The Big Screen", { onAir: onNow() }),
+        [`POST /stations/${uid(4)}/playback`]: { stream: stream(7), onAir: onNow() },
+        [`PUT /playback/sessions/${uid(7)}/position`]: none,
+        [`DELETE /playback/sessions/${uid(7)}`]: none,
       }),
     });
     await until(() => r.querySelector(".player video"));
@@ -715,13 +728,13 @@ describe("tuned in to a video station", () => {
   });
 
   it("plays the live stream with no pause, seek or skip, and asks again when the stream ends", async () => {
-    await at("#/tune/4");
+    await at(`#/tune/${uid(4)}`);
     const r = root();
     let n = 0;
     await boot(r, {
       fetch: mockFetch({
         ...base(),
-        "GET /stations/4": () =>
+        [`GET /stations/${uid(4)}`]: () =>
           station(4, "The Big Screen", {
             onAir:
               n < 2
@@ -732,14 +745,14 @@ describe("tuned in to a video station", () => {
                     upNext: [program(31, "Salt and Ember", later(40))],
                   },
           }),
-        "POST /stations/4/playback": () => {
+        [`POST /stations/${uid(4)}/playback`]: () => {
           n++;
           return n === 1
             ? { stream: { ...stream(7), live: true }, onAir: onNow() }
             : json({ code: "off_air", message: "off", resumesAt: later(40) }, 409);
         },
-        "PUT /playback/sessions/7/position": none,
-        "DELETE /playback/sessions/7": none,
+        [`PUT /playback/sessions/${uid(7)}/position`]: none,
+        [`DELETE /playback/sessions/${uid(7)}`]: none,
       }),
     });
     await until(() => r.querySelector(".player video"));
@@ -754,7 +767,7 @@ describe("tuned in to a video station", () => {
     expect(p.querySelector(".seek .thumb")).toBeNull();
     for (const kept of ["Full screen", "Picture in picture", "Volume"])
       expect(p.querySelector(`[aria-label='${kept}']`)).not.toBeNull();
-    expect(calls.find((c) => c.key === "POST /stations/4/playback")!.body).toMatchObject({
+    expect(calls.find((c) => c.key === `POST /stations/${uid(4)}/playback`)!.body).toMatchObject({
       live: true,
     });
     // Half an hour into an hour and a half.
@@ -772,12 +785,12 @@ describe("tuned in to a video station", () => {
     expect(n).toBe(1);
     (ask as () => void)();
     await until(() => r.textContent?.includes("Up next at"));
-    expect(calls.some((c) => c.key === "DELETE /playback/sessions/7")).toBe(true);
+    expect(calls.some((c) => c.key === `DELETE /playback/sessions/${uid(7)}`)).toBe(true);
     expect(n).toBe(2);
   });
 
   it("follows what is on through the programs and idents of one stream", async () => {
-    await at("#/tune/4");
+    await at(`#/tune/${uid(4)}`);
     const r = root();
     // The program on ends in a moment; the ident then runs up to the next.
     const ending = program(30, "The Lantern Keeper", later(-30), later(0.005));
@@ -786,19 +799,19 @@ describe("tuned in to a video station", () => {
     await boot(r, {
       fetch: mockFetch({
         ...base(),
-        "GET /stations/4": () =>
+        [`GET /stations/${uid(4)}`]: () =>
           station(4, "The Big Screen", {
             onAir:
               asked++ === 0
                 ? onNow(ending, next)
                 : { status: "between_programs", next, upNext: [next] },
           }),
-        "POST /stations/4/playback": {
+        [`POST /stations/${uid(4)}/playback`]: {
           stream: { ...stream(8), live: true },
           onAir: onNow(ending, next),
         },
-        "PUT /playback/sessions/8/position": none,
-        "DELETE /playback/sessions/8": none,
+        [`PUT /playback/sessions/${uid(8)}/position`]: none,
+        [`DELETE /playback/sessions/${uid(8)}`]: none,
       }),
     });
     await until(() => r.querySelector(".player video"));
@@ -806,12 +819,12 @@ describe("tuned in to a video station", () => {
     expect(sub.textContent).toBe("On now: The Lantern Keeper");
     await until(() => sub.textContent !== "On now: The Lantern Keeper", 3000);
     expect(sub.textContent).toMatch(/^Up next at .+: Salt and Ember$/);
-    expect(calls.filter((c) => c.key === "POST /stations/4/playback")).toHaveLength(1);
-    expect(calls.some((c) => c.key === "DELETE /playback/sessions/8")).toBe(false);
+    expect(calls.filter((c) => c.key === `POST /stations/${uid(4)}/playback`)).toHaveLength(1);
+    expect(calls.some((c) => c.key === `DELETE /playback/sessions/${uid(8)}`)).toBe(false);
   });
 
   it("stays on its stream when an event tells of the station", async () => {
-    await at("#/tune/4");
+    await at(`#/tune/${uid(4)}`);
     const r = root();
     let told = 0;
     await boot(r, {
@@ -822,12 +835,15 @@ describe("tuned in to a video station", () => {
           !url.searchParams.has("after")
             ? { cursor: "c0", resync: false, events: [] }
             : told++ === 0
-              ? { cursor: "c1", resync: false, events: [{ kind: "station", stationId: 4 }] }
+              ? { cursor: "c1", resync: false, events: [{ kind: "station", stationId: uid(4) }] }
               : new Promise(() => {}),
-        "GET /stations/4": station(4, "The Big Screen", { onAir: onNow() }),
-        "POST /stations/4/playback": { stream: { ...stream(7), live: true }, onAir: onNow() },
-        "PUT /playback/sessions/7/position": none,
-        "DELETE /playback/sessions/7": none,
+        [`GET /stations/${uid(4)}`]: station(4, "The Big Screen", { onAir: onNow() }),
+        [`POST /stations/${uid(4)}/playback`]: {
+          stream: { ...stream(7), live: true },
+          onAir: onNow(),
+        },
+        [`PUT /playback/sessions/${uid(7)}/position`]: none,
+        [`DELETE /playback/sessions/${uid(7)}`]: none,
       }),
     });
     await until(() => r.querySelector(".player video"));
@@ -836,22 +852,25 @@ describe("tuned in to a video station", () => {
     // Past the wait a page's redraw is held for.
     await new Promise((done) => setTimeout(done, 400));
     expect(r.querySelector("video")).toBe(video);
-    expect(calls.filter((c) => c.key === "POST /stations/4/playback")).toHaveLength(1);
-    expect(calls.some((c) => c.key === "DELETE /playback/sessions/7")).toBe(false);
+    expect(calls.filter((c) => c.key === `POST /stations/${uid(4)}/playback`)).toHaveLength(1);
+    expect(calls.some((c) => c.key === `DELETE /playback/sessions/${uid(7)}`)).toBe(false);
   });
 
   it("tuned in between programs plays the ident and says what is next", async () => {
-    await at("#/tune/4");
+    await at(`#/tune/${uid(4)}`);
     const r = root();
     const next = program(31, "Salt and Ember", later(40));
     const between = { status: "between_programs", next, upNext: [next] };
     await boot(r, {
       fetch: mockFetch({
         ...base(),
-        "GET /stations/4": station(4, "The Big Screen", { onAir: between }),
-        "POST /stations/4/playback": { stream: { ...stream(7), live: true }, onAir: between },
-        "PUT /playback/sessions/7/position": none,
-        "DELETE /playback/sessions/7": none,
+        [`GET /stations/${uid(4)}`]: station(4, "The Big Screen", { onAir: between }),
+        [`POST /stations/${uid(4)}/playback`]: {
+          stream: { ...stream(7), live: true },
+          onAir: between,
+        },
+        [`PUT /playback/sessions/${uid(7)}/position`]: none,
+        [`DELETE /playback/sessions/${uid(7)}`]: none,
       }),
     });
     await until(() => r.querySelector(".player video"));
@@ -864,27 +883,27 @@ describe("tuned in to a video station", () => {
   it("ends a session that finishes tuning in after the viewer has left", async () => {
     let started!: () => void;
     const gate = new Promise<void>((r) => (started = r));
-    await at("#/tune/4");
+    await at(`#/tune/${uid(4)}`);
     const r = root();
     await boot(r, {
       fetch: mockFetch({
         ...base(),
-        "GET /stations/4": station(4, "The Big Screen"),
-        "POST /stations/4/playback": async () => {
+        [`GET /stations/${uid(4)}`]: station(4, "The Big Screen"),
+        [`POST /stations/${uid(4)}/playback`]: async () => {
           await gate;
           return json({ stream: stream(7), onAir: onNow() }, 201);
         },
-        "DELETE /playback/sessions/7": none,
+        [`DELETE /playback/sessions/${uid(7)}`]: none,
       }),
     });
-    await until(() => calls.some((c) => c.key === "POST /stations/4/playback"));
+    await until(() => calls.some((c) => c.key === `POST /stations/${uid(4)}/playback`));
     await at("#/");
     started();
-    await until(() => calls.some((c) => c.key === "DELETE /playback/sessions/7"));
+    await until(() => calls.some((c) => c.key === `DELETE /playback/sessions/${uid(7)}`));
   });
 
   it("between programs shows the station's tile with what is next, and tunes in at resumesAt", async () => {
-    await at("#/tune/6");
+    await at(`#/tune/${uid(6)}`);
     const r = root();
     let n = 0;
     // Starts in a moment, so the call at resumesAt comes within the test.
@@ -892,10 +911,10 @@ describe("tuned in to a video station", () => {
     await boot(r, {
       fetch: mockFetch({
         ...base(),
-        "GET /stations/6": station(6, "Small Wonders", {
+        [`GET /stations/${uid(6)}`]: station(6, "Small Wonders", {
           onAir: { status: "between_programs", next, upNext: [next] },
         }),
-        "POST /stations/6/playback": () => {
+        [`POST /stations/${uid(6)}/playback`]: () => {
           n++;
           return json({ code: "off_air", message: "off", resumesAt: next.startsAt }, 409);
         },
@@ -912,17 +931,17 @@ describe("tuned in to a video station", () => {
   });
 
   it("left while tuning in to a station off the air, redraws nothing at resumesAt", async () => {
-    await at("#/tune/6");
+    await at(`#/tune/${uid(6)}`);
     const r = root();
     const next = program(32, "Moon Pie", new Date(Date.now() + 200).toISOString());
     let answer!: () => void;
     await boot(r, {
       fetch: mockFetch({
         ...base(),
-        "GET /stations/6": station(6, "Small Wonders", {
+        [`GET /stations/${uid(6)}`]: station(6, "Small Wonders", {
           onAir: { status: "between_programs", next, upNext: [next] },
         }),
-        "POST /stations/6/playback": () =>
+        [`POST /stations/${uid(6)}/playback`]: () =>
           new Promise(
             (done) =>
               (answer = () =>
@@ -941,17 +960,17 @@ describe("tuned in to a video station", () => {
   });
 
   it("back in view after the next program's start, asks at once", async () => {
-    await at("#/tune/6");
+    await at(`#/tune/${uid(6)}`);
     const r = root();
     let n = 0;
     const next = program(32, "Moon Pie", later(40));
     await boot(r, {
       fetch: mockFetch({
         ...base(),
-        "GET /stations/6": station(6, "Small Wonders", {
+        [`GET /stations/${uid(6)}`]: station(6, "Small Wonders", {
           onAir: { status: "between_programs", next, upNext: [next] },
         }),
-        "POST /stations/6/playback": () => {
+        [`POST /stations/${uid(6)}/playback`]: () => {
           n++;
           return json({ code: "off_air", message: "off", resumesAt: next.startsAt }, 409);
         },
@@ -970,19 +989,19 @@ describe("tuned in to a video station", () => {
   });
 
   it("off schedule says when it is back", async () => {
-    await at("#/tune/7");
+    await at(`#/tune/${uid(7)}`);
     const r = root();
     await boot(r, {
       fetch: mockFetch({
         ...base(),
-        "GET /stations/7": station(7, "Creature Double", {
+        [`GET /stations/${uid(7)}`]: station(7, "Creature Double", {
           onAir: {
             status: "off_schedule",
             next: program(33, "Them", later(3 * 1440)),
             upNext: [program(33, "Them", later(3 * 1440))],
           },
         }),
-        "POST /stations/7/playback": json(
+        [`POST /stations/${uid(7)}/playback`]: json(
           { code: "off_air", message: "off", resumesAt: later(3 * 1440) },
           409,
         ),
@@ -993,13 +1012,13 @@ describe("tuned in to a video station", () => {
   });
 
   it("says so when nothing this device plays can carry the station", async () => {
-    await at("#/tune/4");
+    await at(`#/tune/${uid(4)}`);
     const r = root();
     await boot(r, {
       fetch: mockFetch({
         ...base(),
-        "GET /stations/4": station(4, "The Big Screen", { onAir: onNow() }),
-        "POST /stations/4/playback": json({ code: "unplayable", message: "no" }, 409),
+        [`GET /stations/${uid(4)}`]: station(4, "The Big Screen", { onAir: onNow() }),
+        [`POST /stations/${uid(4)}/playback`]: json({ code: "unplayable", message: "no" }, 409),
       }),
     });
     await until(() => r.querySelector(".player .fail"));
@@ -1010,7 +1029,7 @@ describe("tuned in to a video station", () => {
 
 describe("tuned in to a music station", () => {
   it("left while the station loads, neither tunes in nor moves to Now playing", async () => {
-    await at("#/tune/5");
+    await at(`#/tune/${uid(5)}`);
     const r = root();
     const kitchen = station(5, "Kitchen Radio", { kind: "music" });
     let answer!: () => void;
@@ -1018,8 +1037,8 @@ describe("tuned in to a music station", () => {
       fetch: mockFetch({
         ...base(),
         "GET /stations": page([]),
-        "GET /stations/5": () => new Promise((done) => (answer = () => done(kitchen))),
-        "POST /stations/5/playback": { stream: stream(8), onAir: kitchen.onAir },
+        [`GET /stations/${uid(5)}`]: () => new Promise((done) => (answer = () => done(kitchen))),
+        [`POST /stations/${uid(5)}/playback`]: { stream: stream(8), onAir: kitchen.onAir },
       }),
     });
     await until(() => answer);
@@ -1027,11 +1046,11 @@ describe("tuned in to a music station", () => {
     answer();
     await new Promise((r) => setTimeout(r, 50));
     expect(location.hash).toBe("#/stations");
-    expect(calls.some((c) => c.key === "POST /stations/5/playback")).toBe(false);
+    expect(calls.some((c) => c.key === `POST /stations/${uid(5)}/playback`)).toBe(false);
   });
 
   it("plays through the music player with only Stop, Up next read only, the queue kept until Stop", async () => {
-    await at("#/station/5");
+    await at(`#/station/${uid(5)}`);
     const r = root();
     const now = songProgram(40, "Paper Lanterns", later(-1));
     const next = songProgram(41, "Slow Tide", later(2));
@@ -1047,18 +1066,18 @@ describe("tuned in to a music station", () => {
     await boot(r, {
       fetch: mockFetch({
         ...base(),
-        "GET /stations/5": kitchen,
-        "GET /stations/5/schedule": page([]),
-        "POST /stations/5/playback": { stream: stream(8), onAir },
+        [`GET /stations/${uid(5)}`]: kitchen,
+        [`GET /stations/${uid(5)}/schedule`]: page([]),
+        [`POST /stations/${uid(5)}/playback`]: { stream: stream(8), onAir },
         "POST /playback/sessions": stream(9),
-        "PUT /playback/sessions/8/position": none,
-        "DELETE /playback/sessions/8": none,
-        "PUT /playback/sessions/9/position": none,
-        "DELETE /playback/sessions/9": none,
+        [`PUT /playback/sessions/${uid(8)}/position`]: none,
+        [`DELETE /playback/sessions/${uid(8)}`]: none,
+        [`PUT /playback/sessions/${uid(9)}/position`]: none,
+        [`DELETE /playback/sessions/${uid(9)}`]: none,
       }),
     });
     const m = music()!;
-    await m.play([tune(50, "Mine"), tune(51, "Also mine")], 0, "My album", "#/album/5");
+    await m.play([tune(50, "Mine"), tune(51, "Also mine")], 0, "My album", `#/album/${uid(5)}`);
     await until(() => button(r, "Tune in"));
     const entries = history.length;
     button(r, "Tune in")!.click();
@@ -1092,26 +1111,26 @@ describe("tuned in to a music station", () => {
     expect(m.q.upNext.map((s) => s.title)).toEqual(["Also mine"]);
 
     mini.querySelector<HTMLElement>("[aria-label=Stop]")!.click();
-    await until(() => calls.some((c) => c.key === "DELETE /playback/sessions/8"));
+    await until(() => calls.some((c) => c.key === `DELETE /playback/sessions/${uid(8)}`));
     expect(m.station).toBeUndefined();
     expect(m.q.current).toBeUndefined();
     expect(mini.hidden).toBe(true);
   });
 
   it("names the station when its stream cannot play, with nothing queued", async () => {
-    await at("#/station/5");
+    await at(`#/station/${uid(5)}`);
     const r = root();
     const onAir = onNow(songProgram(40, "Paper Lanterns", later(-1)));
     await boot(r, {
       fetch: mockFetch({
         ...base(),
-        "GET /stations/5": station(5, "Kitchen Radio", { kind: "music", onAir }),
-        "GET /stations/5/schedule": page([]),
-        "POST /stations/5/playback": { stream: stream(8), onAir },
-        "POST /playback/sessions/8/events": () =>
+        [`GET /stations/${uid(5)}`]: station(5, "Kitchen Radio", { kind: "music", onAir }),
+        [`GET /stations/${uid(5)}/schedule`]: page([]),
+        [`POST /stations/${uid(5)}/playback`]: { stream: stream(8), onAir },
+        [`POST /playback/sessions/${uid(8)}/events`]: () =>
           json({ code: "conflict", message: "no entry left" }, 409),
-        "PUT /playback/sessions/8/position": none,
-        "DELETE /playback/sessions/8": none,
+        [`PUT /playback/sessions/${uid(8)}/position`]: none,
+        [`DELETE /playback/sessions/${uid(8)}`]: none,
       }),
     });
     await until(() => button(r, "Tune in"));

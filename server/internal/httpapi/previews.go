@@ -8,12 +8,13 @@ import (
 )
 
 func toSeekPreview(p *seekpreview.SeekPreview) api.SeekPreview {
-	return api.SeekPreview{Id: p.ID, MediaFileId: p.MediaFileID, IntervalMs: p.IntervalMs, Count: p.Count, Width: p.Width, Height: p.Height, CreatedAt: p.CreatedAt}
+	return api.SeekPreview{Id: p.ID, MediaFileId: p.MediaFileID, IntervalMs: p.IntervalMs, Count: p.Count, Width: p.Width, Height: p.Height, CreatedAt: p.CreatedAt,
+		ModifiedAt: p.ModifiedAt}
 }
 
 // ListSeekPreviews lists preview sets newest first, optionally of one file.
 func (s *Server) ListSeekPreviews(_ context.Context, r api.ListSeekPreviewsRequestObject) (api.ListSeekPreviewsResponseObject, error) {
-	all, err := s.svc.Previews.Repo().List(or(r.Params.MediaFileId, 0))
+	all, err := s.svc.Previews.Repo().List(r.Params.MediaFileId)
 	if err != nil {
 		return nil, err
 	}

@@ -10,16 +10,17 @@ import (
 	"testing"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/replica"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // copyOf is a replica as the minimal client below keeps it: per table, rows
-// by key.
+// by key, an id as the wire carries it.
 type copyOf map[string]map[string]string
 
 // pull brings household's c up to date as a client does, from since, nil
 // for nothing held: page by page of a pass, or a snapshot when told to take
 // one. It returns the version c then holds.
-func pull(ctx context.Context, s *replica.Sync, household int64, c copyOf, since *int64) (*int64, error) {
+func pull(ctx context.Context, s *replica.Sync, household uid.ID, c copyOf, since *int64) (*int64, error) {
 	cursor := ""
 	for {
 		p, err := s.Changes(ctx, household, since, cursor, 7)
@@ -63,6 +64,9 @@ func pull(ctx context.Context, s *replica.Sync, household int64, c copyOf, since
 	}
 }
 
+// key is the copyOf key of the row of a one-column key, fixture id n.
+func key(n int) string { return "[" + u(n) + "]" }
+
 func keyColumns(table string) []string {
 	for _, tb := range replica.V1.Tables {
 		if tb.Name == table {
@@ -96,6 +100,16 @@ func load(ctx context.Context, path string, c copyOf) error {
 				_ = rows.Close()
 				return err
 			}
+			for i, x := range v {
+				if b, ok := x.([]byte); ok {
+					var id uid.ID
+					if err := id.Scan(b); err != nil {
+						_ = rows.Close()
+						return fmt.Errorf("%s: %w", tb.Name, err)
+					}
+					v[i] = id.String()
+				}
+			}
 			k := make([]any, len(tb.Key))
 			for i, n := range tb.Key {
 				k[i] = v[slices.IndexFunc(tb.Cols, func(c replica.Col) bool { return c.Name == n })]
@@ -118,14 +132,14 @@ func TestConcurrentWritersConverge(t *testing.T) {
 	}
 	d := seeded(t)
 	ctx := context.Background()
-	mustExec(t, d, `INSERT INTO playlist (id, account_id, name, kind, created_at, updated_at) VALUES (1, 1, 'P', 'movies', 0, 0)`)
+	mustExec(t, d, `INSERT INTO playlist (id, account_id, name, kind, created_at, modified_at) VALUES (uid(1), uid(1), 'P', 'movies', 0, 0)`)
 	writes := []string{
-		`INSERT INTO watch_state (account_id, item_id, position_ms, updated_at) VALUES (?1, ?2, ?3, 0)
+		`INSERT INTO watch_state (account_id, item_id, position_ms, changed_at) VALUES (?1, ?2, ?3, 0)
 			ON CONFLICT DO UPDATE SET position_ms = excluded.position_ms`,
 		`DELETE FROM watch_state WHERE account_id = ?1 AND item_id = ?2`,
 		`INSERT OR IGNORE INTO account_allow (account_id, item_id) VALUES (?1, ?2)`,
 		`DELETE FROM account_allow WHERE account_id = ?1 AND item_id = ?2`,
-		`INSERT INTO playlist_entry (playlist_id, item_id, rank, added_at) VALUES (1, ?2, 'a' || ?3, 0)`,
+		`INSERT INTO playlist_entry (id, playlist_id, item_id, rank, added_at, created_at, modified_at) VALUES (?4, uid(1), ?2, 'a' || ?3, 0, 0, 0)`,
 		`UPDATE playlist_entry SET rank = 'a' || ?3 WHERE id = (SELECT max(id) FROM playlist_entry WHERE item_id = ?2)`,
 		`DELETE FROM playlist_entry WHERE id = (SELECT min(id) FROM playlist_entry WHERE item_id = ?2)`,
 		`UPDATE item SET kids_content = ?3 % 2 WHERE id = ?2`,
@@ -143,7 +157,7 @@ func TestConcurrentWritersConverge(t *testing.T) {
 					return
 				}
 				for range 1 + r.IntN(3) {
-					if _, err := tx.ExecContext(ctx, writes[r.IntN(len(writes))], 1+r.IntN(2), 1+r.IntN(2), r.IntN(100)); err != nil {
+					if _, err := tx.ExecContext(ctx, writes[r.IntN(len(writes))], uid.N(1+r.IntN(2)), uid.N(1+r.IntN(2)), r.IntN(100), uid.New()); err != nil {
 						_ = tx.Rollback()
 						errs <- err
 						return
@@ -173,7 +187,7 @@ func TestConcurrentWritersConverge(t *testing.T) {
 		default:
 		}
 		var err error
-		if since, err = pull(ctx, s, 1, c, since); err != nil {
+		if since, err = pull(ctx, s, uid.N(1), c, since); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -181,12 +195,12 @@ func TestConcurrentWritersConverge(t *testing.T) {
 	for err := range errs {
 		t.Fatal(err)
 	}
-	converged(t, d, 1, c, since, fmt.Sprintf("after %d pulls", pulls))
+	converged(t, d, uid.N(1), c, since, fmt.Sprintf("after %d pulls", pulls))
 }
 
 // converged fails unless household's c, at since, holds what a fresh
 // snapshot of d holds.
-func converged(t *testing.T, d *sql.DB, household int64, c copyOf, since *int64, when string) {
+func converged(t *testing.T, d *sql.DB, household uid.ID, c copyOf, since *int64, when string) {
 	t.Helper()
 	f, err := syncOf(t, d).Snapshot(context.Background(), household)
 	if err != nil {
@@ -216,7 +230,7 @@ func TestReachedCollectionsConverge(t *testing.T) {
 	ctx := context.Background()
 	s := syncOf(t, d)
 	c := copyOf{}
-	since, err := pull(ctx, s, 201, c, nil)
+	since, err := pull(ctx, s, uid.N(201), c, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,25 +238,27 @@ func TestReachedCollectionsConverge(t *testing.T) {
 		q         string
 		has, lack []string // collections, as copyOf keys them
 	}{
-		{`SELECT 1`, []string{"[403]"}, []string{"[402]"}},
-		{`INSERT INTO playlist_entry (id, playlist_id, collection_id, rank, added_at) VALUES (628, 512, 402, 'a3', 0)`, []string{"[402]"}, nil},
-		{`INSERT INTO collection_movie (collection_id, item_id, position) VALUES (402, 5, 1)`, nil, nil},
-		{`DELETE FROM collection_movie WHERE collection_id = 402 AND item_id = 1`, nil, nil},
-		{`UPDATE collection SET name = 'Theirs too' WHERE id = 402`, nil, nil},
-		{`DELETE FROM playlist_entry WHERE id = 628`, nil, []string{"[402]"}},
-		{`UPDATE playlist_entry SET collection_id = 402 WHERE id = 627`, []string{"[402]"}, []string{"[403]"}},
-		{`UPDATE playlist_entry SET collection_id = 403 WHERE id = 627`, []string{"[403]"}, []string{"[402]"}},
-		{`INSERT INTO playlist_household_share (playlist_id, household_id, access, created_at) VALUES (515, 201, 'read', 0)`, nil, nil},
-		{`INSERT INTO playlist_entry (id, playlist_id, collection_id, rank, added_at) VALUES (629, 515, 402, 'a1', 0)`, []string{"[402]"}, nil},
-		{`INSERT INTO collection_movie (collection_id, item_id, position) VALUES (402, 2, 2)`, nil, nil},
-		{`DELETE FROM playlist_household_share WHERE playlist_id = 515`, []string{"[403]"}, []string{"[402]"}},
-		{`UPDATE station SET visibility = 'household' WHERE id = 703`, nil, []string{"[403]"}},
+		{`SELECT 1`, []string{key(403)}, []string{key(402)}},
+		{`INSERT INTO playlist_entry (id, playlist_id, collection_id, rank, added_at, created_at, modified_at)
+			VALUES (uid(628), uid(512), uid(402), 'a3', 0, 0, 0)`, []string{key(402)}, nil},
+		{`INSERT INTO collection_movie (collection_id, item_id, position) VALUES (uid(402), uid(5), 1)`, nil, nil},
+		{`DELETE FROM collection_movie WHERE collection_id = uid(402) AND item_id = uid(1)`, nil, nil},
+		{`UPDATE collection SET name = 'Theirs too' WHERE id = uid(402)`, nil, nil},
+		{`DELETE FROM playlist_entry WHERE id = uid(628)`, nil, []string{key(402)}},
+		{`UPDATE playlist_entry SET collection_id = uid(402) WHERE id = uid(627)`, []string{key(402)}, []string{key(403)}},
+		{`UPDATE playlist_entry SET collection_id = uid(403) WHERE id = uid(627)`, []string{key(403)}, []string{key(402)}},
+		{`INSERT INTO playlist_household_share (playlist_id, household_id, access, created_at) VALUES (uid(515), uid(201), 'read', 0)`, nil, nil},
+		{`INSERT INTO playlist_entry (id, playlist_id, collection_id, rank, added_at, created_at, modified_at)
+			VALUES (uid(629), uid(515), uid(402), 'a1', 0, 0, 0)`, []string{key(402)}, nil},
+		{`INSERT INTO collection_movie (collection_id, item_id, position) VALUES (uid(402), uid(2), 2)`, nil, nil},
+		{`DELETE FROM playlist_household_share WHERE playlist_id = uid(515)`, []string{key(403)}, []string{key(402)}},
+		{`UPDATE station SET visibility = 'household' WHERE id = uid(703)`, nil, []string{key(403)}},
 	} {
 		mustExec(t, d, step.q)
-		if since, err = pull(ctx, s, 201, c, since); err != nil {
+		if since, err = pull(ctx, s, uid.N(201), c, since); err != nil {
 			t.Fatal(err)
 		}
-		converged(t, d, 201, c, since, "after "+step.q)
+		converged(t, d, uid.N(201), c, since, "after "+step.q)
 		for _, k := range step.has {
 			if c["collection"][k] == "" {
 				t.Errorf("after %s 201 lacks collection %s", step.q, k)
@@ -264,28 +280,28 @@ func TestStationVisibilityConverges(t *testing.T) {
 	ctx := context.Background()
 	s := syncOf(t, d)
 	c := copyOf{}
-	since, err := pull(ctx, s, 201, c, nil)
+	since, err := pull(ctx, s, uid.N(201), c, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c["playlist"]["[512]"] == "" {
+	if c["playlist"][key(512)] == "" {
 		t.Fatal("201 lacks the playlist of the server station it sees")
 	}
 	for _, q := range []string{
-		`UPDATE station SET visibility = 'household' WHERE id = 703`,
-		`UPDATE station SET visibility = 'server' WHERE id = 703`,
-		`INSERT INTO playlist_entry (id, playlist_id, item_id, rank, added_at) VALUES (625, 512, 3, 'a2', 0)`,
-		`DELETE FROM playlist_entry WHERE id = 622`,
-		`UPDATE station SET playlist_id = 511 WHERE id = 703`,
-		`DELETE FROM station WHERE id = 703`,
+		`UPDATE station SET visibility = 'household' WHERE id = uid(703)`,
+		`UPDATE station SET visibility = 'server' WHERE id = uid(703)`,
+		`INSERT INTO playlist_entry (id, playlist_id, item_id, rank, added_at, created_at, modified_at) VALUES (uid(625), uid(512), uid(3), 'a2', 0, 0, 0)`,
+		`DELETE FROM playlist_entry WHERE id = uid(622)`,
+		`UPDATE station SET playlist_id = uid(511) WHERE id = uid(703)`,
+		`DELETE FROM station WHERE id = uid(703)`,
 	} {
 		mustExec(t, d, q)
-		if since, err = pull(ctx, s, 201, c, since); err != nil {
+		if since, err = pull(ctx, s, uid.N(201), c, since); err != nil {
 			t.Fatal(err)
 		}
-		converged(t, d, 201, c, since, "after "+q)
+		converged(t, d, uid.N(201), c, since, "after "+q)
 	}
-	if c["playlist"]["[511]"] != "" || c["playlist"]["[512]"] != "" {
+	if c["playlist"][key(511)] != "" || c["playlist"][key(512)] != "" {
 		t.Error("201 keeps the playlists of a station it no longer sees")
 	}
 }

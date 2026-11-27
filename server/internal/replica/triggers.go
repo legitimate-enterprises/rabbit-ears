@@ -96,9 +96,10 @@ func changed(cols []string) string {
 	return strings.Join(parts, " OR ")
 }
 
-// parts is row's key as k1 to k3, the unused parts 0. The unary + strips a
-// column's affinity: compared with an INTEGER column, k1 to k3 would take
-// its affinity and lose their index, a scan of every tombstone per write.
+// parts is row's key as k1 to k3, an id part its 16 bytes, the unused
+// parts 0. The unary + strips a column's affinity: compared with an INTEGER
+// column, k1 to k3 would take its affinity and lose their index, a scan of
+// every tombstone per write. A BLOB column has none to strip.
 func parts(row string, key []string) string {
 	out := []string{"0", "0", "0"}
 	for i, c := range key {

@@ -7,6 +7,7 @@ import (
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/playlist"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/station"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 var zone = time.FixedZone("local", -5*3600)
@@ -51,9 +52,9 @@ func TestAlignAcrossTheRepeatedHour(t *testing.T) {
 
 func TestScheduleStart(t *testing.T) {
 	friday := []time.Weekday{time.Friday}
-	evening := station.Schedule{Days: friday, Times: []station.Range{{18 * 60, 22 * 60}}}
-	late := station.Schedule{Days: friday, Times: []station.Range{{18*60 + 15, 22 * 60}}}
-	overnight := station.Schedule{Days: friday, Times: []station.Range{{22 * 60, 2 * 60}}}
+	evening := station.Schedule{Days: friday, Times: []station.Range{{From: 18 * 60, To: 22 * 60}}}
+	late := station.Schedule{Days: friday, Times: []station.Range{{From: 18*60 + 15, To: 22 * 60}}}
+	overnight := station.Schedule{Days: friday, Times: []station.Range{{From: 22 * 60, To: 2 * 60}}}
 	saturdays := station.Schedule{Days: []time.Weekday{time.Saturday}}
 	far := at(30, 0, 0, 0)
 	for _, c := range []struct {
@@ -84,7 +85,7 @@ func TestScheduleStart(t *testing.T) {
 }
 
 func TestScheduleOpen(t *testing.T) {
-	evening := station.Schedule{Days: []time.Weekday{time.Friday}, Times: []station.Range{{18 * 60, 22 * 60}}}
+	evening := station.Schedule{Days: []time.Weekday{time.Friday}, Times: []station.Range{{From: 18 * 60, To: 22 * 60}}}
 	if !evening.Open(at(0, 18, 0, 0)) || !evening.Open(at(0, 21, 59, 0)) || evening.Open(at(0, 22, 0, 0)) || evening.Open(at(1, 19, 0, 0)) {
 		t.Error("open is [from, to) on the chosen days")
 	}
@@ -93,12 +94,20 @@ func TestScheduleOpen(t *testing.T) {
 	}
 }
 
-func row(entry, minutes int64) station.Row {
-	return station.Row{Key: station.Key{EntryID: entry, ItemID: entry * 10}, EditionID: entry * 100, RuntimeMs: minutes * 60000}
+func row(entry, minutes int) station.Row {
+	return station.Row{Key: station.Key{EntryID: uid.N(entry), ItemID: uid.N(entry * 10)}, EditionID: uid.N(entry * 100), RuntimeMs: int64(minutes) * 60000}
+}
+
+// ns are the fixture ids of entries.
+func ns(entries ...int) (out []uid.ID) {
+	for _, e := range entries {
+		out = append(out, uid.N(e))
+	}
+	return out
 }
 
 type slot struct {
-	entry      int64
+	entry      uid.ID
 	start, end time.Time
 }
 
@@ -109,7 +118,7 @@ func slots(ps []station.Program) (out []slot) {
 	return out
 }
 
-func entries(ps []station.Program) (out []int64) {
+func entries(ps []station.Program) (out []uid.ID) {
 	for _, p := range ps {
 		out = append(out, p.EntryID)
 	}
@@ -121,10 +130,10 @@ func TestFillMoviesOnTheHour(t *testing.T) {
 	rows := []station.Row{row(1, 61), row(2, 119), row(3, 60)}
 	got := p.Fill(rows, &station.Loop{}, nil, at(0, 15, 0, 0), at(0, 21, 0, 0))
 	want := []slot{
-		{1, at(0, 15, 0, 0), at(0, 16, 1, 0)},  // ends 16:01, so the next is at 17:00
-		{2, at(0, 17, 0, 0), at(0, 18, 59, 0)}, // ends 18:59, so the next is at 19:00
-		{3, at(0, 19, 0, 0), at(0, 20, 0, 0)},  // ends on the hour, so the next is at it
-		{1, at(0, 20, 0, 0), at(0, 21, 1, 0)},
+		{uid.N(1), at(0, 15, 0, 0), at(0, 16, 1, 0)},  // ends 16:01, so the next is at 17:00
+		{uid.N(2), at(0, 17, 0, 0), at(0, 18, 59, 0)}, // ends 18:59, so the next is at 19:00
+		{uid.N(3), at(0, 19, 0, 0), at(0, 20, 0, 0)},  // ends on the hour, so the next is at it
+		{uid.N(1), at(0, 20, 0, 0), at(0, 21, 1, 0)},
 	}
 	if !slices.Equal(slots(got), want) {
 		t.Fatalf("got %v", slots(got))
@@ -132,7 +141,7 @@ func TestFillMoviesOnTheHour(t *testing.T) {
 	if got[3].Loop != got[2].Loop+1 || got[3].Position != 0 || got[2].Position != 2 {
 		t.Errorf("the loop wraps: %+v", got)
 	}
-	if got[0].EditionID != 100 || got[0].ItemID != 10 {
+	if got[0].EditionID != uid.N(100) || got[0].ItemID != uid.N(10) {
 		t.Errorf("a program names the row's item and edition: %+v", got[0])
 	}
 }
@@ -140,7 +149,7 @@ func TestFillMoviesOnTheHour(t *testing.T) {
 func TestFillTVOnTheHalfHour(t *testing.T) {
 	p := station.Plan{Timing: station.HalfHour}
 	got := p.Fill([]station.Row{row(1, 22), row(2, 44)}, &station.Loop{}, nil, at(0, 15, 1, 0), at(0, 17, 0, 0))
-	want := []slot{{1, at(0, 15, 30, 0), at(0, 15, 52, 0)}, {2, at(0, 16, 0, 0), at(0, 16, 44, 0)}}
+	want := []slot{{uid.N(1), at(0, 15, 30, 0), at(0, 15, 52, 0)}, {uid.N(2), at(0, 16, 0, 0), at(0, 16, 44, 0)}}
 	if !slices.Equal(slots(got), want) {
 		t.Fatalf("got %v", slots(got))
 	}
@@ -149,19 +158,19 @@ func TestFillTVOnTheHalfHour(t *testing.T) {
 func TestFillMusicBackToBack(t *testing.T) {
 	p := station.Plan{Timing: station.Continuous}
 	got := p.Fill([]station.Row{row(1, 3), row(2, 4)}, &station.Loop{}, nil, at(0, 10, 0, 30), at(0, 10, 10, 0))
-	want := []slot{{1, at(0, 10, 0, 30), at(0, 10, 3, 30)}, {2, at(0, 10, 3, 30), at(0, 10, 7, 30)}, {1, at(0, 10, 7, 30), at(0, 10, 10, 30)}}
+	want := []slot{{uid.N(1), at(0, 10, 0, 30), at(0, 10, 3, 30)}, {uid.N(2), at(0, 10, 3, 30), at(0, 10, 7, 30)}, {uid.N(1), at(0, 10, 7, 30), at(0, 10, 10, 30)}}
 	if !slices.Equal(slots(got), want) {
 		t.Fatalf("got %v", slots(got))
 	}
 }
 
 func TestFillWindowClosingMidProgram(t *testing.T) {
-	p := station.Plan{Timing: station.Hour, Schedule: station.Schedule{Times: []station.Range{{18 * 60, 20 * 60}}}}
+	p := station.Plan{Timing: station.Hour, Schedule: station.Schedule{Times: []station.Range{{From: 18 * 60, To: 20 * 60}}}}
 	got := p.Fill([]station.Row{row(1, 90), row(2, 180)}, &station.Loop{}, nil, at(0, 18, 0, 0), at(3, 0, 0, 0))
 	want := []slot{
-		{1, at(0, 18, 0, 0), at(0, 19, 30, 0)}, // 20:00 is the close, so nothing starts then
-		{2, at(1, 18, 0, 0), at(1, 21, 0, 0)},  // plays to its end past the close
-		{1, at(2, 18, 0, 0), at(2, 19, 30, 0)},
+		{uid.N(1), at(0, 18, 0, 0), at(0, 19, 30, 0)}, // 20:00 is the close, so nothing starts then
+		{uid.N(2), at(1, 18, 0, 0), at(1, 21, 0, 0)},  // plays to its end past the close
+		{uid.N(1), at(2, 18, 0, 0), at(2, 19, 30, 0)},
 	}
 	if !slices.Equal(slots(got), want) {
 		t.Fatalf("got %v", slots(got))
@@ -171,7 +180,7 @@ func TestFillWindowClosingMidProgram(t *testing.T) {
 func TestFillSkipsUnplayableAndStopsWhenNothingPlays(t *testing.T) {
 	p := station.Plan{Timing: station.Continuous}
 	got := p.Fill([]station.Row{row(1, 0), row(2, 5)}, &station.Loop{}, nil, at(0, 10, 0, 0), at(0, 10, 12, 0))
-	if !slices.Equal(entries(got), []int64{2, 2, 2}) {
+	if !slices.Equal(entries(got), ns(2, 2, 2)) {
 		t.Errorf("a row without a runtime is skipped: %v", entries(got))
 	}
 	if got := p.Fill([]station.Row{row(1, 0)}, &station.Loop{}, nil, at(0, 10, 0, 0), at(1, 0, 0, 0)); len(got) != 0 {
@@ -193,7 +202,7 @@ func TestFillSequentialMissesContentPlacedBefore(t *testing.T) {
 	rows := []station.Row{row(9, 1), row(1, 1), row(2, 1), row(8, 1), row(3, 1)}
 	cur := &station.Cursor{Key: row(2, 1).Key, Loop: 4, Position: 1}
 	got := p.Fill(rows, &station.Loop{}, cur, at(0, 10, 0, 0), at(0, 10, 4, 0))
-	if !slices.Equal(entries(got), []int64{8, 3, 9, 1}) || got[0].Loop != 4 || got[2].Loop != 5 || got[2].Position != 0 {
+	if !slices.Equal(entries(got), ns(8, 3, 9, 1)) || got[0].Loop != 4 || got[2].Loop != 5 || got[2].Position != 0 {
 		t.Fatalf("got %v %+v", entries(got), got)
 	}
 }
@@ -202,7 +211,7 @@ func TestFillSequentialAfterTheCursorRowIsGone(t *testing.T) {
 	p := station.Plan{Timing: station.Continuous}
 	cur := &station.Cursor{Key: row(2, 1).Key, Position: 1}
 	got := p.Fill([]station.Row{row(1, 1), row(3, 1)}, &station.Loop{}, cur, at(0, 10, 0, 0), at(0, 10, 1, 0))
-	if !slices.Equal(entries(got), []int64{3}) {
+	if !slices.Equal(entries(got), ns(3)) {
 		t.Fatalf("the row that took its place plays next: %v", entries(got))
 	}
 }
@@ -214,7 +223,7 @@ func TestFillRandomKeepsEachLoop(t *testing.T) {
 	rows := []station.Row{row(1, 1), row(2, 1), row(3, 1)}
 	loop := &station.Loop{}
 	got := p.Fill(rows, loop, nil, at(0, 10, 0, 0), at(0, 10, 4, 0))
-	if !slices.Equal(entries(got), []int64{3, 2, 1, 3}) || got[0].Loop != 1 || got[3].Loop != 2 || got[3].Position != 0 {
+	if !slices.Equal(entries(got), ns(3, 2, 1, 3)) || got[0].Loop != 1 || got[3].Loop != 2 || got[3].Position != 0 {
 		t.Fatalf("got %v %+v", entries(got), got)
 	}
 	if loop.No != 2 || len(loop.Keys) != 3 || loop.Keys[0] != row(3, 1).Key {
@@ -228,7 +237,7 @@ func TestFillRandomAddsNewContentToTheEndOfTheLoop(t *testing.T) {
 	cur := &station.Cursor{Key: row(3, 1).Key, Loop: 7, Position: 0}
 	rows := []station.Row{row(1, 1), row(2, 1), row(3, 1), row(4, 1), row(5, 1)}
 	got := p.Fill(rows, loop, cur, at(0, 10, 0, 0), at(0, 10, 5, 0))
-	if !slices.Equal(entries(got), []int64{2, 1, 5, 4, 5}) || got[3].Loop != 7 || got[4].Loop != 8 {
+	if !slices.Equal(entries(got), ns(2, 1, 5, 4, 5)) || got[3].Loop != 7 || got[4].Loop != 8 {
 		t.Fatalf("got %v %+v", entries(got), got)
 	}
 }
@@ -238,14 +247,14 @@ func TestFillRandomSkipsWhatLeftAndResumesALaterLoop(t *testing.T) {
 	keys := []station.Key{row(3, 1).Key, row(2, 1).Key, row(1, 1).Key}
 	cur := &station.Cursor{Key: row(3, 1).Key, Loop: 1, Position: 0}
 	got := p.Fill([]station.Row{row(1, 1), row(3, 1)}, &station.Loop{No: 1, Keys: slices.Clone(keys)}, cur, at(0, 10, 0, 0), at(0, 10, 1, 0))
-	if !slices.Equal(entries(got), []int64{1}) {
+	if !slices.Equal(entries(got), ns(1)) {
 		t.Errorf("a row gone from the playlist is skipped: %v", entries(got))
 	}
 	// The loop stored is the one after the cursor's, written by programs
 	// since removed: it plays from its start.
 	got = p.Fill([]station.Row{row(1, 1), row(2, 1), row(3, 1)}, &station.Loop{No: 2, Keys: slices.Clone(keys)}, cur,
 		at(0, 10, 0, 0), at(0, 10, 1, 0))
-	if !slices.Equal(entries(got), []int64{3}) || got[0].Loop != 2 {
+	if !slices.Equal(entries(got), ns(3)) || got[0].Loop != 2 {
 		t.Errorf("got %v %+v", entries(got), got)
 	}
 }

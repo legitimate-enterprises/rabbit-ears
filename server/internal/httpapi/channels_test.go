@@ -18,11 +18,12 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/probe"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/station"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/transcode"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // tracks gives an item's file the tracks a probe would find, H.264 and
 // stereo AAC in MP4, so playback decides on it with no probe.
-func (e *env) tracks(itemID int64) {
+func (e *env) tracks(itemID uid.ID) {
 	e.t.Helper()
 	fs, err := e.svc.MediaFiles.Repo().FilesForItem(itemID)
 	must(e.t, err)
@@ -38,7 +39,7 @@ func (e *env) tracks(itemID int64) {
 // air is one program of a schedule written by hand: an item from start
 // for its file's length, both in seconds after the schedule's origin.
 type air struct {
-	item  int64
+	item  uid.ID
 	start float64
 }
 
@@ -50,7 +51,7 @@ func (e *env) lineup(programs ...air) (api.Station, time.Time) {
 	origin := time.Date(2026, 11, 13, 16, 0, 0, 0, time.Local)
 	var pl api.Playlist
 	e.expect(201, "POST", "/profiles/"+itoa(e.plain.account.ID)+"/playlists", e.plain.token, map[string]any{"name": "Nights", "kind": "movies"}, &pl)
-	added := map[int64]bool{}
+	added := map[uid.ID]bool{}
 	var ps []station.Program
 	for i, p := range programs {
 		if !added[p.item] {
@@ -73,7 +74,7 @@ func (e *env) lineup(programs ...air) (api.Station, time.Time) {
 	return st, origin
 }
 
-func (e *env) tune(st api.Station, token string, snap map[string]any, subtitle ...int64) api.StationPlayback {
+func (e *env) tune(st api.Station, token string, snap map[string]any, subtitle ...uid.ID) api.StationPlayback {
 	e.t.Helper()
 	body := map[string]any{"snapshot": snap, "live": true}
 	if len(subtitle) > 0 {
@@ -154,7 +155,7 @@ func TestTuneInLive(t *testing.T) {
 	e := newEnv(t)
 	at := e.stationClock()
 	lantern := e.film(e.library("movies"), "Lantern", "2001-01-01", "PG")
-	pl := e.nightsPlaylist(map[int64]int64{lantern: 90})
+	pl := e.nightsPlaylist(map[uid.ID]int64{lantern: 90})
 	var st api.Station
 	e.expect(201, "POST", "/stations", e.plain.token, map[string]any{"name": "Nights", "playlistId": pl}, &st)
 	tune := "/stations/" + itoa(st.Id) + "/playback"
@@ -542,7 +543,7 @@ func TestChannelProgramListsOnlyWhatItsEncoderWrites(t *testing.T) {
 	m := e.movie(e.library("movies"), "Sliver")
 	e.rate(m, "G")
 	now := time.Now().UTC()
-	f := &mediafile.File{ItemID: m, Path: src, SizeBytes: 1, ModifiedAt: now, Container: r.Container, DurationMs: r.DurationMs, Bitrate: r.Bitrate, ProbedAt: &now}
+	f := &mediafile.File{ItemID: &m, Path: src, SizeBytes: 1, FileModifiedAt: now, Container: r.Container, DurationMs: r.DurationMs, Bitrate: r.Bitrate, ProbedAt: &now}
 	must(t, e.svc.MediaFiles.Repo().CreateFile(f))
 	must(t, e.svc.MediaFiles.Repo().ReplaceTracks(f.ID, r.Tracks))
 	st, origin := e.lineup(air{m, 0})

@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setToken } from "../admin/api";
 import { boot } from "./app";
 import { at, calls, mockFetch, none, root, until } from "./testSupport";
+import { uid } from "../api/uid";
 
 vi.mock("hls.js", () => ({
   default: class {
@@ -13,7 +14,7 @@ vi.mock("hls.js", () => ({
 
 const ts = "2026-01-01T00:00:00Z";
 const acct = (id: number, name: string, kind = "adult") => ({
-  id,
+  id: uid(id),
   kind,
   name,
   isAdmin: false,
@@ -22,34 +23,35 @@ const acct = (id: number, name: string, kind = "adult") => ({
   pending: false,
   filterMode: "ratings",
   createdAt: ts,
-  updatedAt: ts,
+  modifiedAt: ts,
 });
 const me = (active: number) => ({
-  device: { id: 1 },
+  device: { id: uid(1) },
   account: acct(1, "Heidi"),
-  activeProfileId: active,
-  household: { id: 1, name: "Heidi", adultId: 1, createdAt: ts },
+  activeProfileId: uid(active),
+  household: { id: uid(1), name: "Heidi", adultId: uid(1), createdAt: ts },
   profiles: [acct(1, "Heidi"), acct(2, "Jax", "kid")],
 });
 const page = (items: unknown[]) => ({ items });
 const movie = (id: number) => ({
-  id,
-  libraryId: 1,
+  id: uid(id),
+  libraryId: uid(1),
   kind: "movie",
   parsedTitle: `M${id}`,
   addedAt: `2026-01-0${id}T00:00:00Z`,
-  updatedAt: ts,
+  createdAt: ts,
+  modifiedAt: ts,
 });
 const base = (active = 1) => ({
   "GET /health": { status: "ok", version: "1.0.0", setupRequired: false },
   "GET /me": me(active),
-  "GET /profiles/1/watch-state": page([]),
-  "GET /profiles/2/watch-state": page([]),
-  "GET /profiles/1/show-progress": page([]),
-  "GET /profiles/2/show-progress": page([]),
+  [`GET /profiles/${uid(1)}/watch-state`]: page([]),
+  [`GET /profiles/${uid(2)}/watch-state`]: page([]),
+  [`GET /profiles/${uid(1)}/show-progress`]: page([]),
+  [`GET /profiles/${uid(2)}/show-progress`]: page([]),
   "GET /genres": page([]),
   "GET /items": page([movie(3), movie(2), movie(1)]),
-  "PUT /profiles/1/watch-state/batch": none,
+  [`PUT /profiles/${uid(1)}/watch-state/batch`]: none,
   "PUT /items/kids-content/batch": none,
 });
 
@@ -66,11 +68,12 @@ beforeEach(async () => {
 
 const button = (r: HTMLElement, label: string) =>
   [...r.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === label);
-const tile = (r: HTMLElement, id: number) => r.querySelector<HTMLElement>(`[data-id="${id}"]`)!;
+const tile = (r: HTMLElement, id: number) =>
+  r.querySelector<HTMLElement>(`[data-id="${uid(id)}"]`)!;
 const click = (el: Element, init: MouseEventInit = {}) =>
   el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, ...init }));
 const picked = (r: HTMLElement) =>
-  [...r.querySelectorAll<HTMLElement>("[aria-selected=true]")].map((t) => Number(t.dataset.id));
+  [...r.querySelectorAll<HTMLElement>("[aria-selected=true]")].map((t) => t.dataset.id);
 
 async function movies(active = 1) {
   await at("#/movies");
@@ -90,13 +93,13 @@ describe("selection mode", () => {
     tile(r, 3).dispatchEvent(ev);
     expect(ev.defaultPrevented).toBe(true);
     click(tile(r, 1), { shiftKey: true });
-    expect(picked(r)).toEqual([3, 2, 1]);
+    expect(picked(r)).toEqual([uid(3), uid(2), uid(1)]);
     click(tile(r, 2));
     expect(r.querySelector(".selbar [role=status]")!.textContent).toBe("2 selected");
     button(r, "Mark watched")!.click();
-    await until(() => calls.find((c) => c.key === "PUT /profiles/1/watch-state/batch"));
-    expect(calls.find((c) => c.key === "PUT /profiles/1/watch-state/batch")!.body).toEqual({
-      itemIds: [3, 1],
+    await until(() => calls.find((c) => c.key === `PUT /profiles/${uid(1)}/watch-state/batch`));
+    expect(calls.find((c) => c.key === `PUT /profiles/${uid(1)}/watch-state/batch`)!.body).toEqual({
+      itemIds: [uid(3), uid(1)],
       watched: true,
     });
   });
@@ -105,11 +108,11 @@ describe("selection mode", () => {
     const r = await movies();
     button(r, "Select")!.click();
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "a", metaKey: true }));
-    expect(picked(r)).toEqual([3, 2, 1]);
+    expect(picked(r)).toEqual([uid(3), uid(2), uid(1)]);
     button(r, "Not kids' content")!.click();
     await until(() => calls.find((c) => c.key === "PUT /items/kids-content/batch"));
     expect(calls.find((c) => c.key === "PUT /items/kids-content/batch")!.body).toEqual({
-      itemIds: [3, 2, 1],
+      itemIds: [uid(3), uid(2), uid(1)],
       kidsContent: false,
     });
     await until(() => button(document.body, "Select"));
@@ -135,9 +138,9 @@ describe("selection mode", () => {
     await at("#/music");
     const r = root();
     const album = (id: number) => ({
-      id,
-      libraryId: 3,
-      artistId: 50,
+      id: uid(id),
+      libraryId: uid(3),
+      artistId: uid(50),
       artistName: "Radiohead",
       title: `A${id}`,
       songCount: 1,
@@ -150,10 +153,10 @@ describe("selection mode", () => {
       fetch: mockFetch({
         ...base(),
         "GET /music/albums": page([album(100), album(101)]),
-        "GET /profiles/1/playlists": page([
-          { id: 9, name: "Mix", kind: "music", itemCount: 0, durationMs: 0, createdAt: ts },
+        [`GET /profiles/${uid(1)}/playlists`]: page([
+          { id: uid(9), name: "Mix", kind: "music", itemCount: 0, durationMs: 0, createdAt: ts },
         ]),
-        "POST /profiles/1/playlists/9/entries/batch": none,
+        [`POST /profiles/${uid(1)}/playlists/${uid(9)}/entries/batch`]: none,
       }),
     });
     await until(() => tile(r, 101));
@@ -164,18 +167,21 @@ describe("selection mode", () => {
     button(r, "Add to playlist")!.click();
     await until(() => button(document.body, "Mix"));
     button(document.body, "Mix")!.click();
-    await until(() => calls.find((c) => c.key === "POST /profiles/1/playlists/9/entries/batch"));
-    expect(calls.find((c) => c.key === "POST /profiles/1/playlists/9/entries/batch")!.body).toEqual(
-      { entries: [{ itemId: 100 }, { itemId: 101 }] },
+    await until(() =>
+      calls.find((c) => c.key === `POST /profiles/${uid(1)}/playlists/${uid(9)}/entries/batch`),
     );
+    expect(
+      calls.find((c) => c.key === `POST /profiles/${uid(1)}/playlists/${uid(9)}/entries/batch`)!
+        .body,
+    ).toEqual({ entries: [{ itemId: uid(100) }, { itemId: uid(101) }] });
   });
 
   it("puts nothing from YouTube in a playlist", async () => {
     await at("#/youtube?view=channels");
     const r = root();
     const channel = (id: number) => ({
-      id,
-      libraryId: 5,
+      id: uid(id),
+      libraryId: uid(5),
       title: `C${id}`,
       videoCount: 1,
       unwatchedCount: 0,

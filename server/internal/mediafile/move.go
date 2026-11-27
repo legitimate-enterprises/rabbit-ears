@@ -7,16 +7,17 @@ import (
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/edition"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
-func ids(d db.DBTX, q string, args ...any) ([]int64, error) {
+func ids(d db.DBTX, q string, args ...any) ([]uid.ID, error) {
 	rows, err := d.Query(q, args...)
-	return db.Collect(rows, err, db.Column[int64])
+	return db.Collect(rows, err, db.Column[uid.ID])
 }
 
 // Outside counts the files of the titles under root, a show or channel,
 // that are recorded anywhere but under the folder dir.
-func (r *Repo) Outside(root int64, dir string) (int, error) {
+func (r *Repo) Outside(root uid.ID, dir string) (int, error) {
 	var n int
 	under := dir + "/"
 	err := r.d.QueryRow(`WITH RECURSIVE t(id) AS (SELECT ?1 UNION ALL SELECT i.id FROM item i JOIN t ON i.parent_id = t.id)
@@ -29,7 +30,7 @@ func (r *Repo) Outside(root int64, dir string) (int, error) {
 // it proved to be a second record of, in one transaction, and deletes
 // from. A season or an episode both have is folded into into's, so what
 // was played or listed under either stays; the rest keeps its record.
-func (r *Repo) Absorb(into, from int64) error {
+func (r *Repo) Absorb(into, from uid.ID) error {
 	return db.InTx(r.d, func(d db.DBTX) error {
 		if err := absorb(d, into, from, `season_number`); err != nil {
 			return err
@@ -41,18 +42,18 @@ func (r *Repo) Absorb(into, from int64) error {
 // absorb re-parents from's children under into. A child whose number (a
 // season's, then an episode's) one of into's has gives it its own
 // children, or is folded into it when it has none to give.
-func absorb(d db.DBTX, into, from int64, number string) error {
+func absorb(d db.DBTX, into, from uid.ID, number string) error {
 	kids, err := ids(d, `SELECT id FROM item WHERE parent_id = ? ORDER BY id`, from)
 	if err != nil {
 		return err
 	}
 	for _, kid := range kids {
-		var twin int64
+		var twin uid.ID
 		err := d.QueryRow(`SELECT t.id FROM item k JOIN item t ON t.parent_id = ?1 AND t.kind = k.kind AND t.`+number+` = k.`+number+`
 			WHERE k.id = ?2 AND k.kind IN ('season','episode')`, into, kid).Scan(&twin)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
-			_, err = d.Exec(`UPDATE item SET parent_id = ? WHERE id = ?`, into, kid)
+			_, err = d.Exec(`UPDATE item SET parent_id = ?, modified_at = ? WHERE id = ?`, into, db.Ms(now()), kid)
 		case err != nil:
 		case number == `season_number`:
 			if err = absorb(d, twin, kid, `episode_number`); err == nil {
@@ -79,12 +80,13 @@ func absorb(d db.DBTX, into, from int64, number string) error {
 // stands where the record stood. Move returns the titles that may be left
 // empty by that (a title not folded, and the parents and performers of
 // those folded) for the caller to prune. Moving f where it is does nothing.
-func (r *Repo) Move(f *File, path string, reread bool) (prune []int64, err error) {
+func (r *Repo) Move(f *File, path string, reread bool) (prune []uid.ID, err error) {
 	if f.Path == path {
 		return nil, nil
 	}
+	t := now()
 	err = db.InTx(r.d, func(d db.DBTX) error {
-		var dup int64
+		var dup uid.ID
 		switch err := d.QueryRow(`SELECT id FROM media_file WHERE path = ?`, path).Scan(&dup); {
 		case errors.Is(err, sql.ErrNoRows):
 		case err != nil:
@@ -125,17 +127,17 @@ func (r *Repo) Move(f *File, path string, reread bool) (prune []int64, err error
 				return err
 			}
 		}
-		if _, err := d.Exec(`UPDATE item SET path = ?1 WHERE path = ?2 AND kind IN ('song','video')
-			AND id IN (SELECT item_id FROM item_file WHERE media_file_id = ?3)`, path, f.Path, f.ID); err != nil {
+		if _, err := d.Exec(`UPDATE item SET path = ?1, modified_at = ?4 WHERE path = ?2 AND kind IN ('song','video')
+			AND id IN (SELECT item_id FROM item_file WHERE media_file_id = ?3)`, path, f.Path, f.ID, db.Ms(t)); err != nil {
 			return db.Wrap(err)
 		}
-		return db.ExecOne(d, `UPDATE media_file SET path = ?1, missing_at = NULL, probed_at = CASE WHEN ?2 THEN NULL ELSE probed_at END
-			WHERE id = ?3`, path, reread, f.ID)
+		return db.ExecOne(d, `UPDATE media_file SET path = ?1, missing_at = NULL, probed_at = CASE WHEN ?2 THEN NULL ELSE probed_at END,
+			modified_at = ?4 WHERE id = ?3`, path, reread, f.ID, db.Ms(t))
 	})
 	if err != nil {
 		return nil, err
 	}
-	f.Path, f.MissingAt = path, nil
+	f.Path, f.MissingAt, f.ModifiedAt = path, nil, t
 	if reread {
 		f.ProbedAt = nil
 	}

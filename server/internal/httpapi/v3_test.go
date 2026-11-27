@@ -5,6 +5,7 @@ import (
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/api"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 func TestV3GuardRejectsBadInput(t *testing.T) {
@@ -13,7 +14,7 @@ func TestV3GuardRejectsBadInput(t *testing.T) {
 	e.expect(400, "GET", "/music/letters", e.plain.token, nil, nil)
 	e.expect(400, "GET", "/music/search", e.plain.token, nil, nil)
 	e.expect(400, "POST", "/profiles/"+itoa(e.plain.account.ID)+"/playlists", e.plain.token, map[string]any{"name": "X", "kind": "song"}, nil)
-	e.expect(400, "PUT", "/watch-together/1/state", e.plain.token, map[string]any{"playing": true, "positionMs": -1}, nil)
+	e.expect(400, "PUT", "/watch-together/"+itoa(uid.N(1))+"/state", e.plain.token, map[string]any{"playing": true, "positionMs": -1}, nil)
 	e.expect(400, "GET", "/items?resolution=hd", e.plain.token, nil, nil)
 }
 

@@ -7,7 +7,6 @@ import (
 	"io"
 	"mime"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/api"
@@ -15,6 +14,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/playlist"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/service"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // Custom images: the owner of a playlist or a station sets one by
@@ -28,27 +28,27 @@ func coverURL(base string, c *cover.Cover) *string {
 	if c == nil {
 		return nil
 	}
-	u := BasePath + base + "/image?v=" + strconv.FormatInt(c.ID, 10)
+	u := BasePath + base + "/image?v=" + c.ID.String()
 	return &u
 }
 
 // setCover keeps what the request gives as o's cover, a title being one of
 // playlistID's entries.
-func (s *Server) setCover(ctx context.Context, o cover.Owner, playlistID int64, body io.Reader, in *api.CustomImageInput) error {
+func (s *Server) setCover(ctx context.Context, o cover.Owner, playlistID uid.ID, body io.Reader, in *api.CustomImageInput) error {
 	switch {
 	case body != nil:
 		b, err := io.ReadAll(body)
 		if err != nil {
 			return err
 		}
-		_, err = s.svc.Covers.Upload(o, b)
+		_, err = s.svc.Covers.Upload(o, b, actor(ctx))
 		return coverError(err, "body")
 	case in == nil:
 		return invalid("body", "send the image as application/octet-stream, or a CustomImageInput as JSON")
 	case (in.ItemId == nil) == (in.Url == nil):
 		return invalid("itemId", "name exactly one of itemId and url")
 	case in.Url != nil:
-		_, err := s.svc.Covers.Link(ctx, o, *in.Url)
+		_, err := s.svc.Covers.Link(ctx, o, *in.Url, actor(ctx))
 		return coverError(err, "url")
 	}
 	it, err := s.seen(ctx, *in.ItemId)
@@ -63,7 +63,7 @@ func (s *Server) setCover(ctx context.Context, o cover.Owner, playlistID int64, 
 	} else if err != nil {
 		return err
 	}
-	_, err = s.svc.Covers.Pick(o, playlistID, it.ID, backdrop)
+	_, err = s.svc.Covers.Pick(o, playlistID, it.ID, backdrop, actor(ctx))
 	return coverError(err, "itemId")
 }
 
@@ -83,8 +83,8 @@ func (s *Server) serveCover(ctx context.Context, c *cover.Cover, ifNoneMatch *st
 	if c == nil {
 		return api.CustomImageImageResponse{}, errNotFound
 	}
-	if c.ItemID != 0 {
-		it, err := s.svc.Items.Repo().Get(c.ItemID)
+	if c.ItemID != nil {
+		it, err := s.svc.Items.Repo().Get(*c.ItemID)
 		if err != nil {
 			return api.CustomImageImageResponse{}, err
 		}
@@ -102,7 +102,7 @@ func (s *Server) serveCover(ctx context.Context, c *cover.Cover, ifNoneMatch *st
 		}
 		return out, err
 	}
-	tag := `"cover/` + strconv.FormatInt(c.ID, 10) + `"`
+	tag := `"cover/` + c.ID.String() + `"`
 	out := api.CustomImageImageResponse{ContentType: "image/jpeg", Headers: api.CustomImageResponseHeaders{CacheControl: artworkCache, ETag: tag}}
 	if ifNoneMatch != nil && strings.Contains(*ifNoneMatch, tag) {
 		return out, nil
@@ -117,10 +117,10 @@ func current(f api.CustomImageImageResponse) api.CustomImageCurrentResponse {
 	return api.CustomImageCurrentResponse{Headers: api.CustomImageCurrentResponseHeaders(f.Headers)}
 }
 
-func playlistCover(p *playlist.Playlist) cover.Owner { return cover.Owner{PlaylistID: p.ID} }
+func playlistCover(p *playlist.Playlist) cover.Owner { return cover.Owner{PlaylistID: &p.ID} }
 
-func playlistBase(profileID int64, p *playlist.Playlist) string {
-	return "/profiles/" + strconv.FormatInt(profileID, 10) + "/playlists/" + strconv.FormatInt(p.ID, 10)
+func playlistBase(profileID uid.ID, p *playlist.Playlist) string {
+	return "/profiles/" + profileID.String() + "/playlists/" + p.ID.String()
 }
 
 // GetPlaylistImage serves the playlist's custom image to whoever it is
@@ -169,7 +169,7 @@ func (s *Server) GetStationImage(ctx context.Context, r api.GetStationImageReque
 	if err != nil {
 		return nil, err
 	}
-	c, err := s.svc.Covers.Shown(cover.Owner{StationID: st.ID}, st.PlaylistID, browse(ctx))
+	c, err := s.svc.Covers.Shown(cover.Owner{StationID: &st.ID}, st.PlaylistID, browse(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -186,7 +186,7 @@ func (s *Server) ReplaceStationImage(ctx context.Context, r api.ReplaceStationIm
 	if err != nil {
 		return nil, err
 	}
-	if err := s.setCover(ctx, cover.Owner{StationID: st.ID}, st.PlaylistID, r.Body, r.JSONBody); err != nil {
+	if err := s.setCover(ctx, cover.Owner{StationID: &st.ID}, st.PlaylistID, r.Body, r.JSONBody); err != nil {
 		return nil, err
 	}
 	s.svc.Stations.Announce(st)
@@ -200,7 +200,7 @@ func (s *Server) DeleteStationImage(ctx context.Context, r api.DeleteStationImag
 	if err != nil {
 		return nil, err
 	}
-	if err := s.svc.Covers.Repo().Delete(cover.Owner{StationID: st.ID}); err != nil {
+	if err := s.svc.Covers.Repo().Delete(cover.Owner{StationID: &st.ID}); err != nil {
 		return nil, err
 	}
 	s.svc.Stations.Announce(st)

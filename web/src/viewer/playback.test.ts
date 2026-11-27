@@ -2,9 +2,10 @@ import { describe, expect, it } from "vitest";
 import { createApi } from "../admin/api";
 import { mbps, Playback, resolutionLabel, srtToVtt } from "./playback";
 import type { Snapshot } from "./capabilities";
+import { uid } from "../api/uid";
 
 const stream = (over = {}) => ({
-  sessionId: 7,
+  sessionId: uid(7),
   entry: {
     position: 0,
     verdict: "direct_play",
@@ -13,7 +14,7 @@ const stream = (over = {}) => ({
     subtitleAction: "none",
     bad: false,
   },
-  streamUrl: "/api/v1/streams/k/0/file",
+  streamUrl: "/api/v2/streams/k/0/file",
   streamKind: "file",
   positionMs: 90_000,
   negotiated: { verdict: "direct_play", width: 1920, height: 1080, bitrate: 8_000_000 },
@@ -27,7 +28,7 @@ function setup(answers: Record<string, () => Response>) {
   const calls: { key: string; body: unknown }[] = [];
   const api = createApi({
     fetch: async (req) => {
-      const key = `${req.method} ${new URL(req.url, "http://x").pathname.replace("/api/v1", "")}`;
+      const key = `${req.method} ${new URL(req.url, "http://x").pathname.replace("/api/v2", "")}`;
       calls.push({
         key,
         body: req.method === "GET" || req.method === "DELETE" ? undefined : await req.json(),
@@ -38,7 +39,10 @@ function setup(answers: Record<string, () => Response>) {
       );
     },
   });
-  return { calls, pb: new Playback(api, { profileId: 2, itemId: 5, snapshot: async () => snap }) };
+  return {
+    calls,
+    pb: new Playback(api, { profileId: uid(2), itemId: uid(5), snapshot: async () => snap }),
+  };
 }
 const json =
   (b: unknown, status = 200) =>
@@ -50,14 +54,14 @@ describe("Playback", () => {
     const { pb, calls } = setup({ "POST /playback/sessions": json(stream(), 201) });
     const s = await pb.start();
     expect(s.positionMs).toBe(90_000);
-    expect(calls[0].body).toEqual({ profileId: 2, itemId: 5, snapshot: snap });
+    expect(calls[0].body).toEqual({ profileId: uid(2), itemId: uid(5), snapshot: snap });
   });
 
   it("reports the position before a group change and sends only that group", async () => {
     const { pb, calls } = setup({
       "POST /playback/sessions": json(stream(), 201),
-      "PUT /playback/sessions/7/position": () => new Response(null, { status: 204 }),
-      "PUT /playback/sessions/7/display": json({
+      [`PUT /playback/sessions/${uid(7)}/position`]: () => new Response(null, { status: 204 }),
+      [`PUT /playback/sessions/${uid(7)}/display`]: json({
         action: "restart",
         stream: stream({ positionMs: 61_000, streamKind: "hls" }),
       }),
@@ -68,8 +72,8 @@ describe("Playback", () => {
       61_234.6,
     );
     expect(calls.slice(1).map((c) => c.key)).toEqual([
-      "PUT /playback/sessions/7/position",
-      "PUT /playback/sessions/7/display",
+      `PUT /playback/sessions/${uid(7)}/position`,
+      `PUT /playback/sessions/${uid(7)}/display`,
     ]);
     expect(calls[1].body).toEqual({ positionMs: 61_235, paused: false });
     expect(u?.action).toBe("restart");
@@ -79,8 +83,8 @@ describe("Playback", () => {
   it("remembers the pick for later snapshots, Auto until the viewer chooses", async () => {
     const { pb } = setup({
       "POST /playback/sessions": json(stream(), 201),
-      "PUT /playback/sessions/7/position": () => new Response(null, { status: 204 }),
-      "PUT /playback/sessions/7/network": json({ action: "restart", stream: stream() }),
+      [`PUT /playback/sessions/${uid(7)}/position`]: () => new Response(null, { status: 204 }),
+      [`PUT /playback/sessions/${uid(7)}/network`]: json({ action: "restart", stream: stream() }),
     });
     await pb.start();
     expect(pb.choice).toEqual({ auto: true });
@@ -96,21 +100,21 @@ describe("Playback", () => {
   it("takes the stream the slow loop restarts on a throughput report", async () => {
     const { pb } = setup({
       "POST /playback/sessions": json(stream(), 201),
-      "PUT /playback/sessions/7/throughput": json({
+      [`PUT /playback/sessions/${uid(7)}/throughput`]: json({
         action: "restart",
-        stream: stream({ streamUrl: "/api/v1/streams/k2/0/master.m3u8", positionMs: 30_000 }),
+        stream: stream({ streamUrl: "/api/v2/streams/k2/0/master.m3u8", positionMs: 30_000 }),
       }),
     });
     await pb.start();
     const u = await pb.throughput({ measuredBitrate: 1, bufferMs: 0, stallCount: 3 });
     expect(u.action).toBe("restart");
-    expect(pb.stream.streamUrl).toBe("/api/v1/streams/k2/0/master.m3u8");
+    expect(pb.stream.streamUrl).toBe("/api/v2/streams/k2/0/master.m3u8");
   });
 
   it("moves down the plan on a client failure and gives up on 409", async () => {
     const down = setup({
       "POST /playback/sessions": json(stream(), 201),
-      "POST /playback/sessions/7/events": json({
+      [`POST /playback/sessions/${uid(7)}/events`]: json({
         action: "restart",
         stream: stream({ streamKind: "hls" }),
       }),
@@ -125,7 +129,10 @@ describe("Playback", () => {
 
     const none = setup({
       "POST /playback/sessions": json(stream(), 201),
-      "POST /playback/sessions/7/events": json({ code: "conflict", message: "no entry left" }, 409),
+      [`POST /playback/sessions/${uid(7)}/events`]: json(
+        { code: "conflict", message: "no entry left" },
+        409,
+      ),
     });
     await none.pb.start();
     expect(await none.pb.failed(0, "x")).toBeUndefined();
@@ -135,19 +142,30 @@ describe("Playback", () => {
     let n = 0;
     const { pb, calls } = setup({
       "POST /playback/sessions": () =>
-        json(stream({ sessionId: ++n === 1 ? 7 : 8, positionMs: n === 1 ? 0 : 42_000 }), 201)(),
-      "PUT /playback/sessions/8/position": () => new Response(null, { status: 204 }),
+        json(
+          stream({ sessionId: ++n === 1 ? uid(7) : uid(8), positionMs: n === 1 ? 0 : 42_000 }),
+          201,
+        )(),
+      [`PUT /playback/sessions/${uid(8)}/position`]: () => new Response(null, { status: 204 }),
     });
     await pb.start();
     const u = await pb.failed(42_000.4, "404");
-    expect(u).toMatchObject({ action: "restart", stream: { sessionId: 8, positionMs: 42_000 } });
+    expect(u).toMatchObject({
+      action: "restart",
+      stream: { sessionId: uid(8), positionMs: 42_000 },
+    });
     expect(calls.map((c) => c.key)).toEqual([
       "POST /playback/sessions",
-      "POST /playback/sessions/7/events",
-      "GET /playback/sessions/7",
+      `POST /playback/sessions/${uid(7)}/events`,
+      `GET /playback/sessions/${uid(7)}`,
       "POST /playback/sessions",
     ]);
-    expect(calls[3].body).toEqual({ profileId: 2, itemId: 5, positionMs: 42_000, snapshot: snap });
+    expect(calls[3].body).toEqual({
+      profileId: uid(2),
+      itemId: uid(5),
+      positionMs: 42_000,
+      snapshot: snap,
+    });
     await expect(pb.failed(42_000, "404")).rejects.toMatchObject({ status: 404 });
     expect(n).toBe(2);
     await pb.position(43_000);
@@ -157,23 +175,24 @@ describe("Playback", () => {
   it("starts a session the server ended again with the tracks the viewer picked", async () => {
     let n = 0;
     const { pb, calls } = setup({
-      "POST /playback/sessions": () => json(stream({ sessionId: ++n === 1 ? 7 : 8 }), 201)(),
-      "PUT /playback/sessions/7/position": () => new Response(null, { status: 204 }),
-      "PUT /playback/sessions/7/tracks": json({ action: "continue", stream: stream() }),
+      "POST /playback/sessions": () =>
+        json(stream({ sessionId: ++n === 1 ? uid(7) : uid(8) }), 201)(),
+      [`PUT /playback/sessions/${uid(7)}/position`]: () => new Response(null, { status: 204 }),
+      [`PUT /playback/sessions/${uid(7)}/tracks`]: json({ action: "continue", stream: stream() }),
     });
     await pb.start();
-    await pb.tracks({ audioTrackId: 3, subtitleTrackId: 9 }, 1000);
+    await pb.tracks({ audioTrackId: uid(3), subtitleTrackId: uid(9) }, 1000);
     await pb.failed(42_000, "404");
     expect(calls.filter((c) => c.key === "POST /playback/sessions")[1].body).toMatchObject({
-      audioTrackId: 3,
-      subtitleTrackId: 9,
+      audioTrackId: uid(3),
+      subtitleTrackId: uid(9),
     });
   });
 
   it("does not start again a session another device took with Move here", async () => {
     const { pb, calls } = setup({
       "POST /playback/sessions": json(stream(), 201),
-      "GET /playback/sessions/7": json({ id: 7, movedToDeviceName: "Kitchen iPad" }),
+      [`GET /playback/sessions/${uid(7)}`]: json({ id: uid(7), movedToDeviceName: "Kitchen iPad" }),
     });
     await pb.start();
     await expect(pb.failed(42_000, "404")).rejects.toThrow("Moved to Kitchen iPad");
@@ -190,7 +209,7 @@ describe("Playback", () => {
     await expect(pb.failed(42_000, "404")).rejects.toThrow("Another tab started playing.");
     expect(calls.map((c) => c.key)).toEqual([
       "POST /playback/sessions",
-      "POST /playback/sessions/7/events",
+      `POST /playback/sessions/${uid(7)}/events`,
     ]);
   });
 });

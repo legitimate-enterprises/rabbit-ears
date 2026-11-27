@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // Account kinds.
@@ -36,12 +37,12 @@ func ValidColor(c string) bool { return slices.Contains(Palette, c) }
 // those; reachable only through an adult's device). A pending adult has no
 // password hash and no household yet.
 type Account struct {
-	ID             int64
+	ID             uid.ID
 	Kind           string
 	Email          string
 	Name           string
 	IsAdmin        bool
-	HouseholdID    *int64
+	HouseholdID    *uid.ID
 	PasswordHash   string
 	Birthday       *time.Time // a calendar date at UTC midnight
 	PINHash        string
@@ -57,7 +58,9 @@ type Account struct {
 	NoAutoplay bool
 	RevokedAt  *time.Time
 	CreatedAt  time.Time
-	UpdatedAt  time.Time
+	ModifiedAt time.Time
+	CreatedBy  *uid.ID
+	ModifiedBy *uid.ID
 }
 
 // Pending reports an adult who has not yet accepted their join link.
@@ -68,7 +71,7 @@ func (a *Account) ShownColor() string {
 	if a.Color != "" {
 		return a.Color
 	}
-	return Palette[a.ID%int64(len(Palette))]
+	return Palette[int(a.ID[len(a.ID)-1])%len(Palette)]
 }
 
 // Repo persists accounts and allow lists.
@@ -78,37 +81,31 @@ type Repo struct{ d db.DBTX }
 func New(d db.DBTX) *Repo { return &Repo{d} }
 
 const cols = `id, kind, email, name, is_admin, household_id, password_hash, birthday, pin_hash, pin_failures, pin_locked_until,
-	filter_mode, movie_ceiling, tv_ceiling, color, hide_kids_content, no_autoplay, revoked_at, created_at, updated_at`
+	filter_mode, movie_ceiling, tv_ceiling, color, hide_kids_content, no_autoplay, revoked_at, created_at, modified_at, created_by, modified_by`
 
 func scan(s db.Scanner) (*Account, error) {
 	var a Account
 	var email, pw, bday, pin, movie, tv, color sql.NullString
-	var hh, locked, revoked sql.NullInt64
-	var created, updated int64
-	if err := s.Scan(&a.ID, &a.Kind, &email, &a.Name, &a.IsAdmin, &hh, &pw, &bday, &pin, &a.PINFailures, &locked,
-		&a.FilterMode, &movie, &tv, &color, &a.HideKidsContent, &a.NoAutoplay, &revoked, &created, &updated); err != nil {
+	var locked, revoked sql.NullInt64
+	var created, modified int64
+	if err := s.Scan(&a.ID, &a.Kind, &email, &a.Name, &a.IsAdmin, &a.HouseholdID, &pw, &bday, &pin, &a.PINFailures, &locked,
+		&a.FilterMode, &movie, &tv, &color, &a.HideKidsContent, &a.NoAutoplay, &revoked, &created, &modified, &a.CreatedBy, &a.ModifiedBy); err != nil {
 		return nil, db.Wrap(err)
 	}
 	a.Email, a.PasswordHash, a.PINHash, a.MovieCeiling, a.TVCeiling = email.String, pw.String, pin.String, movie.String, tv.String
 	a.Color = color.String
-	if hh.Valid {
-		a.HouseholdID = &hh.Int64
-	}
 	if bday.Valid {
 		if t, err := time.Parse(dateLayout, bday.String); err == nil {
 			a.Birthday = &t
 		}
 	}
 	a.PINLockedUntil, a.RevokedAt = db.FromNullMs(locked), db.FromNullMs(revoked)
-	a.CreatedAt, a.UpdatedAt = db.FromMs(created), db.FromMs(updated)
+	a.CreatedAt, a.ModifiedAt = db.FromMs(created), db.FromMs(modified)
 	return &a, nil
 }
 
 func (a *Account) args() []any {
-	var hh, bday any
-	if a.HouseholdID != nil {
-		hh = *a.HouseholdID
-	}
+	var bday any
 	if a.Birthday != nil {
 		bday = a.Birthday.Format(dateLayout)
 	}
@@ -116,16 +113,20 @@ func (a *Account) args() []any {
 	if mode == "" {
 		mode = FilterRatings
 	}
-	return []any{a.Kind, db.NullStr(strings.TrimSpace(a.Email)), a.Name, a.IsAdmin, hh, db.NullStr(a.PasswordHash), bday,
+	return []any{a.Kind, db.NullStr(strings.TrimSpace(a.Email)), a.Name, a.IsAdmin, a.HouseholdID, db.NullStr(a.PasswordHash), bday,
 		db.NullStr(a.PINHash), a.PINFailures, db.NullMs(a.PINLockedUntil), mode, db.NullStr(a.MovieCeiling), db.NullStr(a.TVCeiling),
 		db.NullStr(a.Color), a.HideKidsContent, a.NoAutoplay, db.NullMs(a.RevokedAt)}
 }
 
-// Create inserts a and fills ID and timestamps. Emails are unique ignoring
-// case. Without a color it stores the one leastUsedColor picks.
-func (r *Repo) Create(a *Account) error {
-	now := time.Now().UTC()
-	a.CreatedAt, a.UpdatedAt = now, now
+// Create inserts a, minting its ID unless set, and fills the audit fields.
+// Emails are unique ignoring case. Without a color it stores the one
+// leastUsedColor picks.
+func (r *Repo) Create(a *Account, by *uid.ID) error {
+	if a.ID.IsZero() {
+		a.ID = uid.New()
+	}
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	a.CreatedAt, a.ModifiedAt, a.CreatedBy, a.ModifiedBy = now, now, by, by
 	if a.FilterMode == "" {
 		a.FilterMode = FilterRatings
 	}
@@ -136,19 +137,16 @@ func (r *Repo) Create(a *Account) error {
 		}
 		a.Color = c
 	}
-	res, err := r.d.Exec(`INSERT INTO account (kind, email, name, is_admin, household_id, password_hash, birthday, pin_hash, pin_failures,
-		pin_locked_until, filter_mode, movie_ceiling, tv_ceiling, color, hide_kids_content, no_autoplay, revoked_at, created_at, updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		append(a.args(), db.Ms(now), db.Ms(now))...)
-	if err != nil {
-		return db.Wrap(err)
-	}
-	a.ID, _ = res.LastInsertId()
-	return nil
+	_, err := r.d.Exec(`INSERT INTO account (kind, email, name, is_admin, household_id, password_hash, birthday, pin_hash, pin_failures,
+		pin_locked_until, filter_mode, movie_ceiling, tv_ceiling, color, hide_kids_content, no_autoplay, revoked_at,
+		created_at, modified_at, created_by, modified_by, id)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		append(a.args(), db.Ms(now), db.Ms(now), by, by, a.ID)...)
+	return db.Wrap(err)
 }
 
 // Get returns one account or db.ErrNotFound.
-func (r *Repo) Get(id int64) (*Account, error) {
+func (r *Repo) Get(id uid.ID) (*Account, error) {
 	return scan(r.d.QueryRow(`SELECT `+cols+` FROM account WHERE id = ?`, id))
 }
 
@@ -158,17 +156,19 @@ func (r *Repo) ByEmail(email string) (*Account, error) {
 }
 
 // Update writes every mutable field of a.
-func (r *Repo) Update(a *Account) error {
-	a.UpdatedAt = time.Now().UTC()
+func (r *Repo) Update(a *Account, by *uid.ID) error {
+	a.ModifiedAt, a.ModifiedBy = time.Now().UTC().Truncate(time.Millisecond), by
 	return db.ExecOne(r.d, `UPDATE account SET kind=?, email=?, name=?, is_admin=?, household_id=?, password_hash=?, birthday=?, pin_hash=?,
 		pin_failures=?, pin_locked_until=?, filter_mode=?, movie_ceiling=?, tv_ceiling=?, color=?, hide_kids_content=?, no_autoplay=?, revoked_at=?,
-		updated_at=? WHERE id=?`,
-		append(a.args(), db.Ms(a.UpdatedAt), a.ID)...)
+		modified_at=?, modified_by=? WHERE id=?`,
+		append(a.args(), db.Ms(a.ModifiedAt), by, a.ID)...)
 }
 
 // Delete removes an account; its household (if it owns one), kids, devices,
 // join codes, sessions and watch state cascade.
-func (r *Repo) Delete(id int64) error { return db.ExecOne(r.d, `DELETE FROM account WHERE id = ?`, id) }
+func (r *Repo) Delete(id uid.ID) error {
+	return db.ExecOne(r.d, `DELETE FROM account WHERE id = ?`, id)
+}
 
 func (r *Repo) query(q string, args ...any) ([]*Account, error) {
 	rows, err := r.d.Query(q, args...)
@@ -184,31 +184,35 @@ func (r *Repo) List(kind string, limit, offset int) ([]*Account, error) {
 }
 
 // Households lists the households a is in: its own first, then those it was
-// shared into.
-func (r *Repo) Households(a *Account) ([]int64, error) {
-	rows, err := r.d.Query(`SELECT household_id FROM membership WHERE account_id = ?1
-		ORDER BY household_id <> COALESCE(?2, 0), household_id`, a.ID, a.HouseholdID)
-	return db.Collect(rows, err, db.Column[int64])
+// shared into, oldest first.
+func (r *Repo) Households(a *Account) ([]uid.ID, error) {
+	rows, err := r.d.Query(`SELECT m.household_id FROM membership m JOIN household h ON h.id = m.household_id WHERE m.account_id = ?1
+		ORDER BY m.household_id IS NOT ?2, h.created_at, m.household_id`, a.ID, a.HouseholdID)
+	return db.Collect(rows, err, db.Column[uid.ID])
 }
 
 // Label is the household a profile is shown with to another.
 type Label struct {
-	HouseholdID   int64
+	HouseholdID   uid.ID
 	HouseholdName string
 }
 
 // Labels maps each of ids to the household viewer sees it labeled with: the
 // first of viewer's Households it is in, else its own. A profile with
 // neither is left out.
-func (r *Repo) Labels(viewer *Account, ids []int64) (map[int64]Label, error) {
-	list, _ := json.Marshal(ids)
-	rows, err := r.d.Query(`SELECT a.id, h.id, h.name FROM json_each(?2) j JOIN account a ON a.id = j.value
+func (r *Repo) Labels(viewer *Account, ids []uid.ID) (map[uid.ID]Label, error) {
+	list, err := json.Marshal(ids)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := r.d.Query(`SELECT a.id, h.id, h.name FROM json_each(?2) j JOIN account a ON a.id = unhex(j.value, '-')
 		JOIN household h ON h.id = COALESCE((SELECT m.household_id FROM membership m
 			JOIN membership mine ON mine.household_id = m.household_id AND mine.account_id = ?1
-			WHERE m.account_id = a.id ORDER BY m.household_id <> COALESCE(?3, 0), m.household_id LIMIT 1), a.household_id)`,
+			JOIN household mh ON mh.id = m.household_id
+			WHERE m.account_id = a.id ORDER BY m.household_id IS NOT ?3, mh.created_at, m.household_id LIMIT 1), a.household_id)`,
 		viewer.ID, string(list), viewer.HouseholdID)
 	type row struct {
-		id int64
+		id uid.ID
 		Label
 	}
 	got, err := db.Collect(rows, err, func(s db.Scanner) (row, error) {
@@ -216,7 +220,7 @@ func (r *Repo) Labels(viewer *Account, ids []int64) (map[int64]Label, error) {
 		err := s.Scan(&v.id, &v.HouseholdID, &v.HouseholdName)
 		return v, db.Wrap(err)
 	})
-	out := make(map[int64]Label, len(got))
+	out := make(map[uid.ID]Label, len(got))
 	for _, v := range got {
 		out[v.id] = v.Label
 	}
@@ -250,14 +254,14 @@ func (r *Repo) People(a *Account, tv bool, limit, offset int) ([]*Account, error
 }
 
 // Sees reports whether id is one of a's People.
-func (r *Repo) Sees(a *Account, id int64, tv bool) (bool, error) {
+func (r *Repo) Sees(a *Account, id uid.ID, tv bool) (bool, error) {
 	var n int
 	err := r.d.QueryRow(`SELECT COUNT(*)`+seen+` AND id = ?3`, a.ID, tv, id).Scan(&n)
 	return n > 0, db.Wrap(err)
 }
 
 // In reports whether a profile is in a household.
-func (r *Repo) In(id, householdID int64) (bool, error) {
+func (r *Repo) In(id, householdID uid.ID) (bool, error) {
 	var n int
 	err := r.d.QueryRow(`SELECT COUNT(*) FROM membership WHERE account_id = ? AND household_id = ?`, id, householdID).Scan(&n)
 	return n > 0, db.Wrap(err)
@@ -265,7 +269,7 @@ func (r *Repo) In(id, householdID int64) (bool, error) {
 
 // AddMember puts a profile into a household besides the one
 // account.household_id names.
-func (r *Repo) AddMember(householdID, id int64) error {
+func (r *Repo) AddMember(householdID, id uid.ID) error {
 	_, err := r.d.Exec(`INSERT INTO household_member (household_id, account_id, created_at) VALUES (?,?,?)`,
 		householdID, id, db.Ms(time.Now().UTC()))
 	return db.Wrap(err)
@@ -273,39 +277,40 @@ func (r *Repo) AddMember(householdID, id int64) error {
 
 // RemoveMember takes a profile out of a household other than the one
 // account.household_id names.
-func (r *Repo) RemoveMember(householdID, id int64) error {
+func (r *Repo) RemoveMember(householdID, id uid.ID) error {
 	return db.ExecOne(r.d, `DELETE FROM household_member WHERE household_id = ? AND account_id = ?`, householdID, id)
 }
 
 // RemoveMemberships takes a profile out of every household but the one
 // account.household_id names.
-func (r *Repo) RemoveMemberships(id int64) error {
+func (r *Repo) RemoveMemberships(id uid.ID) error {
 	_, err := r.d.Exec(`DELETE FROM household_member WHERE account_id = ?`, id)
 	return db.Wrap(err)
 }
 
 // Rehome makes householdID, another household a is in, or none, the one
 // account.household_id names.
-func (r *Repo) Rehome(a *Account, householdID *int64) error {
+func (r *Repo) Rehome(a *Account, householdID *uid.ID, by *uid.ID) error {
 	if householdID != nil {
 		if err := r.RemoveMember(*householdID, a.ID); err != nil {
 			return err
 		}
 	}
-	a.HouseholdID = householdID
-	return db.ExecOne(r.d, `UPDATE account SET household_id = ? WHERE id = ?`, householdID, a.ID)
+	a.HouseholdID, a.ModifiedAt, a.ModifiedBy = householdID, time.Now().UTC().Truncate(time.Millisecond), by
+	return db.ExecOne(r.d, `UPDATE account SET household_id = ?, modified_at = ?, modified_by = ? WHERE id = ?`,
+		householdID, db.Ms(a.ModifiedAt), by, a.ID)
 }
 
 // ByHousehold lists who is in a household: its owner first, then adults
 // before kids.
-func (r *Repo) ByHousehold(householdID int64) ([]*Account, error) {
+func (r *Repo) ByHousehold(householdID uid.ID) ([]*Account, error) {
 	return r.query(`SELECT `+cols+` FROM account WHERE id IN (SELECT account_id FROM membership WHERE household_id = ?1)
-		ORDER BY id <> (SELECT adult_id FROM household WHERE id = ?1), kind, name COLLATE NOCASE, id`, householdID)
+		ORDER BY id IS NOT (SELECT adult_id FROM household WHERE id = ?1), kind, name COLLATE NOCASE, created_at, id`, householdID)
 }
 
 // leastUsedColor is the palette color the fewest members of the household
 // show, the earliest in the palette on a tie; the first with no household.
-func (r *Repo) leastUsedColor(householdID *int64) (string, error) {
+func (r *Repo) leastUsedColor(householdID *uid.ID) (string, error) {
 	shown := map[string]int{}
 	if householdID != nil {
 		members, err := r.ByHousehold(*householdID)
@@ -332,29 +337,29 @@ const elsewhere = `EXISTS (SELECT 1 FROM household_member m WHERE m.account_id =
 // DeletedWith lists the accounts deleting id removes: the account and, when
 // it owns a household, everyone only that household holds, since
 // account.household_id cascades.
-func (r *Repo) DeletedWith(id int64) ([]*Account, error) {
+func (r *Repo) DeletedWith(id uid.ID) ([]*Account, error) {
 	return r.query(`SELECT `+cols+` FROM account WHERE id = ?1
-		OR household_id = (SELECT id FROM household WHERE adult_id = ?1) AND NOT `+elsewhere+` ORDER BY id`, id)
+		OR household_id = (SELECT id FROM household WHERE adult_id = ?1) AND NOT `+elsewhere+` ORDER BY created_at, id`, id)
 }
 
 // DeletedWithHousehold lists the accounts deleting a household removes:
 // everyone only it holds but its owner.
-func (r *Repo) DeletedWithHousehold(householdID int64) ([]*Account, error) {
+func (r *Repo) DeletedWithHousehold(householdID uid.ID) ([]*Account, error) {
 	return r.query(`SELECT `+cols+` FROM account WHERE household_id = ?1 AND id <> (SELECT adult_id FROM household WHERE id = ?1)
-		AND NOT `+elsewhere+` ORDER BY id`, householdID)
+		AND NOT `+elsewhere+` ORDER BY created_at, id`, householdID)
 }
 
 // Staying lists those account.household_id puts in a household that its
 // deletion must not take: its owner and those another household holds.
-func (r *Repo) Staying(householdID int64) ([]*Account, error) {
+func (r *Repo) Staying(householdID uid.ID) ([]*Account, error) {
 	return r.query(`SELECT `+cols+` FROM account WHERE household_id = ?1
-		AND (id = (SELECT adult_id FROM household WHERE id = ?1) OR `+elsewhere+`) ORDER BY id`, householdID)
+		AND (id = (SELECT adult_id FROM household WHERE id = ?1) OR `+elsewhere+`) ORDER BY created_at, id`, householdID)
 }
 
 // EarliestJoined returns the adult of a household other than except who
 // joined it first and may sign in, else db.ErrNotFound. An adult joins by
 // redeeming a join code.
-func (r *Repo) EarliestJoined(householdID, except int64) (*Account, error) {
+func (r *Repo) EarliestJoined(householdID, except uid.ID) (*Account, error) {
 	return scan(r.d.QueryRow(`SELECT `+cols+` FROM account a WHERE household_id = ? AND id != ? AND kind = 'adult'
 		AND password_hash IS NOT NULL AND revoked_at IS NULL
 		ORDER BY COALESCE((SELECT MIN(used_at) FROM join_code j WHERE j.account_id = a.id), created_at), id LIMIT 1`, householdID, except))
@@ -369,12 +374,13 @@ func (r *Repo) AdminCount() (int, error) {
 
 // FirstAdmin returns the earliest active admin.
 func (r *Repo) FirstAdmin() (*Account, error) {
-	return scan(r.d.QueryRow(`SELECT ` + cols + ` FROM account WHERE is_admin = 1 AND revoked_at IS NULL ORDER BY id LIMIT 1`))
+	return scan(r.d.QueryRow(`SELECT ` + cols + ` FROM account WHERE is_admin = 1 AND revoked_at IS NULL ORDER BY created_at, id LIMIT 1`))
 }
 
 // RecordPINFailure increments the failure counter and, at max failures,
-// locks the account until lockUntil. It returns the new count.
-func (r *Repo) RecordPINFailure(id int64, max int, lockUntil time.Time) (int, error) {
+// locks the account until lockUntil. It returns the new count. Like
+// ClearPINFailures it leaves modified_at and modified_by alone.
+func (r *Repo) RecordPINFailure(id uid.ID, max int, lockUntil time.Time) (int, error) {
 	var n int
 	err := r.d.QueryRow(`UPDATE account SET pin_failures = pin_failures + 1,
 		pin_locked_until = CASE WHEN pin_failures + 1 >= ? THEN ? ELSE pin_locked_until END
@@ -383,31 +389,31 @@ func (r *Repo) RecordPINFailure(id int64, max int, lockUntil time.Time) (int, er
 }
 
 // ClearPINFailures resets the counter and lock.
-func (r *Repo) ClearPINFailures(id int64) error {
+func (r *Repo) ClearPINFailures(id uid.ID) error {
 	return db.ExecOne(r.d, `UPDATE account SET pin_failures = 0, pin_locked_until = NULL WHERE id = ?`, id)
 }
 
 // Allow adds an item to a kid's manual allow list; adding twice is a no-op.
-func (r *Repo) Allow(accountID, itemID int64) error {
+func (r *Repo) Allow(accountID, itemID uid.ID) error {
 	_, err := r.d.Exec(`INSERT OR IGNORE INTO account_allow (account_id, item_id) VALUES (?,?)`, accountID, itemID)
 	return db.Wrap(err)
 }
 
 // Disallow removes an item from the allow list.
-func (r *Repo) Disallow(accountID, itemID int64) error {
+func (r *Repo) Disallow(accountID, itemID uid.ID) error {
 	return db.ExecOne(r.d, `DELETE FROM account_allow WHERE account_id = ? AND item_id = ?`, accountID, itemID)
 }
 
 // AllowedFor lists by id the kids in a household on a manual allow list
 // whose list holds the item itself.
-func (r *Repo) AllowedFor(householdID, itemID int64) ([]int64, error) {
+func (r *Repo) AllowedFor(householdID, itemID uid.ID) ([]uid.ID, error) {
 	rows, err := r.d.Query(`SELECT a.id FROM account a JOIN account_allow w ON w.account_id = a.id
 		WHERE a.id IN (SELECT account_id FROM membership WHERE household_id = ?) AND a.kind = 'kid' AND a.filter_mode = 'allow_list' AND w.item_id = ? ORDER BY a.id`, householdID, itemID)
-	return db.Collect(rows, err, db.Column[int64])
+	return db.Collect(rows, err, db.Column[uid.ID])
 }
 
 // Allowed lists the item IDs on an account's allow list.
-func (r *Repo) Allowed(accountID int64) ([]int64, error) {
+func (r *Repo) Allowed(accountID uid.ID) ([]uid.ID, error) {
 	rows, err := r.d.Query(`SELECT item_id FROM account_allow WHERE account_id = ? ORDER BY item_id`, accountID)
-	return db.Collect(rows, err, db.Column[int64])
+	return db.Collect(rows, err, db.Column[uid.ID])
 }

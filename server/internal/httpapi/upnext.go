@@ -38,9 +38,7 @@ func (s *Server) GetUpNext(ctx context.Context, r api.GetUpNextRequestObject) (a
 			return nil, err
 		}
 		out.Index = &at
-		if row.EditionID != 0 {
-			out.EditionId = &row.EditionID
-		}
+		out.EditionId = row.EditionID
 	} else if r.Params.Index != nil {
 		return nil, invalid("index", "only with playlistId")
 	} else if next, err = s.svc.UpNext.Next(it, a); err != nil || next == nil {
@@ -48,7 +46,7 @@ func (s *Server) GetUpNext(ctx context.Context, r api.GetUpNextRequestObject) (a
 	}
 	out.ItemId, out.Kind = next.ID, api.UpNextKind(next.Kind)
 	if next.Kind == item.Video {
-		v, err := one(s.svc.YouTube.Repo().Videos(youtube.VideoFilter{ID: next.ID, AccountID: who.ID, Audience: a}))
+		v, err := one(s.svc.YouTube.Repo().Videos(youtube.VideoFilter{ID: &next.ID, AccountID: &who.ID, Audience: a}))
 		if err != nil {
 			return nil, err
 		}

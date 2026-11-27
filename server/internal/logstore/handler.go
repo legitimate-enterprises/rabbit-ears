@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 	"unicode"
+
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // Sink receives each entry the Handler accepts.
@@ -102,9 +104,9 @@ func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
 		case "source":
 			e.Source = v.String()
 		case "session_id":
-			e.SessionID = intAttr(v)
+			e.SessionID = idAttr(v)
 		case "item_id":
-			e.ItemID = intAttr(v)
+			e.ItemID = idAttr(v)
 		case "ffmpeg_command":
 			e.FFmpegCommand = v.String()
 		case "transcode_reason":
@@ -126,12 +128,14 @@ func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
 	return h.next.Handle(ctx, clean2)
 }
 
-func intAttr(v slog.Value) *int64 {
-	if v.Kind() != slog.KindInt64 {
+// idAttr reads an id logged as its canonical string or as a uid.ID, which
+// clean has already turned into that string.
+func idAttr(v slog.Value) *uid.ID {
+	id, err := uid.Parse(v.String())
+	if err != nil {
 		return nil
 	}
-	n := v.Int64()
-	return &n
+	return &id
 }
 
 func levelName(l slog.Level) string {

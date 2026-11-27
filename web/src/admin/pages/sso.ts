@@ -1,4 +1,4 @@
-import type { Schemas } from "../../api/client";
+import { API_BASE, type Schemas } from "../../api/client";
 import type { Ctx } from "../api";
 import { ApiError, ok } from "../api";
 import { card, confirming, copy, formEnd, header, saveSwitch, table } from "../common";
@@ -96,7 +96,7 @@ async function fill(ctx: Ctx, root: HTMLElement) {
   const list = (await ok(api.GET("/admin/sso-providers", { params: { query: { limit: 200 } } })))
     .items;
   const err = errorLine();
-  const callback = `${location.origin}/api/v1/auth/sso/callback`;
+  const callback = `${location.origin}${API_BASE}/auth/sso/callback`;
   const copyBtn = h("button.ib", { type: "button" }, "Copy");
   copyBtn.onclick = () => {
     void copy(callback);

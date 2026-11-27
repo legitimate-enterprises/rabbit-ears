@@ -66,7 +66,7 @@ func (s *Server) DeleteOwnAccount(ctx context.Context, r api.DeleteOwnAccountReq
 	if refused {
 		return nil, refusal
 	}
-	err = s.removed(plan.Gone, func() (*service.SignedOut, error) { return s.svc.Accounts.DeleteOwn(a) })
+	err = s.removed(plan.Gone, func() (*service.SignedOut, error) { return s.svc.Accounts.DeleteOwn(a, actor(ctx)) })
 	if errors.Is(err, service.ErrLastAdmin) {
 		return nil, refusal
 	}

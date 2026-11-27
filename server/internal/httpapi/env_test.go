@@ -17,6 +17,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/household"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/httpapi"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/service"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // env is a server over a migrated SQLite file with two households: an admin
@@ -34,7 +35,7 @@ type user struct {
 	token     string
 	account   *account.Account
 	household *household.Household
-	deviceID  int64
+	deviceID  uid.ID
 }
 
 func newEnv(t *testing.T) *env {
@@ -58,11 +59,11 @@ func newEnv(t *testing.T) *env {
 func (e *env) adult(email string, admin bool) user {
 	e.t.Helper()
 	a := &account.Account{Kind: account.Adult, Email: email, Name: email, IsAdmin: admin, PasswordHash: "x"}
-	must(e.t, e.svc.Accounts.Repo().Create(a))
+	must(e.t, e.svc.Accounts.Repo().Create(a, nil))
 	h := &household.Household{Name: email, AdultID: a.ID}
-	must(e.t, e.svc.Households.Repo().Create(h))
+	must(e.t, e.svc.Households.Repo().Create(h, nil))
 	a.HouseholdID = &h.ID
-	must(e.t, e.svc.Accounts.Repo().Update(a))
+	must(e.t, e.svc.Accounts.Repo().Update(a, nil))
 	token, d, err := e.svc.Devices.Register(a.ID, h.ID, "Laptop", "web")
 	must(e.t, err)
 	return user{token, a, h, d.ID}

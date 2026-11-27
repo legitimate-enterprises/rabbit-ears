@@ -111,7 +111,7 @@ export type Tuned =
  */
 export async function tuneIn(
   api: Api,
-  stationId: number,
+  stationId: string,
   snapshot: () => Promise<Snapshot>,
 ): Promise<Tuned> {
   const pb = new Playback(api, { stationId, snapshot, live: true });

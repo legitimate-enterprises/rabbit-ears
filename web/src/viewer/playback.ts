@@ -11,20 +11,20 @@ type Update = Schemas["PlaybackUpdate"];
 
 interface Common {
   snapshot: () => Promise<Snapshot>;
-  audioTrackId?: number;
-  subtitleTrackId?: number;
+  audioTrackId?: string;
+  subtitleTrackId?: string;
 }
 interface ItemOptions extends Common {
-  profileId: number;
-  itemId: number;
+  profileId: string;
+  itemId: string;
   /** Absent plays the default edition. */
-  editionId?: number;
+  editionId?: string;
   positionMs?: number;
-  playlistId?: number;
+  playlistId?: string;
 }
 /** Tunes in: the server picks the program and the live position. */
 interface StationOptions extends Common {
-  stationId: number;
+  stationId: string;
   /** Asks for the station's continuous stream, which a video station has. */
   live?: boolean;
 }

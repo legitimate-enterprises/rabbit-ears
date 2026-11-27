@@ -11,20 +11,21 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/household"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/library"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 func adultWithHousehold(t *testing.T, ar *account.Repo, hr *household.Repo, email string) (*account.Account, *household.Household) {
 	t.Helper()
 	a := &account.Account{Kind: account.Adult, Email: email, Name: email}
-	if err := ar.Create(a); err != nil {
+	if err := ar.Create(a, nil); err != nil {
 		t.Fatal(err)
 	}
 	h := &household.Household{Name: email, AdultID: a.ID}
-	if err := hr.Create(h); err != nil {
+	if err := hr.Create(h, nil); err != nil {
 		t.Fatal(err)
 	}
 	a.HouseholdID = &h.ID
-	if err := ar.Update(a); err != nil {
+	if err := ar.Update(a, nil); err != nil {
 		t.Fatal(err)
 	}
 	return a, h
@@ -34,14 +35,14 @@ func TestAdultCRUDAndEmail(t *testing.T) {
 	d := dbtest.Open(t)
 	r := account.New(d)
 	a := &account.Account{Kind: account.Adult, Email: "Ann@Example.Test", Name: "Ann", IsAdmin: true, PasswordHash: "h"}
-	if err := r.Create(a); err != nil {
+	if err := r.Create(a, nil); err != nil {
 		t.Fatal(err)
 	}
 	got, err := r.ByEmail("ann@example.test")
 	if err != nil || got.ID != a.ID || !got.IsAdmin || got.Pending() || got.FilterMode != account.FilterRatings {
 		t.Fatalf("%+v %v", got, err)
 	}
-	if err := r.Create(&account.Account{Kind: account.Adult, Email: "ANN@example.test", Name: "dup"}); !errors.Is(err, db.ErrConflict) {
+	if err := r.Create(&account.Account{Kind: account.Adult, Email: "ANN@example.test", Name: "dup"}, nil); !errors.Is(err, db.ErrConflict) {
 		t.Fatalf("email must be unique ignoring case: %v", err)
 	}
 	if n, _ := r.AdminCount(); n != 1 {
@@ -49,7 +50,7 @@ func TestAdultCRUDAndEmail(t *testing.T) {
 	}
 	rev := time.Now().UTC().Truncate(time.Millisecond)
 	got.RevokedAt, got.Name = &rev, "Anne"
-	if err := r.Update(got); err != nil {
+	if err := r.Update(got, nil); err != nil {
 		t.Fatal(err)
 	}
 	if n, _ := r.AdminCount(); n != 0 {
@@ -76,31 +77,31 @@ func TestPendingAdultAndKidRules(t *testing.T) {
 	d := dbtest.Open(t)
 	ar, hr := account.New(d), household.New(d)
 	p := &account.Account{Kind: account.Adult, Email: "p@example.test", Name: "P"}
-	if err := ar.Create(p); err != nil {
+	if err := ar.Create(p, nil); err != nil {
 		t.Fatal(err)
 	}
 	if g, _ := ar.Get(p.ID); !g.Pending() || g.HouseholdID != nil {
 		t.Fatalf("%+v", g)
 	}
 	_, h := adultWithHousehold(t, ar, hr, "a@example.test")
-	if err := ar.Create(&account.Account{Kind: account.Kid, Name: "no household"}); err == nil {
+	if err := ar.Create(&account.Account{Kind: account.Kid, Name: "no household"}, nil); err == nil {
 		t.Fatal("kid without household accepted")
 	}
-	if err := ar.Create(&account.Account{Kind: account.Kid, Name: "k", HouseholdID: &h.ID, IsAdmin: true}); err == nil {
+	if err := ar.Create(&account.Account{Kind: account.Kid, Name: "k", HouseholdID: &h.ID, IsAdmin: true}, nil); err == nil {
 		t.Fatal("admin kid accepted")
 	}
-	if err := ar.Create(&account.Account{Kind: account.Kid, Name: "k", HouseholdID: &h.ID, Email: "k@example.test"}); err == nil {
+	if err := ar.Create(&account.Account{Kind: account.Kid, Name: "k", HouseholdID: &h.ID, Email: "k@example.test"}, nil); err == nil {
 		t.Fatal("kid with email accepted")
 	}
-	if err := ar.Create(&account.Account{Kind: account.Adult, Name: "x", MovieCeiling: "PG"}); err == nil {
+	if err := ar.Create(&account.Account{Kind: account.Adult, Name: "x", MovieCeiling: "PG"}, nil); err == nil {
 		t.Fatal("adult with ceiling accepted")
 	}
 	bday := time.Date(2016, 5, 4, 0, 0, 0, 0, time.UTC)
 	k := &account.Account{Kind: account.Kid, Name: "Kit", HouseholdID: &h.ID, Birthday: &bday, MovieCeiling: "PG", TVCeiling: "TV-Y7", PINHash: "pin"}
-	if err := ar.Create(k); err != nil {
+	if err := ar.Create(k, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := ar.Create(&account.Account{Kind: account.Kid, Name: "Kit", HouseholdID: &h.ID}); err != nil {
+	if err := ar.Create(&account.Account{Kind: account.Kid, Name: "Kit", HouseholdID: &h.ID}, nil); err != nil {
 		t.Fatalf("kids need no unique email: %v", err)
 	}
 	g, _ := ar.Get(k.ID)
@@ -110,12 +111,12 @@ func TestPendingAdultAndKidRules(t *testing.T) {
 	if m, _ := ar.ByHousehold(h.ID); len(m) != 3 || m[0].Kind != account.Adult {
 		t.Fatalf("adult first: %+v", m)
 	}
-	if err := ar.Create(&account.Account{Kind: account.Kid, Name: "z", HouseholdID: ptr(999)}); !errors.Is(err, db.ErrReference) {
+	if err := ar.Create(&account.Account{Kind: account.Kid, Name: "z", HouseholdID: ptr(uid.N(999))}, nil); !errors.Is(err, db.ErrReference) {
 		t.Fatal(err)
 	}
 }
 
-func ptr(n int64) *int64 { return &n }
+func ptr(id uid.ID) *uid.ID { return &id }
 
 func TestDeletedWithMatchesTheCascade(t *testing.T) {
 	d := dbtest.Open(t)
@@ -125,7 +126,7 @@ func TestDeletedWithMatchesTheCascade(t *testing.T) {
 	member := &account.Account{Kind: account.Adult, Email: "member@example.test", Name: "Member", HouseholdID: &h.ID}
 	kid := &account.Account{Kind: account.Kid, Name: "Kid", HouseholdID: &h.ID}
 	for _, a := range []*account.Account{member, kid} {
-		if err := ar.Create(a); err != nil {
+		if err := ar.Create(a, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -154,7 +155,7 @@ func TestPINLockout(t *testing.T) {
 	ar, hr := account.New(d), household.New(d)
 	_, h := adultWithHousehold(t, ar, hr, "a@example.test")
 	k := &account.Account{Kind: account.Kid, Name: "k", HouseholdID: &h.ID, PINHash: "x"}
-	_ = ar.Create(k)
+	_ = ar.Create(k, nil)
 	until := time.Now().Add(time.Minute).UTC().Truncate(time.Millisecond)
 	for i := 1; i <= 5; i++ {
 		n, err := ar.RecordPINFailure(k.ID, 5, until)
@@ -172,7 +173,7 @@ func TestPINLockout(t *testing.T) {
 	if g, _ := ar.Get(k.ID); g.PINFailures != 0 || g.PINLockedUntil != nil {
 		t.Fatalf("%+v", g)
 	}
-	if _, err := ar.RecordPINFailure(999, 5, until); !errors.Is(err, db.ErrNotFound) {
+	if _, err := ar.RecordPINFailure(uid.N(999), 5, until); !errors.Is(err, db.ErrNotFound) {
 		t.Fatal(err)
 	}
 }
@@ -182,9 +183,9 @@ func TestAllowListInheritsFromAncestors(t *testing.T) {
 	ar, hr, ir := account.New(d), household.New(d), item.New(d)
 	_, h := adultWithHousehold(t, ar, hr, "a@example.test")
 	k := &account.Account{Kind: account.Kid, Name: "k", HouseholdID: &h.ID, FilterMode: account.FilterAllowList}
-	_ = ar.Create(k)
+	_ = ar.Create(k, nil)
 	l := &library.Library{Name: "tv", Kind: library.TV}
-	_ = library.New(d).Create(l)
+	_ = library.New(d).Create(l, nil)
 	show := &item.Item{LibraryID: l.ID, Kind: item.Show, ParsedTitle: "S"}
 	_ = ir.Create(show)
 	season := &item.Item{LibraryID: l.ID, ParentID: &show.ID, Kind: item.Season, ParsedTitle: "1", SeasonNumber: new(int)}
@@ -199,7 +200,7 @@ func TestAllowListInheritsFromAncestors(t *testing.T) {
 			t.Fatalf("allow is idempotent: %v", err)
 		}
 	}
-	if err := ar.Allow(k.ID, 999); !errors.Is(err, db.ErrReference) {
+	if err := ar.Allow(k.ID, uid.N(999)); !errors.Is(err, db.ErrReference) {
 		t.Fatal(err)
 	}
 	if ids, _ := ar.Allowed(k.ID); len(ids) != 1 || ids[0] != show.ID {
@@ -231,7 +232,7 @@ func TestProfileColors(t *testing.T) {
 	kid := func() *account.Account {
 		t.Helper()
 		k := &account.Account{Kind: account.Kid, Name: "K", HouseholdID: &h.ID}
-		if err := ar.Create(k); err != nil {
+		if err := ar.Create(k, nil); err != nil {
 			t.Fatal(err)
 		}
 		got, err := ar.Get(k.ID)
@@ -248,20 +249,19 @@ func TestProfileColors(t *testing.T) {
 		t.Fatalf("third %q", k3.Color)
 	}
 	k3.Color = account.Palette[0]
-	if err := ar.Update(k3); err != nil {
+	if err := ar.Update(k3, nil); err != nil {
 		t.Fatal(err)
 	}
 	if k := kid(); k.Color != account.Palette[2] {
 		t.Fatalf("a color freed is used again: %q", k.Color)
 	}
 
-	res, err := d.Exec(`INSERT INTO account (kind, name, household_id, created_at, updated_at) VALUES ('kid', 'Old', ?, 0, 0)`, h.ID)
-	if err != nil {
+	id := uid.N(13)
+	if _, err := d.Exec(`INSERT INTO account (id, kind, name, household_id, created_at, modified_at) VALUES (?, 'kid', 'Old', ?, 0, 0)`, id, h.ID); err != nil {
 		t.Fatal(err)
 	}
-	id, _ := res.LastInsertId()
 	old, err := ar.Get(id)
-	if err != nil || old.Color != "" || old.ShownColor() != account.Palette[id%8] {
+	if err != nil || old.Color != "" || old.ShownColor() != account.Palette[13%8] {
 		t.Fatalf("%+v %v", old, err)
 	}
 	if !account.ValidColor("#2E6B5B") || account.ValidColor("#2e6b5b") || account.ValidColor("#000000") {
@@ -283,7 +283,7 @@ func TestPeopleAreHouseholdsAndLinkedAdults(t *testing.T) {
 	joined := func(email string) (*account.Account, *household.Household) {
 		a, h := adultWithHousehold(t, ar, hr, email)
 		a.PasswordHash = "h"
-		if err := ar.Update(a); err != nil {
+		if err := ar.Update(a, nil); err != nil {
 			t.Fatal(err)
 		}
 		return a, h
@@ -294,7 +294,7 @@ func TestPeopleAreHouseholdsAndLinkedAdults(t *testing.T) {
 	kid := &account.Account{Kind: account.Kid, Name: "kid", HouseholdID: &home.ID}
 	pending := &account.Account{Kind: account.Adult, Name: "pending", Email: "p@example.test", HouseholdID: &home.ID}
 	for _, a := range []*account.Account{kid, pending} {
-		if err := ar.Create(a); err != nil {
+		if err := ar.Create(a, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -318,6 +318,9 @@ func TestPeopleAreHouseholdsAndLinkedAdults(t *testing.T) {
 	}
 	if hs, err := ar.Households(kid); err != nil || len(hs) != 2 || hs[0] != home.ID || hs[1] != hers.ID {
 		t.Fatalf("own household first, then shared: %v %v", hs, err)
+	}
+	if l, err := ar.Labels(mom, []uid.ID{kid.ID, dad.ID}); err != nil || len(l) != 2 || l[kid.ID].HouseholdID != hers.ID || l[dad.ID].HouseholdID != home.ID {
+		t.Fatalf("a shared kid is labeled with the viewer's household, anyone else with their own: %+v %v", l, err)
 	}
 	if got := people(kid, true); got != "dad mom " {
 		t.Fatalf("a shared kid sees both households: %q", got)
@@ -367,5 +370,52 @@ func TestPeopleAreHouseholdsAndLinkedAdults(t *testing.T) {
 	}
 	if _, err := d.Exec(`INSERT INTO adult_link (a_id, b_id, created_at) VALUES (?,?,0)`, hi, lo); err == nil {
 		t.Fatal("a link is stored once, lower id first")
+	}
+}
+
+// Create keeps a client's id and stamps who made the row; an update stamps
+// who changed it, and a PIN attempt changes neither.
+func TestAuditColumns(t *testing.T) {
+	d := dbtest.Open(t)
+	r := account.New(d)
+	var people [2]uid.ID
+	for i := range people {
+		p := &account.Account{Kind: account.Adult, Email: string(rune('m'+i)) + "@example.test", Name: "P"}
+		if err := r.Create(p, nil); err != nil {
+			t.Fatal(err)
+		}
+		people[i] = p.ID
+	}
+	maker, editor := people[0], people[1]
+	a := &account.Account{ID: uid.N(50), Kind: account.Adult, Email: "a@example.test", Name: "A"}
+	if err := r.Create(a, &maker); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Create(&account.Account{ID: a.ID, Kind: account.Adult, Email: "b@example.test", Name: "B"}, nil); !errors.Is(err, db.ErrConflict) {
+		t.Fatalf("a taken id is a conflict: %v", err)
+	}
+	g, err := r.Get(uid.N(50))
+	if err != nil || *g.CreatedBy != maker || *g.ModifiedBy != maker || !g.CreatedAt.Equal(a.CreatedAt) || !g.ModifiedAt.Equal(a.CreatedAt) {
+		t.Fatalf("%+v %v", g, err)
+	}
+	time.Sleep(2 * time.Millisecond)
+	if err := r.Update(g, &editor); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.RecordPINFailure(a.ID, 5, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.ClearPINFailures(a.ID); err != nil {
+		t.Fatal(err)
+	}
+	u, _ := r.Get(a.ID)
+	if *u.CreatedBy != maker || *u.ModifiedBy != editor || !u.ModifiedAt.Equal(g.ModifiedAt) || !u.ModifiedAt.After(u.CreatedAt) {
+		t.Fatalf("%+v", u)
+	}
+	if err := r.Update(u, nil); err != nil {
+		t.Fatal(err)
+	}
+	if u, _ = r.Get(a.ID); u.ModifiedBy != nil || *u.CreatedBy != maker {
+		t.Fatalf("an update outside a request clears modified_by: %+v", u)
 	}
 }

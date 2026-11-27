@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/api"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // Every music list carries the count of all rows it walks: the same on the
@@ -42,7 +43,7 @@ func TestMusicTotals(t *testing.T) {
 	}
 
 	yes := true
-	for _, id := range []int64{m.songs[1].Id, all.Items[0].Id} {
+	for _, id := range []uid.ID{m.songs[1].Id, all.Items[0].Id} {
 		s, err := e.svc.Items.Repo().Get(id)
 		must(t, err)
 		s.Explicit = &yes
@@ -86,7 +87,7 @@ func TestCollectionTotals(t *testing.T) {
 	e := newEnv(t)
 	films := e.library("movies")
 	g, r := e.film(films, "Meadow", "2001-01-01", "G"), e.film(films, "Undertow", "2001-01-01", "R")
-	for name, movie := range map[string]int64{"A": g, "B": r, "C": g} {
+	for name, movie := range map[string]uid.ID{"A": g, "B": r, "C": g} {
 		var c api.Collection
 		e.expect(201, "POST", "/collections", e.plain.token, map[string]any{"name": name}, &c)
 		e.expect(204, "PUT", "/collections/"+itoa(c.Id)+"/movies/"+itoa(movie), e.plain.token, nil, nil)

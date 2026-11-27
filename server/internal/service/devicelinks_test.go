@@ -10,6 +10,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db/dbtest"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/service"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // An IPv6 sender owns a /64, so its whole /64 is one source; IPv4 senders
@@ -34,12 +35,12 @@ func TestSourceKey(t *testing.T) {
 // the approving adult is still in it.
 func TestALinkedTVJoinsTheApprovingDevicesHousehold(t *testing.T) {
 	s := service.New(dbtest.Open(t))
-	adult := func(email string) (*account.Account, int64) {
+	adult := func(email string) (*account.Account, uid.ID) {
 		a := &account.Account{Kind: account.Adult, Email: email, Name: email, PasswordHash: "x"}
-		if err := s.Accounts.Repo().Create(a); err != nil {
+		if err := s.Accounts.Repo().Create(a, nil); err != nil {
 			t.Fatal(err)
 		}
-		h, err := s.Households.CreateFor(email, a)
+		h, err := s.Households.CreateFor(email, a, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -50,7 +51,7 @@ func TestALinkedTVJoinsTheApprovingDevicesHousehold(t *testing.T) {
 	if err := s.Households.Join(a, theirs); err != nil {
 		t.Fatal(err)
 	}
-	link := func() (int64, string) {
+	link := func() (uid.ID, string) {
 		l, token, err := s.DeviceLinks.Create("TV", "roku", "10.0.0.2", true)
 		if err != nil {
 			t.Fatal(err)
@@ -65,7 +66,7 @@ func TestALinkedTVJoinsTheApprovingDevicesHousehold(t *testing.T) {
 		t.Fatalf("the TV is not in the approving device's household: %+v %v", sg, err)
 	}
 	id, token = link()
-	if _, err := s.Households.Leave(a, theirs); err != nil {
+	if _, err := s.Households.Leave(a, theirs, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := s.DeviceLinks.Poll(id, token); !errors.Is(err, db.ErrNotFound) {

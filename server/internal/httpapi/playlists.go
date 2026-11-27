@@ -12,6 +12,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/playlist"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/service"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // Playlists: under a profile a playlist is that profile's own or shared
@@ -21,7 +22,7 @@ import (
 // playlistProfile resolves the profile a playlist request names. Anything
 // beyond reading, for a kid's profile or while a kid is active, is
 // forbidden.
-func (s *Server) playlistProfile(ctx context.Context, profileID int64, need string) (*account.Account, error) {
+func (s *Server) playlistProfile(ctx context.Context, profileID uid.ID, need string) (*account.Account, error) {
 	who, err := s.profile(ctx, profileID)
 	if err == nil && need != playlist.Read && (who.Kind == account.Kid || caller(ctx).asKid()) {
 		return nil, errForbidden
@@ -31,7 +32,7 @@ func (s *Server) playlistProfile(ctx context.Context, profileID int64, need stri
 
 // playlistOf finds a playlist the profile owns or that is shared with it,
 // else not found; access short of need is forbidden.
-func (s *Server) playlistOf(ctx context.Context, profileID, id int64, need string) (*playlist.Playlist, error) {
+func (s *Server) playlistOf(ctx context.Context, profileID, id uid.ID, need string) (*playlist.Playlist, error) {
 	if _, err := s.playlistProfile(ctx, profileID, need); err != nil {
 		return nil, err
 	}
@@ -43,7 +44,7 @@ func (s *Server) playlistOf(ctx context.Context, profileID, id int64, need strin
 	return p, playlistError(err)
 }
 
-func (s *Server) entryOf(p *playlist.Playlist, id int64) (*playlist.Entry, error) {
+func (s *Server) entryOf(p *playlist.Playlist, id uid.ID) (*playlist.Entry, error) {
 	e, err := s.svc.Playlists.Repo().Entry(id)
 	if err == nil && e.PlaylistID != p.ID {
 		return nil, errNotFound
@@ -115,29 +116,30 @@ func (s *Server) toEntry(ctx context.Context, e *playlist.Entry) (api.PlaylistEn
 
 // entryWith is toEntry with the entry's totals already counted.
 func (s *Server) entryWith(ctx context.Context, e *playlist.Entry, t playlist.Total) (api.PlaylistEntry, error) {
-	out := api.PlaylistEntry{Id: e.ID, PlaylistId: e.PlaylistID, Position: e.Position, Rank: &e.Rank, AddedAt: e.AddedAt, ItemCount: t.Count, DurationMs: t.DurationMs}
-	if e.CollectionID != 0 {
-		c, err := s.svc.Collections.Repo().Get(e.CollectionID)
+	out := api.PlaylistEntry{Id: e.ID, PlaylistId: e.PlaylistID, Position: e.Position, Rank: &e.Rank, AddedAt: e.AddedAt, ItemCount: t.Count, DurationMs: t.DurationMs,
+		CreatedAt: e.CreatedAt, ModifiedAt: e.ModifiedAt, CreatedBy: e.CreatedBy, ModifiedBy: e.ModifiedBy}
+	if e.CollectionID != nil {
+		c, err := s.svc.Collections.Repo().Get(*e.CollectionID)
 		if err != nil {
 			return out, err
 		}
 		v := toCollection(&collection.View{Collection: *c, MovieCount: out.ItemCount})
-		out.Kind, out.CollectionId, out.Collection = api.PlaylistEntryKindCollection, &e.CollectionID, &v
+		out.Kind, out.CollectionId, out.Collection = api.PlaylistEntryKindCollection, e.CollectionID, &v
 		return out, nil
 	}
-	it, err := s.svc.Items.Repo().Get(e.ItemID)
+	it, err := s.svc.Items.Repo().Get(*e.ItemID)
 	if err != nil {
 		return out, err
 	}
-	out.ItemId, out.Kind = &e.ItemID, api.PlaylistEntryKind(it.Kind)
-	if e.EditionID != 0 {
-		name, err := s.editionName(e.ItemID, e.EditionID)
+	out.ItemId, out.Kind = e.ItemID, api.PlaylistEntryKind(it.Kind)
+	if e.EditionID != nil {
+		name, err := s.editionName(it.ID, *e.EditionID)
 		if err != nil {
 			return out, err
 		}
-		out.EditionId, out.EditionName = &e.EditionID, name
+		out.EditionId, out.EditionName = e.EditionID, name
 	}
-	only := item.MusicFilter{IDs: []int64{it.ID}, AccountID: caller(ctx).profile.ID}
+	only := item.MusicFilter{IDs: []uid.ID{it.ID}, AccountID: &caller(ctx).profile.ID}
 	switch it.Kind {
 	case item.Song:
 		v, err := one(s.svc.Music.Repo().Songs(only))
@@ -205,8 +207,8 @@ func (s *Server) CreatePlaylist(ctx context.Context, r api.CreatePlaylistRequest
 	if err != nil {
 		return nil, err
 	}
-	p := &playlist.Playlist{AccountID: r.ProfileId, Name: name, Kind: string(r.Body.Kind)}
-	if err := s.svc.Playlists.Repo().Create(p); err != nil {
+	p := &playlist.Playlist{ID: or(r.Body.Id, uid.ID{}), AccountID: r.ProfileId, Name: name, Kind: string(r.Body.Kind)}
+	if err := s.svc.Playlists.Repo().Create(p, actor(ctx)); err != nil {
 		return nil, err
 	}
 	v, err := s.toPlaylist(ctx, p, r.ProfileId)
@@ -225,6 +227,9 @@ func (s *Server) GetPlaylist(ctx context.Context, r api.GetPlaylistRequestObject
 
 // ReplacePlaylist renames a playlist, and changes its kind while it is empty.
 func (s *Server) ReplacePlaylist(ctx context.Context, r api.ReplacePlaylistRequestObject) (api.ReplacePlaylistResponseObject, error) {
+	if err := sameID(r.Body.Id, r.PlaylistId); err != nil {
+		return nil, err
+	}
 	p, err := s.playlistOf(ctx, r.ProfileId, r.PlaylistId, service.Owner)
 	if err != nil {
 		return nil, err
@@ -233,7 +238,7 @@ func (s *Server) ReplacePlaylist(ctx context.Context, r api.ReplacePlaylistReque
 	if err != nil {
 		return nil, err
 	}
-	if err := s.svc.Playlists.Rename(p, name, string(r.Body.Kind)); err != nil {
+	if err := s.svc.Playlists.Rename(p, name, string(r.Body.Kind), actor(ctx)); err != nil {
 		return nil, playlistError(err)
 	}
 	v, err := s.toPlaylist(ctx, p, r.ProfileId)
@@ -293,13 +298,13 @@ func (s *Server) ListPlaylistPlayOrder(ctx context.Context, r api.ListPlaylistPl
 	}
 	out := api.ListPlaylistPlayOrder200JSONResponse{Items: []api.PlaylistPlayOrderItem{}}
 	rows, out.NextOffset = window(rows, limit, offset)
-	var songIDs []int64
+	var songIDs []uid.ID
 	for _, row := range rows {
 		if row.Kind == item.Song {
 			songIDs = append(songIDs, row.ItemID)
 		}
 	}
-	songs := map[int64]*item.SongView{}
+	songs := map[uid.ID]*item.SongView{}
 	if len(songIDs) > 0 {
 		views, err := s.svc.Music.Repo().Songs(item.MusicFilter{IDs: songIDs, Limit: len(songIDs)})
 		if err != nil {
@@ -309,19 +314,19 @@ func (s *Server) ListPlaylistPlayOrder(ctx context.Context, r api.ListPlaylistPl
 			songs[v.ID] = v
 		}
 	}
-	names := map[int64]*string{}
+	names := map[uid.ID]*string{}
 	for _, row := range rows {
-		v := api.PlaylistPlayOrderItem{EntryId: row.EntryID, ItemId: row.ItemID, Kind: api.PlaylistEntryKind(row.Kind), DurationMs: row.RuntimeMs}
-		if row.EditionID != 0 {
-			name, ok := names[row.EditionID]
+		v := api.PlaylistPlayOrderItem{EntryId: *row.EntryID, ItemId: row.ItemID, Kind: api.PlaylistEntryKind(row.Kind), DurationMs: row.RuntimeMs}
+		if row.EditionID != nil {
+			name, ok := names[*row.EditionID]
 			if !ok {
 				var err error
-				if name, err = s.editionName(row.ItemID, row.EditionID); err != nil {
+				if name, err = s.editionName(row.ItemID, *row.EditionID); err != nil {
 					return nil, err
 				}
-				names[row.EditionID] = name
+				names[*row.EditionID] = name
 			}
-			v.EditionId, v.EditionName = &row.EditionID, name
+			v.EditionId, v.EditionName = row.EditionID, name
 		}
 		if sv, ok := songs[row.ItemID]; ok {
 			song := toSong(sv)
@@ -366,7 +371,7 @@ func (s *Server) AddPlaylistEntry(ctx context.Context, r api.AddPlaylistEntryReq
 		if err != nil {
 			return nil, err
 		}
-		if e, err = s.svc.Playlists.AddCollection(p, &v.Collection, in.Position, rank); errors.Is(err, service.ErrWrongPlaylistKind) {
+		if e, err = s.svc.Playlists.AddCollection(p, &v.Collection, in.Position, rank, in.Id, actor(ctx)); errors.Is(err, service.ErrWrongPlaylistKind) {
 			return nil, invalid("collectionId", err.Error())
 		} else if err != nil {
 			return nil, err
@@ -376,7 +381,7 @@ func (s *Server) AddPlaylistEntry(ctx context.Context, r api.AddPlaylistEntryReq
 		if err != nil {
 			return nil, err
 		}
-		if e, err = s.svc.Playlists.AddEntry(p, it, or(in.EditionId, 0), in.Position, rank); err != nil {
+		if e, err = s.svc.Playlists.AddEntry(p, it, in.EditionId, in.Position, rank, in.Id, actor(ctx)); err != nil {
 			return nil, playlistError(err)
 		}
 	}
@@ -414,10 +419,13 @@ func (s *Server) ReplacePlaylistEntry(ctx context.Context, r api.ReplacePlaylist
 	if err != nil {
 		return nil, err
 	}
-	if or(r.Body.ItemId, 0) != e.ItemID || or(r.Body.CollectionId, 0) != e.CollectionID {
+	if err := sameID(r.Body.Id, e.ID); err != nil {
+		return nil, err
+	}
+	if !equalIDs(r.Body.ItemId, e.ItemID) || !equalIDs(r.Body.CollectionId, e.CollectionID) {
 		return nil, invalid("itemId", "an entry only moves; add the other item instead")
 	}
-	if r.Body.EditionId != nil && *r.Body.EditionId != e.EditionID {
+	if r.Body.EditionId != nil && !equalIDs(r.Body.EditionId, e.EditionID) {
 		return nil, invalid("editionId", "an entry keeps its edition; add the other edition instead")
 	}
 	rank, err := entryRank(*r.Body)
@@ -425,9 +433,9 @@ func (s *Server) ReplacePlaylistEntry(ctx context.Context, r api.ReplacePlaylist
 		return nil, err
 	}
 	if rank != "" {
-		err = s.svc.Playlists.Repo().RankEntry(e.ID, rank)
+		err = s.svc.Playlists.Repo().RankEntry(e.ID, rank, actor(ctx))
 	} else {
-		err = s.svc.Playlists.Repo().MoveEntry(e.ID, r.Body.Position)
+		err = s.svc.Playlists.Repo().MoveEntry(e.ID, r.Body.Position, actor(ctx))
 	}
 	if err != nil {
 		return nil, err
@@ -438,6 +446,9 @@ func (s *Server) ReplacePlaylistEntry(ctx context.Context, r api.ReplacePlaylist
 	v, err := s.toEntry(ctx, e)
 	return api.ReplacePlaylistEntry200JSONResponse(v), err
 }
+
+// equalIDs reports whether two optional ids are both absent or equal.
+func equalIDs(a, b *uid.ID) bool { return a == nil && b == nil || a != nil && b != nil && *a == *b }
 
 // entryRank is the rank an entry input names, "" for none.
 func entryRank(in api.PlaylistEntryInput) (string, error) {
@@ -468,7 +479,7 @@ func (s *Server) RemovePlaylistEntry(ctx context.Context, r api.RemovePlaylistEn
 
 // editionName is the name a playlist row shows for its edition: nil while
 // the title has at most one edition with files, so a lone cut goes unnamed.
-func (s *Server) editionName(itemID, editionID int64) (*string, error) {
+func (s *Server) editionName(itemID, editionID uid.ID) (*string, error) {
 	eds, err := s.svc.Editions.Repo().ForItem(itemID)
 	if err != nil || len(eds) < 2 {
 		return nil, err

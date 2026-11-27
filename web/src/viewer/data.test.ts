@@ -23,7 +23,7 @@ function listing(n: number) {
     };
     return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
   };
-  return { api: createApi({ baseUrl: "http://x/api/v1", fetch }), asked, peak: () => peak };
+  return { api: createApi({ baseUrl: "http://x/api/v2", fetch }), asked, peak: () => peak };
 }
 
 describe("items", () => {

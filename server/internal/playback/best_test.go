@@ -9,7 +9,7 @@ import (
 
 // file is an mp4 or mkv copy with this video and an AAC stereo track whose
 // id is audioID.
-func file(container string, v *mediafile.Track, audioID int64, bitrate int64) playback.Media {
+func file(container string, v *mediafile.Track, audioID int, bitrate int64) playback.Media {
 	return playback.Media{Container: container, Bitrate: bitrate, Tracks: []*mediafile.Track{v, audio(audioID, "aac", 2, true)}}
 }
 

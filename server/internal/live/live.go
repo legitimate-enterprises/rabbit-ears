@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // Kinds of event.
@@ -32,29 +34,29 @@ const (
 	Joined  = "joined"
 )
 
-// Event is one change. HouseholdID and AccountIDs say who hears it: 0 is
-// every household, none every profile. OpenerID, when not 0, is also heard
+// Event is one change. HouseholdID and AccountIDs say who hears it: nil is
+// every household, none every profile. OpenerID, when set, is also heard
 // by the profiles who see that account, which the reader decides. The
-// other ids are 0 when the event has none.
+// other ids are nil when the event has none.
 type Event struct {
 	Kind        string
 	Change      string
-	HouseholdID int64
-	AccountIDs  []int64
-	OpenerID    int64
+	HouseholdID *uid.ID
+	AccountIDs  []uid.ID
+	OpenerID    *uid.ID
 
-	ItemID          int64
-	SessionID       int64
-	DeviceID        int64
-	StationID       int64
-	PlaylistID      int64
-	WatchTogetherID int64
-	LibraryID       int64
+	ItemID          *uid.ID
+	SessionID       *uid.ID
+	DeviceID        *uid.ID
+	StationID       *uid.ID
+	PlaylistID      *uid.ID
+	WatchTogetherID *uid.ID
+	LibraryID       *uid.ID
 }
 
 // Hears reports whether a profile of a household is among those e is for.
-func (e Event) Hears(householdID, accountID int64) bool {
-	return (e.HouseholdID == 0 || e.HouseholdID == householdID) && (len(e.AccountIDs) == 0 || slices.Contains(e.AccountIDs, accountID))
+func (e Event) Hears(householdID, accountID uid.ID) bool {
+	return (e.HouseholdID == nil || *e.HouseholdID == householdID) && (len(e.AccountIDs) == 0 || slices.Contains(e.AccountIDs, accountID))
 }
 
 // Hub keeps the latest events in memory, at most its size of them, for

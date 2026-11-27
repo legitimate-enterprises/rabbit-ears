@@ -9,38 +9,39 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db/dbtest"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/household"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/offer"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 func TestOffer(t *testing.T) {
 	d := dbtest.Open(t)
-	var ids []int64
+	var ids []uid.ID
 	for _, name := range []string{"a", "b", "kid", "other"} {
 		a := &account.Account{Kind: account.Adult, Email: name + "@example.test", Name: name}
-		if err := account.New(d).Create(a); err != nil {
+		if err := account.New(d).Create(a, nil); err != nil {
 			t.Fatal(err)
 		}
 		ids = append(ids, a.ID)
 	}
 	from, to, kid, other := ids[0], ids[1], ids[2], ids[3]
 	h := &household.Household{Name: "Home", AdultID: from}
-	if err := household.New(d).Create(h); err != nil {
+	if err := household.New(d).Create(h, nil); err != nil {
 		t.Fatal(err)
 	}
 	r := offer.New(d)
 	o := &offer.Offer{ProfileID: kid, HouseholdID: h.ID, FromID: from, ToID: to}
-	if err := r.Create(o); err != nil || o.ID == 0 {
+	if err := r.Create(o, nil); err != nil || o.ID.IsZero() {
 		t.Fatal(o, err)
 	}
-	if err := r.Create(&offer.Offer{ProfileID: kid, HouseholdID: h.ID, FromID: from, ToID: to}); !errors.Is(err, db.ErrConflict) {
+	if err := r.Create(&offer.Offer{ProfileID: kid, HouseholdID: h.ID, FromID: from, ToID: to}, nil); !errors.Is(err, db.ErrConflict) {
 		t.Fatalf("one offer of a profile to one adult: %v", err)
 	}
-	if err := r.Create(&offer.Offer{ProfileID: kid, HouseholdID: 999, FromID: from, ToID: from}); !errors.Is(err, db.ErrReference) {
+	if err := r.Create(&offer.Offer{ProfileID: kid, HouseholdID: uid.N(999), FromID: from, ToID: from}, nil); !errors.Is(err, db.ErrReference) {
 		t.Fatalf("an unknown household: %v", err)
 	}
-	if err := r.Create(&offer.Offer{ProfileID: from, HouseholdID: h.ID, FromID: from, ToID: to}); err != nil {
+	if err := r.Create(&offer.Offer{ProfileID: from, HouseholdID: h.ID, FromID: from, ToID: to}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Create(&offer.Offer{ProfileID: kid, HouseholdID: h.ID, FromID: from, ToID: other}); err != nil {
+	if err := r.Create(&offer.Offer{ProfileID: kid, HouseholdID: h.ID, FromID: from, ToID: other}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := r.Get(o.ID); err != nil || *got != *o {
@@ -58,7 +59,7 @@ func TestOffer(t *testing.T) {
 	if got, _ := r.From(h.ID); len(got) != 1 || got[0].ToID != other {
 		t.Fatalf("only the offers between the two go: %+v", got)
 	}
-	if err := r.DeleteOf(kid, 0); err != nil {
+	if err := r.DeleteOf(kid, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := r.From(h.ID); len(got) != 0 {

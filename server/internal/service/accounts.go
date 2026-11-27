@@ -23,6 +23,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/serverinfo"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/session"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/station"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // Account flow errors.
@@ -151,7 +152,7 @@ func (s *AuthService) Setup(serverName, name, email, password, deviceName, platf
 			return ErrSetupDone
 		}
 		a := &account.Account{Kind: account.Adult, Email: email, Name: name, IsAdmin: true, PasswordHash: hash}
-		if err := accounts.Create(a); err != nil {
+		if err := accounts.Create(a, nil); err != nil {
 			return err
 		}
 		if err := serverinfo.New(d).Save(serverName); err != nil {
@@ -161,10 +162,11 @@ func (s *AuthService) Setup(serverName, name, email, password, deviceName, platf
 	})
 }
 
-// signIn gives an adult a household if they lack one, then a device.
+// signIn gives an adult a household if they lack one, then a device. The
+// household and the account's move into it are the adult's own writes.
 func signIn(d db.DBTX, a *account.Account, deviceName, platform string, out *Signed) error {
 	if a.HouseholdID == nil {
-		if _, err := newHousehold(d, a.Name, a); err != nil {
+		if _, err := newHousehold(d, a.Name, a, nil, &a.ID); err != nil {
 			return err
 		}
 	}
@@ -251,30 +253,36 @@ func randomGroups(n int) string {
 	return string(out)
 }
 
-// IssueJoinCode gives a pending adult an invitation valid for days.
-func (s *AuthService) IssueJoinCode(a *account.Account, days int) (*joincode.JoinCode, error) {
+// IssueJoinCode gives a pending adult an invitation valid for days, under
+// id when given.
+func (s *AuthService) IssueJoinCode(a *account.Account, days int, id, by *uid.ID) (*joincode.JoinCode, error) {
 	if !a.Pending() || a.RevokedAt != nil {
 		return nil, ErrNotJoinable
 	}
-	return newJoinCodeFor(s.d, a.ID, days)
+	return newJoinCodeFor(s.d, a.ID, days, id, by)
 }
 
-func newJoinCodeFor(d db.DBTX, accountID int64, days int) (*joincode.JoinCode, error) {
+// newJoinCodeFor creates a code under id, a new one when nil.
+func newJoinCodeFor(d db.DBTX, accountID uid.ID, days int, id, by *uid.ID) (*joincode.JoinCode, error) {
 	j := &joincode.JoinCode{Code: newJoinCode(), AccountID: accountID, ExpiresAt: time.Now().UTC().AddDate(0, 0, days)}
-	return j, joincode.New(d).Create(j)
+	if id != nil {
+		j.ID = *id
+	}
+	return j, joincode.New(d).Create(j, by)
 }
 
-// ResendJoinCode revokes a pending adult's unused codes and issues a new one.
-func (s *AuthService) ResendJoinCode(a *account.Account, days int) (*joincode.JoinCode, error) {
+// ResendJoinCode revokes a pending adult's unused codes and issues a new one,
+// under id when given.
+func (s *AuthService) ResendJoinCode(a *account.Account, days int, id, by *uid.ID) (*joincode.JoinCode, error) {
 	if !a.Pending() || a.RevokedAt != nil {
 		return nil, ErrNotJoinable
 	}
 	var j *joincode.JoinCode
 	err := db.InTx(s.d, func(d db.DBTX) (err error) {
-		if err = joincode.New(d).RevokeUnused(a.ID, time.Now().UTC()); err != nil {
+		if err = joincode.New(d).RevokeUnused(a.ID, time.Now().UTC(), by); err != nil {
 			return err
 		}
-		j, err = newJoinCodeFor(d, a.ID, days)
+		j, err = newJoinCodeFor(d, a.ID, days, id, by)
 		return err
 	})
 	return j, err
@@ -284,8 +292,8 @@ func (s *AuthService) ResendJoinCode(a *account.Account, days int) (*joincode.Jo
 // with a code valid for days; they leave every other household, where they
 // would only be present. Kid rules and the PIN an adult set for them go, and
 // any device acting as them is signed out, since powers follow the active
-// profile.
-func (s *AuthService) MakeAdult(a *account.Account, householdID int64, email string, days int) (*joincode.JoinCode, *SignedOut, error) {
+// profile. The code takes joinCodeID when given.
+func (s *AuthService) MakeAdult(a *account.Account, householdID uid.ID, email string, days int, joinCodeID, by *uid.ID) (*joincode.JoinCode, *SignedOut, error) {
 	if a.Kind != account.Kid {
 		return nil, nil, ErrSameKind
 	}
@@ -301,13 +309,13 @@ func (s *AuthService) MakeAdult(a *account.Account, householdID int64, email str
 		if err = account.New(d).RemoveMemberships(a.ID); err != nil {
 			return err
 		}
-		if err = offer.New(d).DeleteOf(a.ID, 0); err != nil {
+		if err = offer.New(d).DeleteOf(a.ID, nil); err != nil {
 			return err
 		}
-		if err = account.New(d).Update(a); err != nil {
+		if err = account.New(d).Update(a, by); err != nil {
 			return err
 		}
-		j, err = newJoinCodeFor(d, a.ID, days)
+		j, err = newJoinCodeFor(d, a.ID, days, joinCodeID, by)
 		return err
 	})
 	return j, out, err
@@ -318,9 +326,9 @@ func (s *AuthService) MakeAdult(a *account.Account, householdID int64, email str
 // either. The caller frees those sessions' encoders and takes the devices out
 // of Watch together.
 type SignedOut struct {
-	Devices  []int64
-	Reset    []int64
-	Sessions []int64
+	Devices  []uid.ID
+	Reset    []uid.ID
+	Sessions []uid.ID
 }
 
 // signOut revokes every device of a profile in gone or acting as it and
@@ -358,7 +366,7 @@ func signOutDevices(d db.DBTX, devs []*device.Device, out *SignedOut) error {
 }
 
 // endSessions ends a device's open sessions, recording them in out.
-func endSessions(d db.DBTX, deviceID int64, now time.Time, out *SignedOut) error {
+func endSessions(d db.DBTX, deviceID uid.ID, now time.Time, out *SignedOut) error {
 	sessions := session.New(d)
 	open, err := sessions.ActiveByDevice(deviceID)
 	if err != nil {
@@ -375,18 +383,18 @@ func endSessions(d db.DBTX, deviceID int64, now time.Time, out *SignedOut) error
 
 // Update saves a; demoting or revoking the last active admin is
 // ErrLastAdmin.
-func (s *AccountService) Update(a *account.Account) error {
+func (s *AccountService) Update(a *account.Account, by *uid.ID) error {
 	return db.InTx(s.d, func(d db.DBTX) error {
-		return keepingAnAdmin(d, func() error { return account.New(d).Update(a) })
+		return keepingAnAdmin(d, func() error { return account.New(d).Update(a, by) })
 	})
 }
 
 // Revoke saves a, which the caller has revoked, and signs out every device
 // of it or acting as it; revoking the last active admin is ErrLastAdmin.
-func (s *AccountService) Revoke(a *account.Account) (*SignedOut, error) {
+func (s *AccountService) Revoke(a *account.Account, by *uid.ID) (*SignedOut, error) {
 	out := &SignedOut{}
 	return out, db.InTx(s.d, func(d db.DBTX) error {
-		if err := keepingAnAdmin(d, func() error { return account.New(d).Update(a) }); err != nil {
+		if err := keepingAnAdmin(d, func() error { return account.New(d).Update(a, by) }); err != nil {
 			return err
 		}
 		return signOut(d, []*account.Account{a}, out)
@@ -394,7 +402,7 @@ func (s *AccountService) Revoke(a *account.Account) (*SignedOut, error) {
 }
 
 // SignOutDevice revokes one device and ends its open sessions.
-func (s *AccountService) SignOutDevice(id int64) (*SignedOut, error) {
+func (s *AccountService) SignOutDevice(id uid.ID) (*SignedOut, error) {
 	out := &SignedOut{}
 	return out, db.InTx(s.d, func(d db.DBTX) error {
 		v, err := device.New(d).Get(id)
@@ -406,13 +414,13 @@ func (s *AccountService) SignOutDevice(id int64) (*SignedOut, error) {
 }
 
 // Delete removes an account and every account that cascades from it, signing
-// out the devices of any of them.
-func (s *AccountService) Delete(id int64) (*SignedOut, error) {
+// out the devices of any of them; by is who moves out those who stay.
+func (s *AccountService) Delete(id uid.ID, by *uid.ID) (*SignedOut, error) {
 	out := &SignedOut{}
-	return out, db.InTx(s.d, func(d db.DBTX) error { return deleteAccount(d, id, out) })
+	return out, db.InTx(s.d, func(d db.DBTX) error { return deleteAccount(d, id, out, by) })
 }
 
-func deleteAccount(d db.DBTX, id int64, out *SignedOut) error {
+func deleteAccount(d db.DBTX, id uid.ID, out *SignedOut, by *uid.ID) error {
 	accounts := account.New(d)
 	gone, err := accounts.DeletedWith(id)
 	if err != nil {
@@ -424,7 +432,7 @@ func deleteAccount(d db.DBTX, id int64, out *SignedOut) error {
 	// Deleting a household's owner deletes the household.
 	switch h, err := household.New(d).OwnedBy(id); {
 	case err == nil:
-		if err := vacate(d, h.ID, out); err != nil {
+		if err := vacate(d, h.ID, out, by); err != nil {
 			return err
 		}
 	case !errors.Is(err, db.ErrNotFound):
@@ -434,7 +442,7 @@ func deleteAccount(d db.DBTX, id int64, out *SignedOut) error {
 		if err := accounts.Delete(id); err != nil {
 			return err
 		}
-		return station.New(d).DeleteUnseen(0, 0)
+		return station.New(d).DeleteUnseen(nil, nil)
 	})
 }
 
@@ -473,16 +481,20 @@ func removing(d db.DBTX, gone []*account.Account, out *SignedOut) error {
 	return nil
 }
 
-// InviteAdult adds a pending adult to a household with a code valid for days.
-func (s *AuthService) InviteAdult(householdID int64, name, email string, days int) (*account.Account, *joincode.JoinCode, error) {
+// InviteAdult adds a pending adult to a household with a code valid for days,
+// the adult under id and the code under joinCodeID when given.
+func (s *AuthService) InviteAdult(householdID uid.ID, name, email string, days int, id, joinCodeID, by *uid.ID) (*account.Account, *joincode.JoinCode, error) {
 	a := &account.Account{Kind: account.Adult, Name: name, Email: email, HouseholdID: &householdID, FilterMode: account.FilterRatings}
+	if id != nil {
+		a.ID = *id
+	}
 	var j *joincode.JoinCode
 	return a, j, db.InTx(s.d, func(d db.DBTX) error {
-		if err := account.New(d).Create(a); err != nil {
+		if err := account.New(d).Create(a, by); err != nil {
 			return err
 		}
 		var err error
-		j, err = newJoinCodeFor(d, a.ID, days)
+		j, err = newJoinCodeFor(d, a.ID, days, joinCodeID, by)
 		return err
 	})
 }
@@ -561,14 +573,15 @@ func (s *AuthService) acceptJoin(code, name, password, deviceName, platform stri
 		if err != nil {
 			return err
 		}
-		if _, err := codes.Redeem(code, now); err != nil {
+		// The joining adult makes these writes.
+		if _, err := codes.Redeem(code, now, &a.ID); err != nil {
 			return err
 		}
-		if err := codes.RevokeUnused(a.ID, now); err != nil {
+		if err := codes.RevokeUnused(a.ID, now, &a.ID); err != nil {
 			return err
 		}
 		a.Name, a.PasswordHash = name, hash
-		if err := account.New(d).Update(a); err != nil {
+		if err := account.New(d).Update(a, &a.ID); err != nil {
 			return err
 		}
 		return signIn(d, a, deviceName, platform, out)
@@ -578,27 +591,27 @@ func (s *AuthService) acceptJoin(code, name, password, deviceName, platform stri
 // ChangePassword replaces an adult's password once current matches, as
 // Confirm checks it, and signs out their devices but deviceID, the one it
 // is changed on.
-func (s *AuthService) ChangePassword(source string, deviceID int64, a *account.Account, current, next string) (*SignedOut, error) {
+func (s *AuthService) ChangePassword(source string, deviceID uid.ID, a *account.Account, current, next string, by *uid.ID) (*SignedOut, error) {
 	if err := s.Confirm(source, a, current); err != nil {
 		return nil, err
 	}
-	return s.replacePassword(a, next, deviceID)
+	return s.replacePassword(a, next, &deviceID, by)
 }
 
 // SetPassword is an admin replacing an adult's password, such as with a
 // temporary one after they forgot theirs, and signing out their devices but
-// deviceID, the admin's own when the adult is them.
-func (s *AuthService) SetPassword(a *account.Account, password string, deviceID int64) (*SignedOut, error) {
+// keep, the admin's own when the adult is them; a nil keep signs out all.
+func (s *AuthService) SetPassword(a *account.Account, password string, keep, by *uid.ID) (*SignedOut, error) {
 	if a.Kind != account.Adult || a.Pending() || a.RevokedAt != nil {
 		return nil, ErrNoPassword
 	}
-	return s.replacePassword(a, password, deviceID)
+	return s.replacePassword(a, password, keep, by)
 }
 
 // replacePassword stores password as a's and signs out a's devices but
 // keep in one transaction, so no device signed in before the change
 // outlives it.
-func (s *AuthService) replacePassword(a *account.Account, password string, keep int64) (*SignedOut, error) {
+func (s *AuthService) replacePassword(a *account.Account, password string, keep, by *uid.ID) (*SignedOut, error) {
 	hash, err := hashSecret(password)
 	if err != nil {
 		return nil, err
@@ -606,7 +619,7 @@ func (s *AuthService) replacePassword(a *account.Account, password string, keep 
 	out := &SignedOut{}
 	return out, db.InTx(s.d, func(d db.DBTX) error {
 		a.PasswordHash = hash
-		if err := account.New(d).Update(a); err != nil {
+		if err := account.New(d).Update(a, by); err != nil {
 			return err
 		}
 		devs, err := device.New(d).ByAccount(a.ID)
@@ -614,13 +627,13 @@ func (s *AuthService) replacePassword(a *account.Account, password string, keep 
 			return err
 		}
 		return signOutDevices(d, slices.DeleteFunc(devs, func(v *device.Device) bool {
-			return v.ID == keep || v.RevokedAt != nil
+			return keep != nil && v.ID == *keep || v.RevokedAt != nil
 		}), out)
 	})
 }
 
 // SetPIN sets or resets a profile's PIN, clearing failures and any lock.
-func (s *AuthService) SetPIN(a *account.Account, pin string) error {
+func (s *AuthService) SetPIN(a *account.Account, pin string, by *uid.ID) error {
 	hash := ""
 	if pin != "" {
 		var err error
@@ -629,7 +642,7 @@ func (s *AuthService) SetPIN(a *account.Account, pin string) error {
 		}
 	}
 	a.PINHash, a.PINFailures, a.PINLockedUntil = hash, 0, nil
-	return account.New(s.d).Update(a)
+	return account.New(s.d).Update(a, by)
 }
 
 // Switch makes the device act as profile to, checking its PIN if it has one.
@@ -642,15 +655,15 @@ func (s *AuthService) Switch(dev *device.Device, to *account.Account, pin *strin
 			return err
 		}
 	}
-	var pid *int64
+	var pid *uid.ID
 	if to.ID != dev.AccountID {
-		pid = &to.ID
+		pid = ref(to.ID)
 	}
 	dev.ProfileID, dev.LockedAt = pid, nil
 	return device.New(s.d).SetProfile(dev.ID, pid)
 }
 
-func (s *AuthService) checkPIN(id int64, pin *string) error {
+func (s *AuthService) checkPIN(id uid.ID, pin *string) error {
 	s.pinMu.Lock()
 	defer s.pinMu.Unlock()
 	accounts := account.New(s.d)
@@ -686,7 +699,7 @@ func AudienceFor(a *account.Account) item.Audience {
 	if a.Kind != account.Kid {
 		return item.Audience{}
 	}
-	return item.Audience{Kid: true, AccountID: a.ID, AllowList: a.FilterMode == account.FilterAllowList,
+	return item.Audience{Kid: true, AccountID: ref(a.ID), AllowList: a.FilterMode == account.FilterAllowList,
 		Movie: account.AtOrBelow(account.MovieRatings, a.MovieCeiling), TV: account.AtOrBelow(account.TVRatings, a.TVCeiling)}
 }
 

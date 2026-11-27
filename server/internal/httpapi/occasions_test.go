@@ -4,7 +4,11 @@ import (
 	"testing"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/api"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
+
+// christmasID is the seeded Christmas occasion's id.
+const christmasID = "00000000-0000-7000-9000-000000000001"
 
 func TestOccasionsCRUDAndValidation(t *testing.T) {
 	e := newEnv(t)
@@ -14,13 +18,20 @@ func TestOccasionsCRUDAndValidation(t *testing.T) {
 		page.Items[1].Name != "Halloween" || page.Items[1].DaysBefore != 30 || page.Items[1].DaysAfter != 1 {
 		t.Fatalf("seeded: %+v", page)
 	}
-	body := map[string]any{"name": "Leap Day", "month": 2, "day": 29, "daysBefore": 0, "daysAfter": 0, "keywordIds": []int64{}}
+	if page.Items[0].Id.String() != christmasID || page.Items[0].CreatedBy != nil {
+		t.Fatalf("Christmas is seeded with its fixed id and no author: %+v", page.Items[0])
+	}
+	oid := uid.New()
+	body := map[string]any{"id": oid, "name": "Leap Day", "month": 2, "day": 29, "daysBefore": 0, "daysAfter": 0, "keywordIds": []int64{}}
 	var leap api.Occasion
 	e.expect(403, "POST", "/occasions", e.plain.token, body, nil)
 	e.expect(201, "POST", "/occasions", e.admin.token, body, &leap)
-	if leap.Month == nil || *leap.Day != 29 || leap.Holiday != nil || leap.KeywordIds == nil {
+	if leap.Id != oid || leap.Month == nil || *leap.Day != 29 || leap.Holiday != nil || leap.KeywordIds == nil ||
+		leap.CreatedBy == nil || *leap.CreatedBy != e.admin.account.ID {
 		t.Fatalf("%+v", leap)
 	}
+	e.expect(409, "POST", "/occasions", e.admin.token, map[string]any{"id": oid, "name": "Another", "month": 3, "day": 1, "daysBefore": 0,
+		"daysAfter": 0, "keywordIds": []int64{}}, nil)
 	e.expect(409, "POST", "/occasions", e.admin.token, map[string]any{"name": "leap day", "holiday": "easter", "daysBefore": 0, "daysAfter": 0,
 		"keywordIds": []int64{}}, nil)
 	for _, bad := range []map[string]any{
@@ -44,13 +55,16 @@ func TestOccasionsCRUDAndValidation(t *testing.T) {
 	body = map[string]any{"name": "Easter", "holiday": "easter", "daysBefore": 7, "daysAfter": 1, "keywordIds": []int64{12, 4}, "phrases": []string{},
 		"colors": []string{}}
 	e.expect(403, "PUT", path, e.plain.token, body, nil)
+	body["id"] = uid.N(1)
+	e.expect(400, "PUT", path, e.admin.token, body, nil)
+	delete(body, "id")
 	e.expect(200, "PUT", path, e.admin.token, body, &leap)
 	var got api.Occasion
 	e.expect(200, "GET", path, e.plain.token, nil, &got)
 	if got.Name != "Easter" || got.Month != nil || got.Day != nil || *got.Holiday != "easter" || len(got.KeywordIds) != 2 || got.KeywordIds[0] != 4 {
 		t.Fatalf("%+v", got)
 	}
-	e.expect(404, "PUT", "/occasions/999", e.admin.token, body, nil)
+	e.expect(404, "PUT", "/occasions/"+itoa(uid.N(999)), e.admin.token, body, nil)
 	e.expect(403, "DELETE", path, e.plain.token, nil, nil)
 	e.expect(204, "DELETE", path, e.admin.token, nil, nil)
 	e.expect(404, "GET", path, e.plain.token, nil, nil)
@@ -68,7 +82,7 @@ func TestOccasionMembersAndSeason(t *testing.T) {
 	must(t, e.svc.Items.Repo().SetKeywords(c.r, []int64{207317}))
 	must(t, e.svc.Items.Repo().SetKeywords(c.adultShow, []int64{207317}))
 	must(t, e.svc.Items.Repo().SetKeywords(c.adultEp, []int64{207317}))
-	christmas := "/occasions/1"
+	christmas := "/occasions/" + christmasID
 	members := christmas + "/members"
 
 	e.expect(403, "GET", members, e.plain.token, nil, nil)
@@ -76,11 +90,11 @@ func TestOccasionMembersAndSeason(t *testing.T) {
 	e.expect(403, "DELETE", members+"/"+itoa(c.r), e.plain.token, nil, nil)
 	e.expect(204, "PUT", members+"/"+itoa(c.g), e.admin.token, nil, nil)
 	e.expect(400, "PUT", members+"/"+itoa(c.kidEp), e.admin.token, nil, nil)
-	e.expect(404, "PUT", members+"/999", e.admin.token, nil, nil)
-	e.expect(404, "PUT", "/occasions/999/members/"+itoa(c.g), e.admin.token, nil, nil)
+	e.expect(404, "PUT", members+"/"+itoa(uid.N(999)), e.admin.token, nil, nil)
+	e.expect(404, "PUT", "/occasions/"+itoa(uid.N(999))+"/members/"+itoa(c.g), e.admin.token, nil, nil)
 	var mp api.OccasionMemberPage
 	e.expect(200, "GET", members, e.admin.token, nil, &mp)
-	via := map[int64]api.OccasionMemberVia{}
+	via := map[uid.ID]api.OccasionMemberVia{}
 	for _, m := range mp.Items {
 		via[m.Item.Id] = m.Via
 	}
@@ -94,7 +108,7 @@ func TestOccasionMembersAndSeason(t *testing.T) {
 	e.expect(204, "DELETE", members+"/"+itoa(c.adultShow), e.admin.token, nil, nil)
 
 	var items api.ItemPage
-	e.expect(200, "GET", "/items?occasionId=1", e.plain.token, nil, &items)
+	e.expect(200, "GET", "/items?occasionId="+christmasID, e.plain.token, nil, &items)
 	if got := ids(items.Items); len(got) != 2 || !got[c.g] || !got[c.r] {
 		t.Fatalf("listItems by occasion: %v", got)
 	}
@@ -114,7 +128,7 @@ func TestOccasionMembersAndSeason(t *testing.T) {
 
 	me := "/profiles/" + itoa(e.plain.account.ID)
 	e.expect(200, "PUT", me+"/preferences", e.plain.token, map[string]any{"hideKidsContent": true}, nil)
-	e.expect(200, "GET", "/items?occasionId=1", e.plain.token, nil, &items)
+	e.expect(200, "GET", "/items?occasionId="+christmasID, e.plain.token, nil, &items)
 	if got := ids(items.Items); len(got) != 1 || !got[c.r] {
 		t.Fatalf("an adult hiding kids' content lists no G film: %v", got)
 	}
@@ -125,7 +139,7 @@ func TestOccasionMembersAndSeason(t *testing.T) {
 		t.Fatalf("%d %s", st, raw)
 	}
 	kidSeason := "/profiles/" + itoa(k.Id) + "/occasions?date=2026-12-20"
-	e.expect(200, "GET", "/items?occasionId=1", e.plain.token, nil, &items)
+	e.expect(200, "GET", "/items?occasionId="+christmasID, e.plain.token, nil, &items)
 	if got := ids(items.Items); len(got) != 1 || !got[c.g] {
 		t.Fatalf("a kid lists only the members they see: %v", got)
 	}
@@ -135,7 +149,9 @@ func TestOccasionMembersAndSeason(t *testing.T) {
 	}
 	e.expect(403, "PUT", members+"/"+itoa(c.g), e.plain.token, nil, nil)
 	// Without the G film the kid sees no member, and no occasion.
-	must(t, e.svc.Occasions.Repo().RemoveMember(1, c.g))
+	cid, err := uid.Parse(christmasID)
+	must(t, err)
+	must(t, e.svc.Occasions.Repo().RemoveMember(cid, c.g))
 	e.expect(200, "GET", kidSeason, e.plain.token, nil, &active)
 	if len(active.Items) != 0 {
 		t.Fatalf("a kid sees an occasion only with a member they see: %+v", active)

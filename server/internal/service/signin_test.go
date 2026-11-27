@@ -10,6 +10,7 @@ import (
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db/dbtest"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/joincode"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/service"
 )
 
@@ -21,7 +22,7 @@ func TestJoinCodeMissesLimitTheSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, j, err := s.Auth.InviteAdult(*sg.Adult.HouseholdID, "Bea", "bea@example.test", 7)
+	_, j, err := s.Auth.InviteAdult(*sg.Adult.HouseholdID, "Bea", "bea@example.test", 7, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,5 +131,45 @@ func TestSignInSuccessDoesNotCount(t *testing.T) {
 		if _, err := s.Auth.SignIn("10.0.0.9", "o@example.test", "right-password", "Laptop", "web"); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// Joining and signing in are the adult's own writes: they never leave the
+// rows they change looking written by no one.
+func TestJoiningAndSigningInAreTheAdultsWrites(t *testing.T) {
+	d := dbtest.Open(t)
+	s := service.New(d)
+	sg, err := s.Auth.Setup("Den", "Owner", "o@example.test", "right-password", "Laptop", "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := sg.Adult
+	bea, j, err := s.Auth.InviteAdult(*owner.HouseholdID, "Bea", "bea@example.test", 7, nil, nil, &owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Auth.AcceptJoin("10.0.0.10", j.Code, "Bea", "right-password", "Phone", "ios"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Accounts.Repo().Get(bea.ID)
+	if err != nil || got.ModifiedBy == nil || *got.ModifiedBy != bea.ID {
+		t.Fatalf("the joined account was last written by %v: %v", got.ModifiedBy, err)
+	}
+	if code, err := joincode.New(d).Get(j.ID); err != nil || code.ModifiedBy == nil || *code.ModifiedBy != bea.ID {
+		t.Fatalf("the redeemed code was last written by %+v: %v", code, err)
+	}
+
+	if _, err := s.Households.Delete(*owner.HouseholdID, &owner.ID); err != nil {
+		t.Fatal(err)
+	}
+	signed, err := s.Auth.SignIn("10.0.0.11", "o@example.test", "right-password", "Tablet", "ios")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err = s.Accounts.Repo().Get(owner.ID); err != nil || got.ModifiedBy == nil || *got.ModifiedBy != owner.ID {
+		t.Fatalf("the adult given a household was last written by %v: %v", got.ModifiedBy, err)
+	}
+	if h, err := s.Households.Repo().Get(*signed.Adult.HouseholdID); err != nil || h.CreatedBy == nil || *h.CreatedBy != owner.ID {
+		t.Fatalf("the household made at sign-in %+v: %v", h, err)
 	}
 }

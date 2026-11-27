@@ -1,13 +1,12 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
-import { quiet, seed, seedMusic, signIn } from "./support";
+import { api, quiet, seed, seedMusic, signIn } from "./support";
 
 test.describe.configure({ mode: "serial" });
 
 test.beforeEach(({ page }) => page.addInitScript(quiet));
 
-const api = "/api/v1";
 type Headers = { Authorization: string };
-const made: number[] = [];
+const made: string[] = [];
 
 // Stations go with the playlists they own, so later specs see a Home without an On now row.
 test.afterEach(async ({ page, request }) => {
@@ -25,7 +24,7 @@ async function makeStation(
   request: APIRequestContext,
   headers: Headers,
   kind: string,
-  itemId: number,
+  itemId: string,
   name: string,
 ) {
   // Signing in lands on Home; navigating before it has would be undone by it.
@@ -34,7 +33,7 @@ async function makeStation(
   await page.getByLabel("Name").fill(name);
   await page.getByRole("button", { name: "Save" }).click();
   await expect(page.getByRole("heading", { name })).toBeVisible();
-  const id = Number(/#\/station\/(\d+)/.exec(page.url())![1]);
+  const id = /#\/station\/([^/?]+)/.exec(page.url())![1];
   made.push(id);
   const me = await (await request.get(`${api}/me`, { headers })).json();
   const st = await (await request.get(`${api}/stations/${id}`, { headers })).json();

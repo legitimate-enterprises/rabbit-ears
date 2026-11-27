@@ -125,9 +125,9 @@ func TestLocalMetadataTask(t *testing.T) {
 	fixtureCopy(t, "chapters.mkv", filepath.Join(e.root, "Plain (2001)", "Plain (2001).mkv"))
 	e.mustScan()
 	tv := &library.Library{Name: "TV", Kind: library.TV}
-	must(t, e.s.Libraries.Create(tv))
+	must(t, e.s.Libraries.Create(tv, nil))
 	tvRoot := t.TempDir()
-	_, err := e.s.Libraries.AddFolder(tv.ID, tvRoot)
+	err := e.s.Libraries.AddFolder(&library.Folder{LibraryID: tv.ID, Path: tvRoot}, nil)
 	must(t, err)
 	fixtureCopy(t, "h264-high41.mp4", filepath.Join(tvRoot, "Show", "Season 01", "Show - S01E02.mp4"))
 	fixtureCopy(t, "hdr10-main10.mkv", filepath.Join(tvRoot, "Show", "Season 01", "Show - S01E01.mkv"))
@@ -173,7 +173,7 @@ func TestLocalMetadataTask(t *testing.T) {
 	if plain.BackdropPath == "" || plain.Title != "" {
 		t.Errorf("plain %+v", plain)
 	}
-	shows, err := e.items.List(item.Filter{LibraryID: tv.ID, Kind: item.Show})
+	shows, err := e.items.List(item.Filter{LibraryID: &tv.ID, Kind: item.Show})
 	must(t, err)
 	if len(shows) != 1 {
 		t.Fatalf("shows %v", shows)

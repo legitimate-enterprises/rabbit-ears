@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/api"
@@ -19,6 +18,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/playback"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/playlist"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/service"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // maxDownloadTitles is the most titles one ResolveDownloads covers.
@@ -36,7 +36,7 @@ func (s *Server) ResolveDownloads(ctx context.Context, r api.ResolveDownloadsReq
 		return nil, err
 	}
 	a := service.AudienceFor(who)
-	seen := map[int64]bool{}
+	seen := map[uid.ID]bool{}
 	var rows []playlist.Row
 	for _, t := range r.Body.Targets {
 		got, err := s.downloadTarget(ctx, who, a, t)
@@ -71,7 +71,7 @@ func (s *Server) ResolveDownloads(ctx context.Context, r api.ResolveDownloadsReq
 // the audience may not see is not found.
 func (s *Server) downloadTarget(ctx context.Context, who *account.Account, a item.Audience, t api.DownloadTarget) ([]playlist.Row, error) {
 	n := 0
-	for _, id := range []*int64{t.ItemId, t.CollectionId, t.PlaylistId} {
+	for _, id := range []*uid.ID{t.ItemId, t.CollectionId, t.PlaylistId} {
 		if id != nil {
 			n++
 		}
@@ -89,7 +89,6 @@ func (s *Server) downloadTarget(ctx context.Context, who *account.Account, a ite
 		if err != nil {
 			return nil, err
 		}
-		ed := int64(0)
 		if t.EditionId != nil {
 			if !isTitle(it.Kind) {
 				return nil, invalid("targets", "editionId goes with the itemId of a title")
@@ -97,14 +96,13 @@ func (s *Server) downloadTarget(ctx context.Context, who *account.Account, a ite
 			if _, err := s.edition(it.ID, *t.EditionId); err != nil {
 				return nil, err
 			}
-			ed = *t.EditionId
 		}
-		return lists.Expand(it.ID, 0, ed, a)
+		return lists.Expand(&it.ID, nil, t.EditionId, a)
 	case t.CollectionId != nil:
 		if _, err := s.svc.Collections.Repo().Seen(caller(ctx).device.HouseholdID, *t.CollectionId, a); err != nil {
 			return nil, err
 		}
-		return lists.Expand(0, *t.CollectionId, 0, a)
+		return lists.Expand(nil, t.CollectionId, nil, a)
 	default:
 		p, err := lists.Get(*t.PlaylistId)
 		if err != nil {
@@ -121,13 +119,13 @@ func (s *Server) downloadTarget(ctx context.Context, who *account.Account, a ite
 }
 
 // edition is an edition of the item; one of another item is not found.
-func (s *Server) edition(itemID, editionID int64) (int64, error) {
+func (s *Server) edition(itemID, editionID uid.ID) (uid.ID, error) {
 	ed, err := s.svc.Editions.Repo().Get(editionID)
 	if err == nil && ed.ItemID != itemID {
 		err = errNotFound
 	}
 	if err != nil {
-		return 0, err
+		return uid.ID{}, err
 	}
 	return ed.ID, nil
 }
@@ -141,10 +139,7 @@ func planVerdict(p *playback.DownloadPlan) api.Verdict {
 
 func toDownloadTitle(t *service.DownloadTitle) api.DownloadTitle {
 	out := api.DownloadTitle{ItemId: t.ItemID, Kind: api.DownloadTitleKind(t.Kind), LibraryId: t.LibraryID, RuntimeMs: t.RuntimeMs,
-		Available: t.Plan != nil, Watched: t.Watched, PositionMs: t.PositionMs}
-	if t.EditionID != 0 {
-		out.EditionId = &t.EditionID
-	}
+		Available: t.Plan != nil, Watched: t.Watched, PositionMs: t.PositionMs, EditionId: t.EditionID}
 	if p := t.Plan; p != nil {
 		q, v, estimated := api.DownloadQuality(p.Quality), planVerdict(p), !p.Original
 		out.Quality, out.Verdict, out.Container, out.SizeBytes, out.Estimated = &q, &v, &p.Container, &p.Bytes, &estimated
@@ -160,7 +155,7 @@ func (s *Server) SyncDownloads(ctx context.Context, r api.SyncDownloadsRequestOb
 		return nil, err
 	}
 	a := service.AudienceFor(who)
-	out := api.SyncDownloads200JSONResponse{Keep: []int64{}, Remove: []int64{}}
+	out := api.SyncDownloads200JSONResponse{Keep: []uid.ID{}, Remove: []uid.ID{}}
 	for _, id := range r.Body.ItemIds {
 		ok, err := s.svc.Items.Repo().Visible(id, a)
 		if err != nil {
@@ -205,7 +200,7 @@ func (s *Server) CreateDownload(ctx context.Context, r api.CreateDownloadRequest
 		return nil, err
 	}
 	in := r.Body
-	v, err := s.claim(ctx, who, api.DownloadBatchTitle{ItemId: in.ItemId, EditionId: in.EditionId, AudioTrackId: in.AudioTrackId},
+	v, err := s.claim(ctx, who, api.DownloadBatchTitle{Id: in.Id, ItemId: in.ItemId, EditionId: in.EditionId, AudioTrackId: in.AudioTrackId},
 		toSnapshot(ctx, in.Snapshot, false), string(in.Quality))
 	if err != nil {
 		return nil, err
@@ -233,6 +228,8 @@ func (s *Server) CreateDownloads(ctx context.Context, r api.CreateDownloadsReque
 			res.Error = &ae.body
 		case errors.Is(err, db.ErrNotFound):
 			res.Error = &errNotFound.body
+		case errors.Is(err, db.ErrConflict):
+			res.Error = &api.Error{Code: api.ErrorCodeConflict, Message: "already exists"}
 		default:
 			return nil, err
 		}
@@ -250,11 +247,13 @@ func (s *Server) claim(ctx context.Context, who *account.Account, in api.Downloa
 	if !isTitle(it.Kind) {
 		return api.Download{}, invalid("itemId", "a download is of a movie, episode, song or video")
 	}
-	ed := int64(0)
+	var ed *uid.ID
 	if in.EditionId != nil {
-		if ed, err = s.edition(it.ID, *in.EditionId); err != nil {
+		e, err := s.edition(it.ID, *in.EditionId)
+		if err != nil {
 			return api.Download{}, err
 		}
+		ed = &e
 	}
 	row, err := s.svc.Downloads.Row(it, ed)
 	if err != nil {
@@ -264,7 +263,7 @@ func (s *Server) claim(ctx context.Context, who *account.Account, in api.Downloa
 	if err != nil {
 		return api.Download{}, err
 	}
-	d, err := s.svc.Downloads.Create(caller(ctx).device.ID, who.ID, t)
+	d, err := s.svc.Downloads.Create(caller(ctx).device.ID, who.ID, t, in.Id, actor(ctx))
 	if errors.Is(err, service.ErrNotDownloadable) {
 		return api.Download{}, fail(http.StatusConflict, api.ErrorCodeConflict, err.Error())
 	}
@@ -276,7 +275,7 @@ func (s *Server) claim(ctx context.Context, who *account.Account, in api.Downloa
 
 // ownDownload is one of this device's downloads for a profile it may act
 // for, of a title the profile may still see.
-func (s *Server) ownDownload(ctx context.Context, profileID, id int64) (*download.Download, error) {
+func (s *Server) ownDownload(ctx context.Context, profileID, id uid.ID) (*download.Download, error) {
 	who, err := s.profile(ctx, profileID)
 	if err != nil {
 		return nil, err
@@ -310,7 +309,8 @@ func (s *Server) toDownload(d *download.Download) (api.Download, error) {
 	}
 	out := api.Download{Id: d.ID, ProfileId: d.AccountID, ItemId: d.ItemID, EditionId: d.EditionID, MediaFileId: d.MediaFileID,
 		Quality: api.DownloadQuality(d.Quality), Status: api.DownloadStatusReady, Verdict: api.DirectPlay, Container: f.Container,
-		SizeBytes: f.SizeBytes, Progress: 1, Subtitles: []api.DownloadSubtitle{}, CreatedAt: d.CreatedAt}
+		SizeBytes: f.SizeBytes, Progress: 1, Subtitles: []api.DownloadSubtitle{}, CreatedAt: d.CreatedAt, ModifiedAt: d.ModifiedAt,
+		CreatedBy: d.CreatedBy, ModifiedBy: d.ModifiedBy}
 	var c *download.Conversion
 	if d.ConversionID != nil {
 		if c, err = s.svc.Downloads.Repo().Conversion(*d.ConversionID); err != nil {
@@ -324,7 +324,7 @@ func (s *Server) toDownload(d *download.Download) (api.Download, error) {
 		}
 		out.Error = optStr(c.Error)
 	}
-	base := fmt.Sprintf("%s/downloads/%d", BasePath, d.ID)
+	base := BasePath + "/downloads/" + d.ID.String()
 	if out.Status == api.DownloadStatusReady {
 		url := base + "/file"
 		out.Url = &url
@@ -333,7 +333,7 @@ func (s *Server) toDownload(d *download.Download) (api.Download, error) {
 	for _, t := range m.Tracks {
 		if t.Kind == mediafile.Subtitle && t.SubtitleIsText != nil && *t.SubtitleIsText {
 			out.Subtitles = append(out.Subtitles, api.DownloadSubtitle{TrackId: t.ID, Language: optStr(t.Language), Title: optStr(t.Title),
-				IsForced: t.IsForced, Url: fmt.Sprintf("%s/subtitles/%d.vtt", base, t.ID)})
+				IsForced: t.IsForced, Url: base + "/subtitles/" + t.ID.String() + ".vtt"})
 		}
 	}
 	return out, nil
@@ -397,8 +397,8 @@ func (s *Server) toConversion(c *download.Conversion) (api.Conversion, error) {
 	e := c.Entry
 	out := api.Conversion{Id: c.ID, MediaFileId: c.MediaFileID, Status: api.ConversionStatus(c.Status), Verdict: api.Verdict(e.Verdict),
 		Container: api.ConversionContainer(c.Container), Bitrate: e.TopBitrate, SizeBytes: c.PredictedBytes, Estimated: c.SizeBytes == nil,
-		Progress: s.svc.Downloads.Progress(c), Downloads: n, Error: optStr(c.Error), CreatedAt: c.CreatedAt, StartedAt: c.StartedAt,
-		FinishedAt: c.FinishedAt}
+		Progress: s.svc.Downloads.Progress(c), Downloads: n, Error: optStr(c.Error), CreatedAt: c.CreatedAt, ModifiedAt: c.ModifiedAt,
+		StartedAt: c.StartedAt, FinishedAt: c.FinishedAt}
 	if c.SizeBytes != nil {
 		out.SizeBytes = *c.SizeBytes
 	}
@@ -448,7 +448,7 @@ func (h *downloadFiles) find(r *http.Request) (*download.Download, error) {
 	if dev.LockedAt != nil {
 		return nil, errLocked
 	}
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	id, err := uid.Parse(r.PathValue("id"))
 	if err != nil {
 		return nil, errNotFound
 	}
@@ -545,7 +545,7 @@ func (h *downloadFiles) subtitle(w http.ResponseWriter, r *http.Request, d *down
 		responseError(w, r, err)
 		return
 	}
-	id, err := strconv.ParseInt(strings.TrimSuffix(r.PathValue("name"), ".vtt"), 10, 64)
+	id, err := uid.Parse(strings.TrimSuffix(r.PathValue("name"), ".vtt"))
 	t := trackByID(m.Tracks, &id)
 	if err != nil || t == nil || t.Kind != mediafile.Subtitle || t.SubtitleIsText == nil || !*t.SubtitleIsText {
 		responseError(w, r, db.ErrNotFound)

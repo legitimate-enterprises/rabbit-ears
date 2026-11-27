@@ -14,6 +14,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/library"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/mediafile"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/session"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 func plan() []*session.PlanEntry {
@@ -27,16 +28,16 @@ func plan() []*session.PlanEntry {
 func setup(t *testing.T) (*session.Repo, *session.Session) {
 	d := dbtest.Open(t)
 	a := &account.Account{Kind: account.Adult, Email: "a@example.test", Name: "A", PasswordHash: "x"}
-	_ = account.New(d).Create(a)
+	_ = account.New(d).Create(a, nil)
 	h := &household.Household{Name: "h", AdultID: a.ID}
-	_ = household.New(d).Create(h)
+	_ = household.New(d).Create(h, nil)
 	dev := &device.Device{TokenHash: "t", Name: "d", Platform: "web", AccountID: a.ID, HouseholdID: h.ID}
 	_ = device.New(d).Create(dev)
 	l := &library.Library{Name: "m", Kind: library.Movies}
-	_ = library.New(d).Create(l)
+	_ = library.New(d).Create(l, nil)
 	it := &item.Item{LibraryID: l.ID, Kind: item.Movie, ParsedTitle: "m"}
 	_ = item.New(d).Create(it)
-	f := &mediafile.File{ItemID: it.ID, Path: "/a.mkv"}
+	f := &mediafile.File{ItemID: &it.ID, Path: "/a.mkv"}
 	if err := mediafile.New(d).CreateFile(f); err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +58,7 @@ func TestCreatePlanAndPosition(t *testing.T) {
 		t.Fatal(err)
 	}
 	g, _ := r.Get(s.ID)
-	if g.PositionMs != 61000 || !g.UpdatedAt.Equal(at) || g.EndedAt != nil {
+	if g.PositionMs != 61000 || !g.ModifiedAt.Equal(at) || g.EndedAt != nil {
 		t.Fatalf("%+v", g)
 	}
 	if a, _ := r.Active(); len(a) != 1 {
@@ -92,7 +93,7 @@ func TestCreateRollsBackOnBadPlan(t *testing.T) {
 	if l, _ := r.List(10, 0); len(l) != 0 {
 		t.Fatal("session row survived a failed plan insert")
 	}
-	s.ItemID = 999
+	s.ItemID = uid.N(999)
 	if err := r.Create(s, plan()); !errors.Is(err, db.ErrReference) {
 		t.Fatal(err)
 	}
@@ -124,7 +125,7 @@ func TestFailEntryFallsDownThePlan(t *testing.T) {
 	if g, _ := r.Get(s.ID); g.CurrentEntry != 0 {
 		t.Fatal("replace should reset to first entry")
 	}
-	if _, err := r.FailEntry(999, 0, "x"); !errors.Is(err, db.ErrNotFound) {
+	if _, err := r.FailEntry(uid.N(999), 0, "x"); !errors.Is(err, db.ErrNotFound) {
 		t.Fatal(err)
 	}
 }
@@ -185,7 +186,7 @@ func TestEncoderFieldsAndStreamKey(t *testing.T) {
 	if err := r.SetProgram(s.ID, s.ItemID, s.MediaFileID); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.SetProgram(s.ID, s.ItemID, 999); !errors.Is(err, db.ErrReference) {
+	if err := r.SetProgram(s.ID, s.ItemID, uid.N(999)); !errors.Is(err, db.ErrReference) {
 		t.Fatalf("a file that does not exist: %v", err)
 	}
 	if _, err := r.ByStreamKey("k1"); !errors.Is(err, db.ErrNotFound) {
@@ -200,6 +201,32 @@ func TestEncoderFieldsAndStreamKey(t *testing.T) {
 	}
 }
 
+// Only the device's reports keep a session from being reaped: the server
+// changing its key, program or plan entry leaves its last report as it was.
+func TestServerChangesLeaveTheLastReport(t *testing.T) {
+	r, s := setup(t)
+	if err := r.Create(s, plan()); err != nil {
+		t.Fatal(err)
+	}
+	reported := time.Now().Add(-time.Hour).UTC().Truncate(time.Millisecond)
+	if err := r.SetPosition(s.ID, 1000, reported); err != nil {
+		t.Fatal(err)
+	}
+	for name, change := range map[string]func() error{
+		"stream key": func() error { return r.SetStreamKey(s.ID, "k2") },
+		"program":    func() error { return r.SetProgram(s.ID, s.ItemID, s.MediaFileID) },
+		"fall back":  func() error { _, err := r.FailEntry(s.ID, 0, "ffmpeg exited"); return err },
+		"new plan":   func() error { return r.ReplacePlan(s.ID, plan()) },
+	} {
+		if err := change(); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if g, _ := r.Get(s.ID); !g.ModifiedAt.Equal(reported) {
+			t.Errorf("%s moved the last report to %v", name, g.ModifiedAt)
+		}
+	}
+}
+
 func TestThroughputSamples(t *testing.T) {
 	r, s := setup(t)
 	_ = r.Create(s, plan())
@@ -207,7 +234,7 @@ func TestThroughputSamples(t *testing.T) {
 	rung := 1
 	height, bitrate := 720, int64(4e6)
 	in := &session.Sample{SessionID: s.ID, At: at, MeasuredBitrate: 8e6, BufferMs: 12000, StallCount: 1, CurrentRung: &rung, RungHeight: &height, RungBitrate: &bitrate}
-	if err := r.AddSample(in); err != nil || in.ID == 0 {
+	if err := r.AddSample(in); err != nil || in.ID.IsZero() {
 		t.Fatal(err)
 	}
 	if err := r.AddSample(&session.Sample{SessionID: s.ID, At: at.Add(time.Second)}); err != nil {

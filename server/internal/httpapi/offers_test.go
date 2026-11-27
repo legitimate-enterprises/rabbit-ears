@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/api"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 func (e *env) offers(token string) api.ProfileOfferList {
@@ -14,15 +15,15 @@ func (e *env) offers(token string) api.ProfileOfferList {
 	return l
 }
 
-func (e *env) offer(want int, token string, profile, to int64) api.ProfileOffer {
+func (e *env) offer(want int, token string, profile, to uid.ID) api.ProfileOffer {
 	e.t.Helper()
 	var o api.ProfileOffer
 	e.expect(want, "POST", "/household/offers", token, map[string]any{"profileId": profile, "toProfileId": to}, &o)
 	return o
 }
 
-func offerIDs(os []api.ProfileOffer) []int64 {
-	var out []int64
+func offerIDs(os []api.ProfileOffer) []uid.ID {
+	var out []uid.ID
 	for _, o := range os {
 		out = append(out, o.Id)
 	}
@@ -104,10 +105,10 @@ func TestAnAdultOffersAKidToALinkedAdult(t *testing.T) {
 		t.Fatal("both sides hear of an offer")
 	}
 	e.offer(409, e.plain.token, mia.Id, admin)
-	if got := e.offers(e.admin.token); !slices.Equal(offerIDs(got.Incoming), []int64{o.Id}) || len(got.Outgoing) != 0 {
+	if got := e.offers(e.admin.token); !slices.Equal(offerIDs(got.Incoming), []uid.ID{o.Id}) || len(got.Outgoing) != 0 {
 		t.Fatalf("incoming to the adult offered to: %+v", got)
 	}
-	if got := e.offers(cy.token); len(got.Incoming) != 0 || !slices.Equal(offerIDs(got.Outgoing), []int64{o.Id}) {
+	if got := e.offers(cy.token); len(got.Incoming) != 0 || !slices.Equal(offerIDs(got.Outgoing), []uid.ID{o.Id}) {
 		t.Fatalf("outgoing to the offering household's adults: %+v", got)
 	}
 	e.expect(403, "POST", "/household/offers/"+itoa(o.Id)+"/accept", e.plain.token, nil, nil)

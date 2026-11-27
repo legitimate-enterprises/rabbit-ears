@@ -5,19 +5,21 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/api"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 var actionCount atomic.Int64
 
 // action is one queued call acting as profile, with a fresh id and no
 // touched rows.
-func action(op, method, path string, profile int64, body any) map[string]any {
+func action(op, method, path string, profile uid.ID, body any) map[string]any {
 	a := map[string]any{"id": fmt.Sprintf("00000000-0000-4000-8000-%012d", actionCount.Add(1)), "operationId": op,
 		"method": method, "path": path, "actingProfileId": profile, "at": time.Now().UTC(), "touched": []any{}}
 	if body != nil {
@@ -74,7 +76,7 @@ func (e *env) count(q string, args ...any) int64 {
 	return n
 }
 
-func (e *env) playCount(profile, item int64) int64 {
+func (e *env) playCount(profile, item uid.ID) int64 {
 	return e.count(`SELECT COALESCE(SUM(play_count), 0) FROM watch_state WHERE account_id = ? AND item_id = ?`, profile, item)
 }
 
@@ -83,7 +85,7 @@ func withoutInstants(v any) any {
 	switch t := v.(type) {
 	case map[string]any:
 		for k, x := range t {
-			if k == "createdAt" || k == "updatedAt" || k == "addedAt" {
+			if k == "createdAt" || k == "modifiedAt" || k == "addedAt" {
 				delete(t, k)
 			} else {
 				t[k] = withoutInstants(x)
@@ -100,18 +102,42 @@ func withoutInstants(v any) any {
 // A replayed action leaves the server as the same call made directly does.
 func TestReplayMatchesDirectCalls(t *testing.T) {
 	direct, replayed := newEnv(t), newEnv(t)
-	type fixture struct{ kid, m1, m2 int64 }
-	setup := func(e *env) fixture {
-		lib := e.library("movies")
-		f := fixture{e.kid(e.plain, "Kid").Id, e.movie(lib, "Heat"), e.movie(lib, "Ronin")}
-		e.file(f.m1, 600_000)
-		e.file(f.m2, 600_000)
-		return f
+	// An id a client chooses is the same on both servers; one a server
+	// mints is not, so each call names its own server's, and a replayed
+	// answer is read with the direct server's.
+	kid := uid.New()
+	type fixture struct{ lib, m1, m2 uid.ID }
+	setup := func(e *env) (f fixture, minted []uid.ID) {
+		e.expect(201, "POST", "/profiles", e.plain.token, map[string]any{"id": kid, "name": "Kid", "birthday": "2018-05-01", "movieCeiling": "PG",
+			"tvCeiling": "TV-Y7"}, nil)
+		f.lib = e.library("movies")
+		f.m1, f.m2 = e.movie(f.lib, "Heat"), e.movie(f.lib, "Ronin")
+		minted = []uid.ID{e.plain.account.ID, e.plain.household.ID, f.lib, f.m1, f.m2}
+		for _, m := range []uid.ID{f.m1, f.m2} {
+			e.file(m, 600_000)
+			eds, err := e.svc.Editions.Repo().ForItem(m)
+			must(t, err)
+			for _, ed := range eds {
+				files, err := e.svc.MediaFiles.Repo().FilesForEdition(ed.ID)
+				must(t, err)
+				minted = append(minted, ed.ID)
+				for _, file := range files {
+					minted = append(minted, file.ID)
+				}
+			}
+		}
+		return f, minted
 	}
-	f := setup(direct)
-	if setup(replayed) != f {
+	f, ours := setup(direct)
+	_, theirs := setup(replayed)
+	if len(ours) != len(theirs) {
 		t.Fatal("the two servers differ before any call")
 	}
+	var to, from []string
+	for i := range ours {
+		to, from = append(to, ours[i].String(), theirs[i].String()), append(from, theirs[i].String(), ours[i].String())
+	}
+	there, back := strings.NewReplacer(to...), strings.NewReplacer(from...)
 	me := direct.plain.account.ID
 	both := func(op, method, path string, body any) []byte {
 		t.Helper()
@@ -119,16 +145,26 @@ func TestReplayMatchesDirectCalls(t *testing.T) {
 		if status >= 300 {
 			t.Fatalf("%s %s = %d: %s", method, path, status, raw)
 		}
-		replayed.accepted(replayed.plain, action(op, method, path, me, body))
+		var b any
+		if body != nil {
+			j, err := json.Marshal(body)
+			must(t, err)
+			b = json.RawMessage(there.Replace(string(j)))
+		}
+		replayed.accepted(replayed.plain, action(op, method, there.Replace(path), replayed.plain.account.ID, b))
 		return raw
 	}
 	same := func(path string) {
 		t.Helper()
 		var got [2]any
 		for i, e := range []*env{direct, replayed} {
-			_, raw := e.do("GET", path, e.plain.token, nil, nil)
+			p := path
+			if e == replayed {
+				p = there.Replace(path)
+			}
+			_, raw := e.do("GET", p, e.plain.token, nil, nil)
 			var v any
-			must(t, json.Unmarshal(raw, &v))
+			must(t, json.Unmarshal([]byte(back.Replace(string(raw))), &v))
 			got[i] = withoutInstants(v)
 		}
 		if !reflect.DeepEqual(got[0], got[1]) {
@@ -144,32 +180,32 @@ func TestReplayMatchesDirectCalls(t *testing.T) {
 
 	lists := "/profiles/" + itoa(me) + "/playlists"
 	var pl api.Playlist
-	must(t, json.Unmarshal(both("createPlaylist", "POST", lists, map[string]any{"name": "Weekend", "kind": "movies"}), &pl))
+	must(t, json.Unmarshal(both("createPlaylist", "POST", lists, map[string]any{"id": uid.New(), "name": "Weekend", "kind": "movies"}), &pl))
 	one := lists + "/" + itoa(pl.Id)
-	both("addPlaylistEntry", "POST", one+"/entries", map[string]any{"itemId": f.m1, "rank": "a0"})
-	both("addPlaylistEntry", "POST", one+"/entries", map[string]any{"itemId": f.m2, "rank": "Zz"})
+	both("addPlaylistEntry", "POST", one+"/entries", map[string]any{"id": uid.New(), "itemId": f.m1, "rank": "a0"})
+	both("addPlaylistEntry", "POST", one+"/entries", map[string]any{"id": uid.New(), "itemId": f.m2, "rank": "Zz"})
 	same(one + "/entries")
 	// What is on and when is the station clock's, the same on both.
 	at := time.Date(2030, 1, 2, 20, 10, 0, 0, time.Local)
 	direct.svc.Stations.Now = func() time.Time { return at }
 	replayed.svc.Stations.Now = direct.svc.Stations.Now
 	var st api.Station
-	must(t, json.Unmarshal(both("createStation", "POST", "/stations", map[string]any{"name": "Late", "playlistId": pl.Id}), &st))
+	must(t, json.Unmarshal(both("createStation", "POST", "/stations", map[string]any{"id": uid.New(), "name": "Late", "playlistId": pl.Id}), &st))
 	station := "/stations/" + itoa(st.Id)
 	both("replaceStation", "PUT", station, map[string]any{"name": "Later", "timing": "continuous"})
 	at = at.Add(20 * time.Minute)
 	both("rescheduleStation", "POST", station+"/reschedule", nil)
 	same(station)
 	same(station + "/schedule?date=2030-01-02")
-	must(t, json.Unmarshal(both("createPlaylist", "POST", lists, map[string]any{"name": "Gone", "kind": "movies"}), &pl))
+	must(t, json.Unmarshal(both("createPlaylist", "POST", lists, map[string]any{"id": uid.New(), "name": "Gone", "kind": "movies"}), &pl))
 	both("deletePlaylist", "DELETE", lists+"/"+itoa(pl.Id), nil)
 	same(lists)
 
-	kid := "/profiles/" + itoa(f.kid)
-	both("allowItem", "PUT", kid+"/allowed-items/"+itoa(f.m2), nil)
-	same(kid + "/allowed-items")
-	both("setProfilePreferences", "PUT", kid+"/preferences", map[string]any{"autoplay": false, "color": "#2E6B5B"})
-	same(kid)
+	profile := "/profiles/" + itoa(kid)
+	both("allowItem", "PUT", profile+"/allowed-items/"+itoa(f.m2), nil)
+	same(profile + "/allowed-items")
+	both("setProfilePreferences", "PUT", profile+"/preferences", map[string]any{"autoplay": false, "color": "#2E6B5B"})
+	same(profile)
 }
 
 // An action the operation refuses is rejected with the operation's code
@@ -185,7 +221,7 @@ func TestReplayRejectsWithTheOperationsCode(t *testing.T) {
 		action("putWatchState", "PUT", ws+itoa(m), me, map[string]any{"watched": false, "positionMs": -1}),
 		action("putWatchState", "PUT", ws+itoa(m), me, nil),
 		action("allowItem", "PUT", "/profiles/"+itoa(k)+"/allowed-items/"+itoa(m), k, nil),
-		action("putWatchState", "PUT", ws+"999", me, map[string]any{"watched": true}),
+		action("putWatchState", "PUT", ws+itoa(uid.N(999)), me, map[string]any{"watched": true}),
 		action("putWatchState", "PUT", ws+itoa(m), me, map[string]any{"watched": true}),
 	)
 	if len(res) != 5 {
@@ -212,7 +248,7 @@ func TestReplayAnswersARetryWithoutRunning(t *testing.T) {
 	me := e.plain.account.ID
 	ws := "/profiles/" + itoa(me) + "/watch-state/"
 	play := action("recordPlay", "POST", ws+itoa(m)+"/plays", me, map[string]any{"at": time.Now().UTC().Add(-time.Hour)})
-	missing := action("recordPlay", "POST", ws+"999/plays", me, map[string]any{"at": time.Now().UTC()})
+	missing := action("recordPlay", "POST", ws+itoa(uid.N(999))+"/plays", me, map[string]any{"at": time.Now().UTC()})
 	b := batch(play, missing)
 	var wg sync.WaitGroup
 	for range 4 {
@@ -254,9 +290,11 @@ func TestReplayRunsOnlyReplayableOperations(t *testing.T) {
 		action("putWatchState", "PUT", "/profiles/"+itoa(k)+"/allowed-items/"+itoa(m), me, nil),
 		action("putWatchState", "PUT", "/nowhere", me, map[string]any{"watched": true}),
 		action("putWatchState", "POST", "/profiles/"+itoa(me)+"/watch-state/"+itoa(m), me, map[string]any{"watched": true}),
+		// A path is relative to the base path; one recorded with an old one names nothing.
+		action("putWatchState", "PUT", "/api/v1/profiles/"+itoa(me)+"/watch-state/"+itoa(m), me, map[string]any{"watched": true}),
 	)
 	res = append(res, e.replay(e.admin, action("createLibrary", "POST", "/libraries", admin, map[string]any{"name": "L", "kind": "movies"}))...)
-	if len(res) != 6 {
+	if len(res) != 7 {
 		t.Fatalf("%+v", res)
 	}
 	for _, r := range res {
@@ -281,7 +319,7 @@ func TestReplayActsAsAProfileOfTheHousehold(t *testing.T) {
 	e.expect(204, "PUT", "/profiles/"+itoa(k)+"/pin", e.plain.token, map[string]any{"pin": "1234"}, nil)
 	e.expect(200, "PUT", "/accounts/"+itoa(gone), e.admin.token, map[string]any{"kind": "kid", "name": "Gone", "birthday": "2018-05-01", "revoked": true}, nil)
 	stranger := e.admin.account.ID
-	put := func(profile int64) map[string]any {
+	put := func(profile uid.ID) map[string]any {
 		return action("putWatchState", "PUT", "/profiles/"+itoa(profile)+"/watch-state/"+itoa(m), profile, map[string]any{"watched": true})
 	}
 	res := e.replay(e.plain, put(stranger), put(gone))
@@ -354,16 +392,19 @@ func TestReplayRefusesAMalformedBatch(t *testing.T) {
 		{touched("no_such_table", 1)},
 		{touched("watch_state", me)},
 		{touched("watch_state", me, m, 1)},
-		{touched("library", 1, 2)},
+		{touched("library", uid.N(1), uid.N(2))},
 		{touched("watch_state", me, nil)},
 		{touched("watch_state", me, true)},
 		{touched("watch_state", me, map[string]any{"id": m})},
 		{touched("watch_state", me, []any{m})},
 		{touched("sync_action", 1, "x")},
-		{touched("watch_state", me, itoa(m))},
+		{touched("watch_state", me, 1)},
+		{touched("watch_state", me, "12")},
+		{touched("watch_state", me, strings.ToUpper(m.String()))},
+		{touched("watch_state", me, "00000000-0000-4000-8000-000000000001")},
 		{touched("library", "1")},
 		{touched("library", 1.5)},
-		{touched("item_genre", m, 1, 5)},
+		{touched("item_genre", m, uid.N(1), 5)},
 	} {
 		a := put()
 		a["touched"] = rows
@@ -388,7 +429,7 @@ func TestReplayMarksTouchedRows(t *testing.T) {
 	e.expect(200, "PUT", ws, e.plain.token, map[string]any{"watched": false, "positionMs": 9000, "at": now}, nil)
 	e.expect(200, "PUT", "/profiles/"+itoa(admin)+"/watch-state/"+itoa(m), e.admin.token, map[string]any{"watched": true}, nil)
 	version := func(q string, args ...any) int64 { return e.count(q, args...) }
-	stamp := func(account int64) int64 {
+	stamp := func(account uid.ID) int64 {
 		return version(`SELECT sync_version FROM watch_state WHERE account_id = ? AND item_id = ?`, account, m)
 	}
 	tomb := func(tbl string, k1, k2 any) int64 {
@@ -400,8 +441,9 @@ func TestReplayMarksTouchedRows(t *testing.T) {
 
 	older := action("putWatchState", "PUT", ws, me, map[string]any{"watched": false, "positionMs": 1000, "at": now.Add(-time.Hour)})
 	older["touched"] = []any{touched("watch_state", me, m), touched("account_card", me)}
-	refused := action("putWatchState", "PUT", "/profiles/"+itoa(me)+"/watch-state/999", me, map[string]any{"watched": true})
-	refused["touched"] = []any{touched("watch_state", me, 999), touched("watch_state", admin, m)}
+	gone := uid.N(999)
+	refused := action("putWatchState", "PUT", "/profiles/"+itoa(me)+"/watch-state/"+itoa(gone), me, map[string]any{"watched": true})
+	refused["touched"] = []any{touched("watch_state", me, gone), touched("watch_state", admin, m)}
 	res := e.replay(e.plain, older, refused)
 	if res[0].Result != api.Accepted {
 		t.Fatalf("an older put is accepted: %+v", res)
@@ -416,7 +458,7 @@ func TestReplayMarksTouchedRows(t *testing.T) {
 	if stamp(me) <= clock || version(`SELECT sync_version FROM account WHERE id = ?`, me) <= clock {
 		t.Fatal("an existing row the household sees is marked changed, a replica table by its source")
 	}
-	if tomb("watch_state", me, 999) != 1 || version(`SELECT version FROM sync_tombstone WHERE tbl = 'watch_state' AND k2 = 999`) <= clock {
+	if tomb("watch_state", me, gone) != 1 || version(`SELECT version FROM sync_tombstone WHERE tbl = 'watch_state' AND k2 = ?`, gone) <= clock {
 		t.Fatal("a row that is gone is marked deleted")
 	}
 	// Another household's row is left alone: nothing reaches them, and no
@@ -424,8 +466,8 @@ func TestReplayMarksTouchedRows(t *testing.T) {
 	if tomb("watch_state", admin, m) != 0 || stamp(admin) != theirs || version(`SELECT scope_version FROM sync_clock`) != scope {
 		t.Fatal("a row the household may not see is left alone")
 	}
-	if version(`SELECT COUNT(*) FROM sync_tombstone WHERE typeof(k2) <> 'integer'`) != 0 {
-		t.Fatal("a tombstone keys an integer column by an integer")
+	if version(`SELECT COUNT(*) FROM sync_tombstone WHERE typeof(k1) <> 'blob' OR typeof(k2) <> 'blob'`) != 0 {
+		t.Fatal("a tombstone keys an id column by the id's bytes")
 	}
 	if version(`SELECT COUNT(*) FROM watch_state`) != 2 {
 		t.Fatal("touching a row changes it")
@@ -446,8 +488,9 @@ func TestReplayedTouchesReachTheNextChanges(t *testing.T) {
 
 	invalid := action("putWatchState", "PUT", ws+itoa(m), me, map[string]any{"positionMs": -1})
 	invalid["touched"] = []any{touched("watch_state", me, m)}
-	missing := action("putWatchState", "PUT", ws+"999", me, map[string]any{"watched": true})
-	missing["touched"] = []any{touched("watch_state", me, 999)}
+	gone := uid.N(999)
+	missing := action("putWatchState", "PUT", ws+itoa(gone), me, map[string]any{"watched": true})
+	missing["touched"] = []any{touched("watch_state", me, gone)}
 	res := e.replay(e.plain, invalid, missing)
 	rejected(t, res[0], "bad_request")
 	rejected(t, res[1], "not_found")
@@ -459,11 +502,11 @@ func TestReplayedTouchesReachTheNextChanges(t *testing.T) {
 	}
 	rows, tombs := (*c.Tables)[0], (*c.Tombstones)[0]
 	pos := slices.Index(rows.Columns, "position_ms")
-	if rows.Name != "watch_state" || len(rows.Rows) != 1 || rows.Rows[0][0] != float64(me) || rows.Rows[0][1] != float64(m) ||
+	if rows.Name != "watch_state" || len(rows.Rows) != 1 || rows.Rows[0][0] != me.String() || rows.Rows[0][1] != m.String() ||
 		rows.Rows[0][pos] != float64(9000) {
 		t.Errorf("the row that exists: %+v", rows)
 	}
-	if tombs.Table != "watch_state" || !reflect.DeepEqual(tombs.Keys, [][]any{{float64(me), float64(999)}}) {
+	if tombs.Table != "watch_state" || !reflect.DeepEqual(tombs.Keys, [][]any{{me.String(), gone.String()}}) {
 		t.Errorf("the row that does not: %+v", tombs)
 	}
 }
@@ -479,7 +522,7 @@ func TestReplayStopsAtAServerFailure(t *testing.T) {
 	me, k := e.plain.account.ID, e.kid(e.plain, "Kid").Id
 	_, err := e.db.Exec(`CREATE TRIGGER boom BEFORE INSERT ON account_allow BEGIN SELECT RAISE(ABORT, 'boom'); END`)
 	must(t, err)
-	put := func(item int64) map[string]any {
+	put := func(item uid.ID) map[string]any {
 		return action("putWatchState", "PUT", "/profiles/"+itoa(me)+"/watch-state/"+itoa(item), me, map[string]any{"watched": true})
 	}
 	first, fails, later := put(m), action("allowItem", "PUT", "/profiles/"+itoa(k)+"/allowed-items/"+itoa(m), me, nil), put(n)
@@ -531,17 +574,17 @@ func TestReplayMarksThousandsOfTouchedRows(t *testing.T) {
 	m := e.movie(lib, "Heat")
 	e.file(m, 600_000)
 	me := e.plain.account.ID
+	// Items uid.N(1_000_001) on, each with a watch state; none of uid.N(2_000_001) on.
 	_, err := e.db.Exec(`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 2500)
-		INSERT INTO item (library_id, kind, parsed_title, added_at, updated_at) SELECT ?, 'movie', 'M' || i, 0, 0 FROM n`, lib)
+		INSERT INTO item (id, library_id, kind, parsed_title, added_at, created_at, modified_at)
+		SELECT unhex(printf('00000000000070008000%012x', 1000000 + i)), ?, 'movie', 'M' || i, 0, 0, 0 FROM n`, lib)
 	must(t, err)
-	_, err = e.db.Exec(`INSERT INTO watch_state (account_id, item_id, watched, updated_at) SELECT ?, id, 1, 0 FROM item WHERE id <> ?`, me, m)
+	_, err = e.db.Exec(`INSERT INTO watch_state (account_id, item_id, watched, changed_at) SELECT ?, id, 1, 0 FROM item WHERE id <> ?`, me, m)
 	must(t, err)
 	clock := e.count(`SELECT version FROM sync_clock`)
 	var rows []any
-	for id := range e.count(`SELECT MAX(id) FROM item`) + 1 {
-		if id != 0 && id != m {
-			rows = append(rows, touched("watch_state", me, id), touched("watch_state", me, id+1_000_000))
-		}
+	for i := 1; i <= 2500; i++ {
+		rows = append(rows, touched("watch_state", me, uid.N(1_000_000+i)), touched("watch_state", me, uid.N(2_000_000+i)))
 	}
 	if len(rows) != 5000 {
 		t.Fatalf("%d rows", len(rows))
@@ -559,7 +602,7 @@ func TestReplayMarksThousandsOfTouchedRows(t *testing.T) {
 	if n := e.count(`SELECT COUNT(*) FROM watch_state WHERE account_id = ? AND item_id <> ? AND sync_version > ?`, me, m, clock); n != 2500 {
 		t.Errorf("%d of 2500 rows that exist marked changed", n)
 	}
-	if n := e.count(`SELECT COUNT(*) FROM sync_tombstone WHERE tbl = 'watch_state' AND k1 = ? AND k2 > 1000000 AND version > ?`, me, clock); n != 2500 {
+	if n := e.count(`SELECT COUNT(*) FROM sync_tombstone WHERE tbl = 'watch_state' AND k1 = ? AND k2 > ? AND version > ?`, me, uid.N(2_000_000), clock); n != 2500 {
 		t.Errorf("%d of 2500 rows that are gone marked deleted", n)
 	}
 	if n := e.count(`SELECT COUNT(*) - COUNT(DISTINCT v) + (MAX(v) > (SELECT version FROM sync_clock))
@@ -577,5 +620,46 @@ func TestReplayMarksThousandsOfTouchedRows(t *testing.T) {
 	e.expect(200, "POST", "/sync/actions", e.plain.token, b, &out)
 	if len(out.Results) != 6 {
 		t.Fatalf("%+v", out)
+	}
+}
+
+// A create names its own id, so a later action of the same batch writes to
+// what it made, and the create sent again answers what it answered and
+// makes nothing more; a new action creating that id again is the conflict
+// a direct call answers.
+func TestReplayedCreatesKeepTheirClientIDs(t *testing.T) {
+	e := newEnv(t)
+	m := e.movie(e.library("movies"), "Heat")
+	me := e.plain.account.ID
+	pl, en := uid.New(), uid.New()
+	lists := "/profiles/" + itoa(me) + "/playlists"
+	create := action("createPlaylist", "POST", lists, me, map[string]any{"id": pl, "name": "Weekend", "kind": "movies"})
+	add := action("addPlaylistEntry", "POST", lists+"/"+itoa(pl)+"/entries", me, map[string]any{"id": en, "itemId": m})
+	e.accepted(e.plain, create, add)
+	e.accepted(e.plain, create)
+	if n := e.count(`SELECT COUNT(*) FROM playlist`); n != 1 {
+		t.Fatalf("%d playlists", n)
+	}
+	var got api.PlaylistEntry
+	e.expect(200, "GET", lists+"/"+itoa(pl)+"/entries/"+itoa(en), e.plain.token, nil, &got)
+	if got.PlaylistId != pl || *got.ItemId != m || got.CreatedBy == nil || *got.CreatedBy != me {
+		t.Fatalf("%+v", got)
+	}
+	again := action("createPlaylist", "POST", lists, me, map[string]any{"id": pl, "name": "Again", "kind": "movies"})
+	rejected(t, e.replay(e.plain, again)[0], "conflict")
+	if n := e.count(`SELECT COUNT(*) FROM playlist WHERE name = 'Weekend'`); n != 1 {
+		t.Fatal("a conflicting create changed the playlist")
+	}
+}
+
+// A replayed write is the acting profile's, not the signed-in adult's.
+func TestReplayedWritesAreTheActingProfiles(t *testing.T) {
+	e := newEnv(t)
+	k := e.kid(e.plain, "Kid").Id
+	e.accepted(e.plain, action("setProfilePreferences", "PUT", "/profiles/"+itoa(k)+"/preferences", k, map[string]any{"autoplay": false}))
+	var by uid.ID
+	must(t, e.db.QueryRow(`SELECT modified_by FROM account WHERE id = ?`, k).Scan(&by))
+	if by != k {
+		t.Fatalf("modified by %s, not the kid %s", by, k)
 	}
 }

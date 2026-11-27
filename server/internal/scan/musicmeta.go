@@ -13,6 +13,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/musicbrainz"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/review"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/tmdb"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // MatchMusic looks up the library's albums that no provider was asked about
@@ -41,7 +42,7 @@ func (s *Scanner) MatchMusic(ctx context.Context, lib *library.Library) (int, er
 	if err != nil {
 		return r.failed, err
 	}
-	if albums, err = s.Items.List(item.Filter{LibraryID: lib.ID, Kind: item.Album, Limit: 1000000}); err != nil {
+	if albums, err = s.Items.List(item.Filter{LibraryID: &lib.ID, Kind: item.Album, Limit: 1000000}); err != nil {
 		return r.failed, err
 	}
 	for _, al := range albums {
@@ -280,7 +281,7 @@ func (s *Scanner) sameAlbum(ctx context.Context, a, b, group string) (bool, erro
 }
 
 // remoteGenres stores a provider's genres for an item beside its tags'.
-func (s *Scanner) remoteGenres(itemID int64, names []string) error {
+func (s *Scanner) remoteGenres(itemID uid.ID, names []string) error {
 	gs := make([]genre.Genre, len(names))
 	for i, n := range names {
 		gs[i] = genre.Genre{Name: n}

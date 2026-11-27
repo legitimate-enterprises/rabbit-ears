@@ -16,6 +16,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/playlist"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/service"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/station"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 var local = time.FixedZone("local", -5*3600)
@@ -28,7 +29,7 @@ type airing struct {
 	s        *service.Services
 	now      time.Time
 	owner    *account.Account
-	lib      int64
+	lib      uid.ID
 	playlist *playlist.Playlist
 }
 
@@ -39,7 +40,7 @@ func newAiring(t *testing.T) *airing {
 	s.Stations.Now = func() time.Time { return a.now }
 	a.owner, _ = adultWithHousehold(t, s, "owner@example.test")
 	l := &library.Library{Name: "Films", Kind: library.Movies}
-	a.must(s.Libraries.Repo().Create(l))
+	a.must(s.Libraries.Repo().Create(l, nil))
 	a.lib = l.ID
 	a.playlist = a.playlistOf("Nights", a.film("Lantern", "PG", 90), a.film("Harbor", "R", 61))
 	return a
@@ -53,40 +54,40 @@ func (a *airing) must(err error) {
 }
 
 // film adds a rated movie with one file of minutes.
-func (a *airing) film(title, rating string, minutes int64) int64 {
+func (a *airing) film(title, rating string, minutes int64) uid.ID {
 	a.t.Helper()
 	it := &item.Item{LibraryID: a.lib, Kind: item.Movie, ParsedTitle: title}
 	a.must(a.s.Items.Repo().Create(it))
 	a.must(a.s.Items.Repo().SetMetadata(&item.Metadata{ItemID: it.ID, Status: item.Matched, Title: title, ContentRating: rating}))
 	ms := minutes * 60000
-	a.must(a.s.MediaFiles.Repo().CreateFile(&mediafile.File{ItemID: it.ID, Path: "/films/" + title + ".mp4", SizeBytes: 1, ModifiedAt: a.now, DurationMs: &ms}))
+	a.must(a.s.MediaFiles.Repo().CreateFile(&mediafile.File{ItemID: &it.ID, Path: "/films/" + title + ".mp4", SizeBytes: 1, FileModifiedAt: a.now, DurationMs: &ms}))
 	return it.ID
 }
 
-func (a *airing) playlistOf(name string, movies ...int64) *playlist.Playlist {
+func (a *airing) playlistOf(name string, movies ...uid.ID) *playlist.Playlist {
 	a.t.Helper()
 	p := &playlist.Playlist{AccountID: a.owner.ID, Name: name, Kind: playlist.Movies}
-	a.must(a.s.Playlists.Repo().Create(p))
+	a.must(a.s.Playlists.Repo().Create(p, nil))
 	for _, m := range movies {
 		a.add(p, m)
 	}
 	return p
 }
 
-func (a *airing) add(p *playlist.Playlist, movie int64) {
+func (a *airing) add(p *playlist.Playlist, movie uid.ID) {
 	a.t.Helper()
-	a.must(a.s.Playlists.Repo().AddEntry(&playlist.Entry{PlaylistID: p.ID, ItemID: movie}, nil))
+	a.must(a.s.Playlists.Repo().AddEntry(&playlist.Entry{PlaylistID: p.ID, ItemID: &movie}, nil, nil))
 }
 
 func (a *airing) station(sched station.Schedule) *station.Station {
 	a.t.Helper()
 	st := &station.Station{AccountID: a.owner.ID, PlaylistID: a.playlist.ID, Name: "Late", Visibility: station.Household, Schedule: sched}
-	a.must(a.s.Stations.Create(st))
+	a.must(a.s.Stations.Create(st, nil, nil))
 	return st
 }
 
 type aired struct {
-	item       int64
+	item       uid.ID
 	start, end time.Time
 }
 
@@ -136,7 +137,7 @@ func TestTimingDefaultsToTheKindsAndPlacesEachStart(t *testing.T) {
 		{station.Hour, fri(0, 18, 0), fri(0, 19, 1)},
 	} {
 		st := &station.Station{AccountID: a.owner.ID, PlaylistID: a.playlist.ID, Name: c.timing, Visibility: station.Private, Timing: c.timing}
-		a.must(a.s.Stations.Create(st))
+		a.must(a.s.Stations.Create(st, nil, nil))
 		today := a.day(st, 0)
 		if len(today) < 2 || !today[1].start.Equal(c.second) || !today[1].end.Equal(c.last) {
 			t.Errorf("%s: %+v", c.timing, today[:min(2, len(today))])
@@ -224,7 +225,7 @@ func TestRescheduleNowKeepsWhatIsOn(t *testing.T) {
 	on, _ := a.s.Stations.OnAir(st, item.Audience{})
 	only := a.film("Lighthouse", "G", 45)
 	st.PlaylistID = a.playlistOf("Short", only).ID
-	a.must(a.s.Stations.Update(st))
+	a.must(a.s.Stations.Update(st, nil))
 	a.must(a.s.Stations.Reschedule(st))
 	today := a.day(st, 0)
 	if today[0].item != on.Now.ItemID || !today[0].start.Equal(fri(0, 16, 0)) || today[1].item != only || !today[1].start.Equal(fri(0, 18, 0)) {
@@ -262,10 +263,11 @@ func TestTune(t *testing.T) {
 	}
 	a.now = fri(0, 16, 10)
 	p, pos, err := a.s.Stations.Tune(st, item.Audience{})
-	if err != nil || pos != 600000 || p.EditionID == 0 {
+	if err != nil || pos != 600000 || p.EditionID.IsZero() {
 		t.Fatalf("%+v %d %v", p, pos, err)
 	}
-	kid := item.Audience{Kid: true, AccountID: 1, Movie: account.AtOrBelow(account.MovieRatings, "G")}
+	kidID := uid.N(1)
+	kid := item.Audience{Kid: true, AccountID: &kidID, Movie: account.AtOrBelow(account.MovieRatings, "G")}
 	if _, _, err := a.s.Stations.Tune(st, kid); !errors.Is(err, service.ErrProgramHidden) {
 		t.Fatalf("the kid's filter is checked at tune-in: %v", err)
 	}
@@ -294,7 +296,7 @@ func TestAStationOffForDaysIsScheduledToItsNextWindow(t *testing.T) {
 // extended from its last, so a long gap does not restart an ordered loop.
 func TestAGapOfDaysContinuesTheLoop(t *testing.T) {
 	a := newAiring(t)
-	ids := []int64{a.film("A", "PG", 50), a.film("B", "PG", 50), a.film("C", "PG", 50), a.film("D", "PG", 50), a.film("E", "PG", 50)}
+	ids := []uid.ID{a.film("A", "PG", 50), a.film("B", "PG", 50), a.film("C", "PG", 50), a.film("D", "PG", 50), a.film("E", "PG", 50)}
 	a.playlist = a.playlistOf("Five", ids...)
 	st := a.station(station.Schedule{})
 	last, _, err := a.s.Stations.Repo().Last(st.ID)
@@ -306,7 +308,7 @@ func TestAGapOfDaysContinuesTheLoop(t *testing.T) {
 	on, err := a.s.Stations.Repo().On(st.ID, a.now, item.Audience{})
 	a.must(err)
 	if want := ids[(last.Position+1)%len(ids)]; on.ItemID != want {
-		t.Fatalf("got item %d, want %d after position %d", on.ItemID, want, last.Position)
+		t.Fatalf("got item %s, want %s after position %d", on.ItemID, want, last.Position)
 	}
 }
 
@@ -315,7 +317,7 @@ func TestAGapOfDaysContinuesTheLoop(t *testing.T) {
 func TestUpdateDuringAScheduleRunClearsTheLoop(t *testing.T) {
 	a := newAiring(t)
 	st := &station.Station{AccountID: a.owner.ID, PlaylistID: a.playlist.ID, Name: "Shuffled", Visibility: station.Household, Random: true}
-	a.must(a.s.Stations.Create(st))
+	a.must(a.s.Stations.Create(st, nil, nil))
 	other := a.playlistOf("Other", a.film("Lighthouse", "G", 45))
 	updated := make(chan error, 1)
 	var once sync.Once
@@ -323,7 +325,7 @@ func TestUpdateDuringAScheduleRunClearsTheLoop(t *testing.T) {
 		once.Do(func() {
 			c := *st
 			c.PlaylistID = other.ID
-			go func() { updated <- a.s.Stations.Update(&c) }()
+			go func() { updated <- a.s.Stations.Update(&c, nil) }()
 			select {
 			case err := <-updated:
 				updated <- err

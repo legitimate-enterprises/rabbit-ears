@@ -6,12 +6,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/library"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/probe"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/review"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // retag moves a file as a tagger does that writes it again: the media is
@@ -47,21 +49,39 @@ func clone(t *testing.T, from, to string) {
 	must(t, os.Chtimes(to, st.ModTime(), st.ModTime()))
 }
 
-// play records that account 1 played the item to position at time at.
-func (e *env) play(itemID int64, position, at int) {
+// play records that account uid.N(1) played the item to position at time at.
+func (e *env) play(itemID uid.ID, position, at int) {
 	e.t.Helper()
-	_, err := e.d.Exec(`INSERT OR IGNORE INTO account (id, kind, name, created_at, updated_at) VALUES (1,'adult','A',0,0)`)
+	_, err := e.d.Exec(`INSERT OR IGNORE INTO account (id, kind, name, created_at, modified_at) VALUES (?,'adult','A',0,0)`, uid.N(1))
 	must(e.t, err)
-	_, err = e.d.Exec(`INSERT INTO watch_state (account_id, item_id, watched, position_ms, last_played_at, updated_at) VALUES (1,?,0,?,?,?)`,
-		itemID, position, at, at)
+	_, err = e.d.Exec(`INSERT INTO watch_state (account_id, item_id, watched, position_ms, last_played_at, changed_at) VALUES (?,?,0,?,?,?)`,
+		uid.N(1), itemID, position, at, at)
 	must(e.t, err)
 }
 
+// plays is each item:position played, by item id.
 func (e *env) plays() string {
 	e.t.Helper()
-	var s string
-	must(e.t, e.d.QueryRow(`SELECT COALESCE(group_concat(item_id || ':' || position_ms, ','), '') FROM (SELECT * FROM watch_state ORDER BY item_id)`).Scan(&s))
-	return s
+	rows, err := e.d.Query(`SELECT item_id, position_ms FROM watch_state ORDER BY item_id`)
+	must(e.t, err)
+	defer func() { _ = rows.Close() }()
+	var out []string
+	for rows.Next() {
+		var id uid.ID
+		var pos int
+		must(e.t, rows.Scan(&id, &pos))
+		out = append(out, fmt.Sprintf("%s:%d", id, pos))
+	}
+	must(e.t, rows.Err())
+	return strings.Join(out, ",")
+}
+
+// latest is the later made of two system rows, whose ids uid.New mints in order.
+func latest(a, b uid.ID) uid.ID {
+	if a.Compare(b) > 0 {
+		return a
+	}
+	return b
 }
 
 // state is every item and file of the library, to tell that nothing was
@@ -70,14 +90,14 @@ func (e *env) plays() string {
 func (e *env) state() string {
 	e.t.Helper()
 	var s string
-	must(e.t, e.d.QueryRow(`SELECT (SELECT group_concat(kind || id, ' ') FROM (SELECT * FROM item ORDER BY id)) || ' | ' ||
-		(SELECT group_concat(id || CASE WHEN missing_at IS NULL THEN '' ELSE '?' END, ' ') FROM (SELECT * FROM media_file ORDER BY id))`).Scan(&s))
+	must(e.t, e.d.QueryRow(`SELECT (SELECT group_concat(kind || hex(id), ' ') FROM (SELECT * FROM item ORDER BY id)) || ' | ' ||
+		(SELECT group_concat(hex(id) || CASE WHEN missing_at IS NULL THEN '' ELSE '?' END, ' ') FROM (SELECT * FROM media_file ORDER BY id))`).Scan(&s))
 	return s
 }
 
 func (e *env) reviews(reason string) []*review.Review {
 	e.t.Helper()
-	rs, err := e.s.Reviews.List(review.Filter{LibraryID: e.lib.ID, Reason: reason})
+	rs, err := e.s.Reviews.List(review.Filter{LibraryID: &e.lib.ID, Reason: reason})
 	must(e.t, err)
 	return rs
 }
@@ -98,10 +118,10 @@ func TestRenamedMovieKeepsItsRecords(t *testing.T) {
 	probes := *e.probes
 	e.mustScan()
 	m := e.onlyMovie()
-	if f, err := e.files.FileByPath(moved); err != nil || f.ItemID != m.ID || e.state() != before || *e.probes != probes {
+	if f, err := e.files.FileByPath(moved); err != nil || *f.ItemID != m.ID || e.state() != before || *e.probes != probes {
 		t.Fatalf("file %+v %v, state %q was %q, %d probes", f, err, e.state(), before, *e.probes-probes)
 	}
-	if m.ParsedTitle != "The Lantern" || m.ParsedYear == nil || *m.ParsedYear != 2002 || e.plays() != fmt.Sprintf("%d:5000", m.ID) {
+	if m.ParsedTitle != "The Lantern" || m.ParsedYear == nil || *m.ParsedYear != 2002 || e.plays() != fmt.Sprintf("%s:5000", m.ID) {
 		t.Fatalf("movie %+v plays %q", m, e.plays())
 	}
 	e.mustScan()
@@ -129,7 +149,7 @@ func TestFileMovedOutOfAMovieLeavesIt(t *testing.T) {
 	ms := e.list(item.Movie)
 	f, err := e.files.FileByPath(moved)
 	must(t, err)
-	if got := titles(ms); len(ms) != 2 || !slices.Equal(got, []string{"Lamplight", "Lantern"}) || f.ID != was.ID || f.ItemID == first.ID || e.missing(moved) {
+	if got := titles(ms); len(ms) != 2 || !slices.Equal(got, []string{"Lamplight", "Lantern"}) || f.ID != was.ID || *f.ItemID == first.ID || e.missing(moved) {
 		t.Fatalf("movies %q, file %+v was %+v", got, f, was)
 	}
 }
@@ -153,14 +173,14 @@ func TestEarlierDuplicateOfARenamedMovieIsMerged(t *testing.T) {
 	if len(ms) != 2 {
 		t.Fatalf("a copy beside the original is a second movie: %+v", ms)
 	}
-	e.play(max(ms[0].ID, ms[1].ID), 9000, 200)
+	e.play(latest(ms[0].ID, ms[1].ID), 9000, 200)
 	must(t, os.RemoveAll(filepath.Dir(old)))
 	e.mustScan()
 
 	m := e.onlyMovie()
-	if f, err := e.files.FileByPath(moved); err != nil || f.ItemID != first.ID || m.ID != first.ID || e.state() != before ||
-		e.plays() != fmt.Sprintf("%d:9000", first.ID) {
-		t.Fatalf("file %+v %v, movie %d was %d, state %q was %q, plays %q", f, err, m.ID, first.ID, e.state(), before, e.plays())
+	if f, err := e.files.FileByPath(moved); err != nil || *f.ItemID != first.ID || m.ID != first.ID || e.state() != before ||
+		e.plays() != fmt.Sprintf("%s:9000", first.ID) {
+		t.Fatalf("file %+v %v, movie %s was %s, state %q was %q, plays %q", f, err, m.ID, first.ID, e.state(), before, e.plays())
 	}
 }
 
@@ -232,11 +252,11 @@ func TestEarlierDuplicateOfARenamedShowIsMerged(t *testing.T) {
 	if len(e.list(item.Show)) != 2 || len(eps) != 2 {
 		t.Fatalf("shows %+v", e.list(item.Show))
 	}
-	e.play(max(eps[0].ID, eps[1].ID), 9000, 200)
+	e.play(latest(eps[0].ID, eps[1].ID), 9000, 200)
 	must(t, os.RemoveAll(filepath.Join(e.root, "Lamp Street")))
 	e.mustScan()
 	shows := e.list(item.Show)
-	if len(shows) != 1 || shows[0].ID != show.ID || shows[0].Path != renamed || e.state() != before || e.plays() != fmt.Sprintf("%d:9000", ep.ID) {
+	if len(shows) != 1 || shows[0].ID != show.ID || shows[0].Path != renamed || e.state() != before || e.plays() != fmt.Sprintf("%s:9000", ep.ID) {
 		t.Fatalf("shows %+v, state %q was %q, plays %q", shows, e.state(), before, e.plays())
 	}
 }
@@ -256,7 +276,7 @@ func TestEarlierDuplicateShowWithNewerEpisodesIsMerged(t *testing.T) {
 	fixtureCopy(t, "chapters.mkv", filepath.Join(renamed, "Lamp Street US (2010) - S01E02 - Two.mkv"))
 	fixtureCopy(t, "chapters.mkv", filepath.Join(renamed, "Season 02", "Lamp Street US (2010) - S02E01 - Three.mkv"))
 	e.mustScan()
-	var newer []int64
+	var newer []uid.ID
 	for _, ep := range e.list(item.Episode) {
 		if f, _ := e.files.FilesForItem(ep.ID); len(f) == 1 && filepath.Ext(f[0].Path) == ".mkv" {
 			newer = append(newer, ep.ID)
@@ -268,7 +288,7 @@ func TestEarlierDuplicateShowWithNewerEpisodesIsMerged(t *testing.T) {
 	after := e.state()
 	shows := e.list(item.Show)
 	if len(shows) != 1 || shows[0].ID != show.ID || shows[0].Path != renamed || len(newer) != 2 || len(e.list(item.Season)) != 2 ||
-		e.plays() != fmt.Sprintf("%d:7000,%d:7000", newer[0], newer[1]) {
+		e.plays() != fmt.Sprintf("%s:7000,%s:7000", newer[0], newer[1]) {
 		t.Fatalf("shows %+v, seasons %+v, newer %v, plays %q, state %q", shows, e.list(item.Season), newer, e.plays(), after)
 	}
 	e.mustScan()
@@ -325,8 +345,8 @@ func TestRenamedSongKeepsItsRecords(t *testing.T) {
 	e.mustScan()
 	got, err := e.items.ByPath(e.lib.ID, item.Song, filepath.Join(renamed, "1-01 - Opening.flac"))
 	must(t, err)
-	if got.ID != song.ID || e.state() != before || e.plays() != fmt.Sprintf("%d:5000", song.ID) {
-		t.Fatalf("song %d was %d, state %q was %q, plays %q", got.ID, song.ID, e.state(), before, e.plays())
+	if got.ID != song.ID || e.state() != before || e.plays() != fmt.Sprintf("%s:5000", song.ID) {
+		t.Fatalf("song %s was %s, state %q was %q, plays %q", got.ID, song.ID, e.state(), before, e.plays())
 	}
 }
 
@@ -371,8 +391,8 @@ func TestEarlierDuplicateOfARenamedSongIsMerged(t *testing.T) {
 	e.mustScan()
 	got, err := e.items.ByPath(e.lib.ID, item.Song, filepath.Join(renamed, "01 Opening.flac"))
 	must(t, err)
-	if got.ID != song.ID || e.state() != before || e.plays() != fmt.Sprintf("%d:9000", song.ID) {
-		t.Fatalf("song %d was %d, state %q was %q, plays %q", got.ID, song.ID, e.state(), before, e.plays())
+	if got.ID != song.ID || e.state() != before || e.plays() != fmt.Sprintf("%s:9000", song.ID) {
+		t.Fatalf("song %s was %s, state %q was %q, plays %q", got.ID, song.ID, e.state(), before, e.plays())
 	}
 }
 
@@ -397,7 +417,7 @@ func TestRenamedChannelAndVideoKeepTheirRecords(t *testing.T) {
 	gotV, err := e.items.ByPath(e.lib.ID, item.Video, filepath.Join(renamed, "s2021e010100 - Gear Trains.mp4"))
 	must(t, err)
 	if gotCh.ID != ch.ID || gotV.ID != v.ID || *gotV.ParentID != ch.ID || e.state() != before {
-		t.Fatalf("channel %d was %d, video %d was %d, state %q was %q", gotCh.ID, ch.ID, gotV.ID, v.ID, e.state(), before)
+		t.Fatalf("channel %s was %s, video %s was %s, state %q was %q", gotCh.ID, ch.ID, gotV.ID, v.ID, e.state(), before)
 	}
 }
 
@@ -418,7 +438,7 @@ func TestFolderRenamedInCaseKeepsItsRecords(t *testing.T) {
 			before := e.state()
 			was, err := e.files.FileByPath(old)
 			must(t, err)
-			e.play(was.ItemID, 5000, 100)
+			e.play(*was.ItemID, 5000, 100)
 
 			rename(t, filepath.Join(e.root, c.old), filepath.Join(e.root, c.renamed))
 			if _, err := os.Lstat(old); err != nil {
@@ -426,7 +446,7 @@ func TestFolderRenamedInCaseKeepsItsRecords(t *testing.T) {
 			}
 			e.mustScan()
 			f, err := e.files.FileByPath(filepath.Join(e.root, c.renamed, c.file))
-			if err != nil || f.ID != was.ID || e.state() != before || e.plays() != fmt.Sprintf("%d:5000", was.ItemID) {
+			if err != nil || f.ID != was.ID || e.state() != before || e.plays() != fmt.Sprintf("%s:5000", *was.ItemID) {
 				t.Fatalf("file %+v %v was %+v, state %q was %q, plays %q", f, err, was, e.state(), before, e.plays())
 			}
 		})
@@ -468,13 +488,13 @@ func TestRetaggedAndRenamedFilesKeepTheirRecords(t *testing.T) {
 		e.mustScan()
 		was, err := e.files.FileByPath(old)
 		must(t, err)
-		e.play(was.ItemID, 5000, 100)
+		e.play(*was.ItemID, 5000, 100)
 
 		retag(t, old, moved)
 		e.mustScan()
 		f, err := e.files.FileByPath(moved)
-		if err != nil || f.ID != was.ID || f.ItemID != was.ItemID || f.SizeBytes == was.SizeBytes || e.missing(moved) ||
-			e.plays() != fmt.Sprintf("%d:5000", was.ItemID) {
+		if err != nil || f.ID != was.ID || *f.ItemID != *was.ItemID || f.SizeBytes == was.SizeBytes || e.missing(moved) ||
+			e.plays() != fmt.Sprintf("%s:5000", *was.ItemID) {
 			t.Fatalf("%s: file %+v %v was %+v, plays %q", c.kind, f, err, was, e.plays())
 		}
 		if _, err := e.files.FileByPath(old); err == nil {
@@ -524,13 +544,13 @@ func TestCopyOfAFileIsNotItMoved(t *testing.T) {
 	}
 	second, err := e.files.FileByPath(copied)
 	must(t, err)
-	e.play(second.ItemID, 5000, 100)
+	e.play(*second.ItemID, 5000, 100)
 
 	must(t, os.Remove(original))
 	e.mustScan()
 	e.mustScan()
 	f, err := e.files.FileByPath(copied)
-	if err != nil || f.ID != second.ID || f.ItemID != second.ItemID || !e.missing(original) || e.plays() != fmt.Sprintf("%d:5000", second.ItemID) {
+	if err != nil || f.ID != second.ID || *f.ItemID != *second.ItemID || !e.missing(original) || e.plays() != fmt.Sprintf("%s:5000", *second.ItemID) {
 		t.Fatalf("the copy once its original is gone: %+v %v was %+v, plays %q", f, err, second, e.plays())
 	}
 }
@@ -551,16 +571,16 @@ func TestAmbiguousMoveIsLeftForReview(t *testing.T) {
 	e.mustScan()
 
 	rs := e.reviews(review.AmbiguousMove)
-	var subjects []int64
+	var subjects []uid.ID
 	for _, r := range rs {
 		subjects = append(subjects, *r.ItemID)
 		if len(r.Evidence) != 2 || r.Evidence[0].Role != review.Stated || r.Evidence[1].Role != review.Candidate || r.Evidence[1].Path != c {
 			t.Errorf("evidence %+v", r.Evidence)
 		}
 	}
-	slices.Sort(subjects)
+	slices.SortFunc(subjects, uid.ID.Compare)
 	if len(e.list(item.Movie)) != 3 || !e.missing(a) || !e.missing(b) ||
-		!slices.Equal(subjects, []int64{min(before[0].ID, before[1].ID), max(before[0].ID, before[1].ID)}) {
+		!slices.Equal(subjects, slices.SortedFunc(slices.Values([]uid.ID{before[0].ID, before[1].ID}), uid.ID.Compare)) {
 		t.Fatalf("movies %+v, reviews of %v", e.list(item.Movie), subjects)
 	}
 	fixtureCopy(t, "h264-high41.mp4", b)

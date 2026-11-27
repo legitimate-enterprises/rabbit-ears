@@ -3,7 +3,6 @@ package item_test
 import (
 	"errors"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +12,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/library"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/mediafile"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 func TestMusicAndYouTubeItems(t *testing.T) {
@@ -21,7 +21,7 @@ func TestMusicAndYouTubeItems(t *testing.T) {
 	music := &library.Library{Name: "Music", Kind: library.Music}
 	yt := &library.Library{Name: "YouTube", Kind: library.YouTube}
 	for _, l := range []*library.Library{music, yt} {
-		if err := lr.Create(l); err != nil {
+		if err := lr.Create(l, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -60,7 +60,7 @@ func TestMusicAndYouTubeItems(t *testing.T) {
 	if m, err := r.Metadata(v.ID); err != nil || m.ExternalID != "dQw4w9WgXcQ" || m.Provider != "youtube" || m.ProviderID != nil {
 		t.Fatalf("%+v %v", m, err)
 	}
-	if ms, _ := r.MetadataFor([]int64{v.ID}); ms[v.ID].ExternalID != "dQw4w9WgXcQ" {
+	if ms, _ := r.MetadataFor([]uid.ID{v.ID}); ms[v.ID].ExternalID != "dQw4w9WgXcQ" {
 		t.Fatalf("%+v", ms[v.ID])
 	}
 
@@ -91,7 +91,7 @@ func TestCatalogScopeAndUHD(t *testing.T) {
 	tv, mv, music := &library.Library{Name: "tv", Kind: library.TV}, &library.Library{Name: "mv", Kind: library.Movies},
 		&library.Library{Name: "m", Kind: library.Music}
 	for _, l := range []*library.Library{tv, mv, music} {
-		if err := library.New(d).Create(l); err != nil {
+		if err := library.New(d).Create(l, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -104,10 +104,10 @@ func TestCatalogScopeAndUHD(t *testing.T) {
 	ep := mustCreate(t, r, &item.Item{LibraryID: tv.ID, ParentID: &season.ID, Kind: item.Episode, ParsedTitle: "E1", EpisodeNumber: intp(1)})
 	files := mediafile.New(d)
 	for _, f := range []struct {
-		id   int64
+		id   uid.ID
 		w, h int
 	}{{uhd.ID, 3840, 1600}, {hd.ID, 1920, 1080}, {ep.ID, 1920, 2160}} {
-		mf := &mediafile.File{ItemID: f.id, Path: "/f/" + strconv.FormatInt(f.id, 10), ModifiedAt: time.Now()}
+		mf := &mediafile.File{ItemID: &f.id, Path: "/f/" + f.id.String(), FileModifiedAt: time.Now()}
 		if err := files.CreateFile(mf); err != nil {
 			t.Fatal(err)
 		}
@@ -130,12 +130,12 @@ func TestCatalogScopeAndUHD(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var ids []int64
+	var ids []uid.ID
 	for _, it := range got {
 		ids = append(ids, it.ID)
 	}
-	slices.Sort(ids)
-	if want := []int64{uhd.ID, show.ID, season.ID, ep.ID}; !slices.Equal(ids, want) {
+	slices.SortFunc(ids, uid.ID.Compare)
+	if want := []uid.ID{uhd.ID, show.ID, season.ID, ep.ID}; !slices.Equal(ids, want) {
 		t.Fatalf("4K = %v, want %v", ids, want)
 	}
 }
@@ -145,7 +145,7 @@ func song(t *testing.T, r *item.Repo, files *mediafile.Repo, album *item.Item, t
 	t.Helper()
 	s := mustCreate(t, r, &item.Item{LibraryID: album.LibraryID, ParentID: &album.ID, Kind: item.Song, Path: "/m/" + title,
 		ParsedTitle: title, SortTitle: item.SortName(title), DiscNumber: intp(disc), TrackNumber: intp(track)})
-	f := &mediafile.File{ItemID: s.ID, Path: "/m/" + title, ModifiedAt: time.Now(), DurationMs: &ms}
+	f := &mediafile.File{ItemID: &s.ID, Path: "/m/" + title, FileModifiedAt: time.Now(), DurationMs: &ms}
 	if err := files.CreateFile(f); err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func titles[T any](vs []T, title func(T) string) []string {
 func TestMusicViews(t *testing.T) {
 	d := dbtest.OpenPreferLocal(t)
 	music := &library.Library{Name: "Music", Kind: library.Music}
-	if err := library.New(d).Create(music); err != nil {
+	if err := library.New(d).Create(music, nil); err != nil {
 		t.Fatal(err)
 	}
 	r, files := item.New(d), mediafile.New(d)
@@ -214,7 +214,7 @@ func TestMusicViews(t *testing.T) {
 	if got, _ := r.Artists(item.MusicFilter{Letter: "#"}); len(got) != 1 || got[0].ID != num.ID {
 		t.Fatalf("letter # %v", got)
 	}
-	letters, err := r.Letters(music.ID, item.Artist, false)
+	letters, err := r.Letters(&music.ID, item.Artist, false)
 	if err != nil || !slices.Equal(letters, []item.LetterCount{{Letter: "A", Count: 1}, {Letter: "B", Count: 1}, {Letter: "G", Count: 1}, {Letter: "#", Count: 1}}) {
 		t.Fatalf("letters %v %v", letters, err)
 	}
@@ -236,11 +236,11 @@ func TestMusicViews(t *testing.T) {
 	if got, _ := r.Albums(item.MusicFilter{Sort: "artist"}); got[0].ParsedTitle != "Numbers" || got[1].ID != ep.ID || got[2].ID != lp.ID {
 		t.Fatal("artist sort is by the album artist's sort name")
 	}
-	if got, _ := r.Albums(item.MusicFilter{ArtistID: band.ID}); len(got) != 1 || got[0].ID != lp.ID {
+	if got, _ := r.Albums(item.MusicFilter{ArtistID: &band.ID}); len(got) != 1 || got[0].ID != lp.ID {
 		t.Fatal("albums by artist")
 	}
 
-	songs, err := r.Songs(item.MusicFilter{AlbumID: lp.ID})
+	songs, err := r.Songs(item.MusicFilter{AlbumID: &lp.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,13 +254,13 @@ func TestMusicViews(t *testing.T) {
 	if songs[0].PerformerID != band.ID || songs[0].ArtistName != "The Band" {
 		t.Fatalf("song artist falls back to the album artist: %+v", songs[0])
 	}
-	if got, _ := r.Songs(item.MusicFilter{ArtistID: guest.ID}); len(got) != 1 || got[0].ID != three.ID {
+	if got, _ := r.Songs(item.MusicFilter{ArtistID: &guest.ID}); len(got) != 1 || got[0].ID != three.ID {
 		t.Fatal("songs a guest performs")
 	}
 	if got, _ := r.Songs(item.MusicFilter{Q: "o"}); titles(got, func(s *item.SongView) string { return s.ParsedTitle })[0] != "One" {
 		t.Fatal("a prefix match comes first")
 	}
-	if got, _ := r.Songs(item.MusicFilter{IDs: []int64{two.ID, three.ID}}); len(got) != 2 {
+	if got, _ := r.Songs(item.MusicFilter{IDs: []uid.ID{two.ID, three.ID}}); len(got) != 2 {
 		t.Fatal("by ids")
 	}
 	if got, _ := r.Named(music.ID, &band.ID, item.Album, "zebra"); got == nil || got.ID != lp.ID {
@@ -278,13 +278,13 @@ func TestMusicViews(t *testing.T) {
 func TestMarkAllDueIncludesAlbums(t *testing.T) {
 	d := dbtest.OpenPreferLocal(t)
 	music := &library.Library{Name: "Music", Kind: library.Music}
-	if err := library.New(d).Create(music); err != nil {
+	if err := library.New(d).Create(music, nil); err != nil {
 		t.Fatal(err)
 	}
 	r := item.New(d)
 	ar := mustCreate(t, r, &item.Item{LibraryID: music.ID, Kind: item.Artist, ParsedTitle: "A"})
 	al := mustCreate(t, r, &item.Item{LibraryID: music.ID, ParentID: &ar.ID, Kind: item.Album, ParsedTitle: "B"})
-	for _, id := range []int64{ar.ID, al.ID} {
+	for _, id := range []uid.ID{ar.ID, al.ID} {
 		if err := r.SetMetadata(&item.Metadata{ItemID: id, Provider: item.MusicBrainz, Status: item.Matched}); err != nil {
 			t.Fatal(err)
 		}
@@ -299,36 +299,34 @@ func TestMarkAllDueIncludesAlbums(t *testing.T) {
 func TestMusicByIDSearchesTheKey(t *testing.T) {
 	d := dbtest.Open(t)
 	music := &library.Library{Name: "Music", Kind: library.Music}
-	if err := library.New(d).Create(music); err != nil {
+	if err := library.New(d).Create(music, nil); err != nil {
 		t.Fatal(err)
 	}
 	p := &dbtest.Planner{DBTX: d}
 	r := item.New(p)
 	band := mustCreate(t, r, &item.Item{LibraryID: music.ID, Kind: item.Artist, ParsedTitle: "Band"})
 	lp := mustCreate(t, r, &item.Item{LibraryID: music.ID, ParentID: &band.ID, Kind: item.Album, ParsedTitle: "LP"})
+	// The ids are uid.N(1) to uid.N(50000).
 	if _, err := d.Exec(`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 50000)
-		INSERT INTO item (library_id, parent_id, kind, parsed_title, added_at, updated_at) SELECT ?, ?, 'song', 'Song ' || i, 0, 0 FROM n`,
+		INSERT INTO item (id, library_id, parent_id, kind, parsed_title, added_at, created_at, modified_at)
+		SELECT unhex(printf('00000000000070008000%012x', i)), ?, ?, 'song', 'Song ' || i, 0, 0, 0 FROM n`,
 		music.ID, lp.ID); err != nil {
 		t.Fatal(err)
 	}
-	var last int64
-	if err := d.QueryRow(`SELECT max(id) FROM item`).Scan(&last); err != nil {
-		t.Fatal(err)
-	}
-	songs, err := r.Songs(item.MusicFilter{IDs: []int64{last, last - 1}})
+	songs, err := r.Songs(item.MusicFilter{IDs: []uid.ID{uid.N(50000), uid.N(49999)}})
 	if err != nil || len(songs) != 2 {
 		t.Fatalf("songs %d %v", len(songs), err)
 	}
-	albums, err := r.Albums(item.MusicFilter{IDs: []int64{lp.ID}})
+	albums, err := r.Albums(item.MusicFilter{IDs: []uid.ID{lp.ID}})
 	if err != nil || len(albums) != 1 {
 		t.Fatalf("albums %d %v", len(albums), err)
 	}
-	artists, err := r.Artists(item.MusicFilter{IDs: []int64{band.ID}})
+	artists, err := r.Artists(item.MusicFilter{IDs: []uid.ID{band.ID}})
 	if err != nil || len(artists) != 1 {
 		t.Fatalf("artists %d %v", len(artists), err)
 	}
 	for i, alias := range []string{"s", "al", "a"} {
-		if !strings.HasPrefix(p.Plans[i], "SEARCH "+alias+" USING INTEGER PRIMARY KEY") {
+		if !strings.HasPrefix(p.Plans[i], "SEARCH "+alias+" USING INDEX sqlite_autoindex_item_1 (id=?)") {
 			t.Errorf("%s not found by key:\n%s", alias, p.Plans[i])
 		}
 	}

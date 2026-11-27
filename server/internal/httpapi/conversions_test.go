@@ -8,6 +8,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/download"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/mediafile"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/session"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // active=true lists only the conversions still to finish, newest first,
@@ -16,7 +17,8 @@ import (
 func TestListActiveConversions(t *testing.T) {
 	e := newEnv(t)
 	now := time.Now().UTC()
-	f := &mediafile.File{ItemID: e.movie(e.library("movies"), "M"), Path: "/m.mkv", SizeBytes: 1, ModifiedAt: now}
+	m := e.movie(e.library("movies"), "M")
+	f := &mediafile.File{ItemID: &m, Path: "/m.mkv", SizeBytes: 1, FileModifiedAt: now}
 	must(t, e.svc.MediaFiles.Repo().CreateFile(f))
 	repo := e.svc.Downloads.Repo()
 	conv := func(height int) *download.Conversion {
@@ -36,11 +38,11 @@ func TestListActiveConversions(t *testing.T) {
 
 	var page api.ConversionPage
 	e.expect(200, "GET", "/conversions?active=true", e.admin.token, nil, &page)
-	var got []int64
+	var got []uid.ID
 	for _, c := range page.Items {
 		got = append(got, c.Id)
 	}
-	if want := []int64{queued.ID, converting.ID, retried.ID}; len(got) != 3 || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+	if want := []uid.ID{queued.ID, converting.ID, retried.ID}; len(got) != 3 || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
 		t.Fatalf("got %v, want %v", got, want)
 	}
 	e.expect(200, "GET", "/conversions", e.admin.token, nil, &page)

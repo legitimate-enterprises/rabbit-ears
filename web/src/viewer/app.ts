@@ -185,7 +185,7 @@ export async function boot(root: HTMLElement, opts: BootOptions = {}, start = tr
  * Puts Who's watching in place of the current page, which a pick returns to;
  * given a profile, Who's watching picks it at once.
  */
-const toWho = (pick?: number) =>
+const toWho = (pick?: string) =>
   history.replaceState(
     null,
     "",
@@ -310,8 +310,8 @@ function mount(root: HTMLElement, ctx: Ctx) {
       else if (key === "add-kid") kids = await addKid(ctx);
       else if (key === "add-adult") kids = await addAdult(ctx);
       else if (key === "password") kids = await password(ctx);
-      else if (key === "kid") kids = await editKid(ctx, Number(args[0]));
-      else if (key === "play") kids = await player(ctx, Number(args[0]), query);
+      else if (key === "kid") kids = await editKid(ctx, args[0]);
+      else if (key === "play") kids = await player(ctx, args[0], query);
       else kids = await (routes[key] ?? home)(ctx, args, query);
       if (mine === gen) main.replaceChildren(...kids);
     } catch (e) {

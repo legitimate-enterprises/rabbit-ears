@@ -3,9 +3,11 @@ package person
 
 import (
 	"database/sql"
+	"time"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // Credit kinds.
@@ -17,16 +19,18 @@ const (
 // Person is someone credited on an item. TMDBID is nil for people an admin
 // added by hand.
 type Person struct {
-	ID          int64
+	ID          uid.ID
 	TMDBID      *int64
 	Name        string
 	ProfilePath string // provider headshot name
+	CreatedAt   time.Time
+	ModifiedAt  time.Time
 }
 
 // Credit is one person's part in an item. Name and ProfilePath are read from
 // the person; Position is billing order within the item's cast or crew.
 type Credit struct {
-	PersonID    int64
+	PersonID    uid.ID
 	Name        string
 	ProfilePath string
 	Kind        string
@@ -58,51 +62,57 @@ func New(d db.DBTX) *Repo { return &Repo{d} }
 var seen = `(?6 = 0 AND (person.tmdb_id IS NULL OR (SELECT use_remote FROM metadata_setting))
 	OR EXISTS (SELECT 1 FROM credit_shown c JOIN item ON item.id = c.item_id WHERE c.person_id = person.id AND ` + item.VisibleWhere + `))`
 
-const cols = `id, tmdb_id, name, profile_path`
+const cols = `id, tmdb_id, name, profile_path, created_at, modified_at`
 
 func scan(s db.Scanner) (*Person, error) {
 	var p Person
 	var tmdb sql.NullInt64
 	var profile sql.NullString
-	if err := s.Scan(&p.ID, &tmdb, &p.Name, &profile); err != nil {
+	var created, modified int64
+	if err := s.Scan(&p.ID, &tmdb, &p.Name, &profile, &created, &modified); err != nil {
 		return nil, db.Wrap(err)
 	}
 	if tmdb.Valid {
 		p.TMDBID = &tmdb.Int64
 	}
-	p.ProfilePath = profile.String
+	p.ProfilePath, p.CreatedAt, p.ModifiedAt = profile.String, db.FromMs(created), db.FromMs(modified)
 	return &p, nil
 }
 
-// Create inserts p and fills its ID.
+// Create inserts p and fills its ID (unless set) and timestamps.
 func (r *Repo) Create(p *Person) error {
-	res, err := r.d.Exec(`INSERT INTO person (tmdb_id, name, profile_path) VALUES (?, ?, ?)`, p.TMDBID, p.Name, db.NullStr(p.ProfilePath))
-	if err != nil {
-		return db.Wrap(err)
+	if p.ID.IsZero() {
+		p.ID = uid.New()
 	}
-	p.ID, _ = res.LastInsertId()
-	return nil
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	p.CreatedAt, p.ModifiedAt = now, now
+	_, err := r.d.Exec(`INSERT INTO person (`+cols+`) VALUES (?, ?, ?, ?, ?, ?)`, p.ID, p.TMDBID, p.Name, db.NullStr(p.ProfilePath),
+		db.Ms(now), db.Ms(now))
+	return db.Wrap(err)
 }
 
 // Upsert inserts p, or updates the person with the same TMDBID, and fills its ID.
 func (r *Repo) Upsert(p *Person) error {
-	return db.Wrap(r.d.QueryRow(`INSERT INTO person (tmdb_id, name, profile_path) VALUES (?, ?, ?)
-		ON CONFLICT(tmdb_id) DO UPDATE SET name = excluded.name, profile_path = excluded.profile_path RETURNING id`,
-		p.TMDBID, p.Name, db.NullStr(p.ProfilePath)).Scan(&p.ID))
+	now := db.Ms(time.Now())
+	return db.Wrap(r.d.QueryRow(`INSERT INTO person (`+cols+`) VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(tmdb_id) DO UPDATE SET name = excluded.name, profile_path = excluded.profile_path, modified_at = excluded.modified_at
+		RETURNING id`, uid.New(), p.TMDBID, p.Name, db.NullStr(p.ProfilePath), now, now).Scan(&p.ID))
 }
 
 // Get returns one person or db.ErrNotFound.
-func (r *Repo) Get(id int64) (*Person, error) {
+func (r *Repo) Get(id uid.ID) (*Person, error) {
 	return scan(r.d.QueryRow(`SELECT `+cols+` FROM person WHERE id = ?`, id))
 }
 
 // Update rewrites a person.
 func (r *Repo) Update(p *Person) error {
-	return db.ExecOne(r.d, `UPDATE person SET tmdb_id = ?, name = ?, profile_path = ? WHERE id = ?`, p.TMDBID, p.Name, db.NullStr(p.ProfilePath), p.ID)
+	p.ModifiedAt = time.Now().UTC().Truncate(time.Millisecond)
+	return db.ExecOne(r.d, `UPDATE person SET tmdb_id = ?, name = ?, profile_path = ?, modified_at = ? WHERE id = ?`, p.TMDBID, p.Name,
+		db.NullStr(p.ProfilePath), db.Ms(p.ModifiedAt), p.ID)
 }
 
 // Delete removes a person and their credits.
-func (r *Repo) Delete(id int64) error { return db.ExecOne(r.d, `DELETE FROM person WHERE id = ?`, id) }
+func (r *Repo) Delete(id uid.ID) error { return db.ExecOne(r.d, `DELETE FROM person WHERE id = ?`, id) }
 
 // List pages people by name.
 func (r *Repo) List(f Filter) ([]*Person, error) {
@@ -119,7 +129,7 @@ func (r *Repo) List(f Filter) ([]*Person, error) {
 }
 
 // Seen reports whether the person exists and the audience may see them.
-func (r *Repo) Seen(id int64, a item.Audience) (bool, error) {
+func (r *Repo) Seen(id uid.ID, a item.Audience) (bool, error) {
 	var n int
 	err := r.d.QueryRow(`SELECT COUNT(*) FROM person WHERE id = ?1 AND `+seen, append([]any{id, nil, nil, nil, nil}, a.Args()...)...).Scan(&n)
 	return n > 0, db.Wrap(err)
@@ -127,7 +137,7 @@ func (r *Repo) Seen(id int64, a item.Audience) (bool, error) {
 
 // Credits lists an item's cast in billing order, then its crew; none while
 // the metadata settings use no remote data.
-func (r *Repo) Credits(itemID int64) ([]*Credit, error) {
+func (r *Repo) Credits(itemID uid.ID) ([]*Credit, error) {
 	rows, err := r.d.Query(`SELECT c.person_id, p.name, p.profile_path, c.kind, c.character, c.job, c.department, c.position
 		FROM credit_shown c JOIN person p ON p.id = c.person_id WHERE c.item_id = ? ORDER BY c.kind, c.position`, itemID)
 	return db.Collect(rows, err, func(s db.Scanner) (*Credit, error) {
@@ -143,15 +153,17 @@ func (r *Repo) Credits(itemID int64) ([]*Credit, error) {
 
 // SetCredits replaces an item's credits atomically. Positions follow the
 // order of cs within each kind.
-func (r *Repo) SetCredits(itemID int64, cs []Credit) error {
+func (r *Repo) SetCredits(itemID uid.ID, cs []Credit) error {
 	return db.InTx(r.d, func(tx db.DBTX) error {
 		if _, err := tx.Exec(`DELETE FROM credit WHERE item_id = ?`, itemID); err != nil {
 			return db.Wrap(err)
 		}
 		next := map[string]int{}
+		now := db.Ms(time.Now())
 		for _, c := range cs {
-			if _, err := tx.Exec(`INSERT INTO credit (item_id, person_id, kind, character, job, department, position) VALUES (?,?,?,?,?,?,?)`,
-				itemID, c.PersonID, c.Kind, db.NullStr(c.Character), db.NullStr(c.Job), db.NullStr(c.Department), next[c.Kind]); err != nil {
+			if _, err := tx.Exec(`INSERT INTO credit (id, item_id, person_id, kind, character, job, department, position, created_at, modified_at)
+				VALUES (?,?,?,?,?,?,?,?,?,?)`, uid.New(), itemID, c.PersonID, c.Kind, db.NullStr(c.Character), db.NullStr(c.Job),
+				db.NullStr(c.Department), next[c.Kind], now, now); err != nil {
 				return db.Wrap(err)
 			}
 			next[c.Kind]++

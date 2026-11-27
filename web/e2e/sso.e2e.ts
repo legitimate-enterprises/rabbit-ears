@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { createHash, generateKeyPairSync, randomBytes, sign } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { email, seed } from "./support";
+import { api, email, seed } from "./support";
 
 const b64 = (b: Buffer | string) => Buffer.from(b).toString("base64url");
 
@@ -89,7 +89,7 @@ function provider() {
 test("an adult signs in with a single sign-on provider", async ({ page, request }) => {
   const headers = await seed(request);
   const idp = await provider();
-  const created = await request.post("/api/v1/admin/sso-providers", {
+  const created = await request.post(`${api}/admin/sso-providers`, {
     headers,
     data: { name: "Keyhole", issuer: idp.issuer, clientId: "rabbit-ears", linksByEmail: true },
   });
@@ -101,7 +101,7 @@ test("an adult signs in with a single sign-on provider", async ({ page, request 
     await expect(page.getByRole("heading", { name: "Who's watching?" })).toBeVisible();
     expect(new URL(page.url()).hash).toBe("#/who");
   } finally {
-    await request.delete(`/api/v1/admin/sso-providers/${id}`, { headers });
+    await request.delete(`${api}/admin/sso-providers/${id}`, { headers });
     idp.close();
   }
 });

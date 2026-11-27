@@ -5,17 +5,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db"
-	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db/dbtest"
-	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
-	"github.com/legitimate-enterprises/rabbit-ears/server/internal/mediafile"
-	"github.com/legitimate-enterprises/rabbit-ears/server/internal/playlist"
-	"github.com/legitimate-enterprises/rabbit-ears/server/internal/seekpreview"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 func open(t *testing.T) *sql.DB {
@@ -28,31 +25,18 @@ func open(t *testing.T) *sql.DB {
 	return d
 }
 
-func schema(t *testing.T, d *sql.DB) string {
+func migrated(t *testing.T) *sql.DB {
 	t.Helper()
-	rows, err := d.Query(`SELECT type, name, COALESCE(sql,'') FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = rows.Close() }()
-	var out []string
-	for rows.Next() {
-		var a, b, c string
-		if err := rows.Scan(&a, &b, &c); err != nil {
-			t.Fatal(err)
-		}
-		out = append(out, a+" "+b+" "+c)
-	}
-	sort.Strings(out)
-	return strings.Join(out, "\n")
-}
-
-func TestMigrateFromEmpty(t *testing.T) {
 	d := open(t)
 	if err := db.Migrate(d); err != nil {
 		t.Fatal(err)
 	}
-	if v, _ := db.Version(d); v != db.LatestVersion() || v < 4 {
+	return d
+}
+
+func TestMigrateFromEmpty(t *testing.T) {
+	d := migrated(t)
+	if v, _ := db.Version(d); v != db.LatestVersion() || v < 1 {
 		t.Fatalf("version = %d", v)
 	}
 	var fk int
@@ -64,42 +48,8 @@ func TestMigrateFromEmpty(t *testing.T) {
 	}
 }
 
-// Every prior version upgrades to the same schema as a fresh database, and
-// rows written at an old version survive.
-func TestMigrateFromEveryPriorVersion(t *testing.T) {
-	fresh := open(t)
-	if err := db.Migrate(fresh); err != nil {
-		t.Fatal(err)
-	}
-	want := schema(t, fresh)
-	for v := 1; v < db.LatestVersion(); v++ {
-		t.Run(fmt.Sprintf("v%d", v), func(t *testing.T) {
-			d := open(t)
-			if err := db.MigrateTo(d, v); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := d.Exec(`INSERT INTO library (name, kind, created_at, updated_at) VALUES ('Films','movies',1,1)`); err != nil {
-				t.Fatal(err)
-			}
-			if err := db.Migrate(d); err != nil {
-				t.Fatal(err)
-			}
-			if got := schema(t, d); got != want {
-				t.Fatalf("schema at v%d -> latest differs from fresh", v)
-			}
-			var n int
-			if err := d.QueryRow(`SELECT COUNT(*) FROM library`).Scan(&n); err != nil || n != 1 {
-				t.Fatalf("library rows = %d, %v", n, err)
-			}
-		})
-	}
-}
-
 func TestMigrateRefusesNewerDatabase(t *testing.T) {
-	d := open(t)
-	if err := db.Migrate(d); err != nil {
-		t.Fatal(err)
-	}
+	d := migrated(t)
 	if _, err := d.Exec(`INSERT INTO schema_migration VALUES (999,'x',0)`); err != nil {
 		t.Fatal(err)
 	}
@@ -118,18 +68,20 @@ func TestTimeIsUTCInstant(t *testing.T) {
 }
 
 func TestWrapConstraints(t *testing.T) {
-	d := open(t)
-	if err := db.Migrate(d); err != nil {
+	d := migrated(t)
+	ins := `INSERT INTO library (id, name, kind, created_at, modified_at) VALUES (?, ?, 'movies', 1, 1)`
+	a := uid.New()
+	if _, err := d.Exec(ins, a, "a"); err != nil {
 		t.Fatal(err)
 	}
-	ins := `INSERT INTO library (name, kind, created_at, updated_at) VALUES ('a','movies',1,1)`
-	if _, err := d.Exec(ins); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := d.Exec(ins); !isErr(db.Wrap(err), db.ErrConflict) {
+	if _, err := d.Exec(ins, uid.New(), "a"); !isErr(db.Wrap(err), db.ErrConflict) {
 		t.Fatalf("unique: %v", db.Wrap(err))
 	}
-	_, err := d.Exec(`INSERT INTO library_folder (library_id, path) VALUES (99,'/x')`)
+	// A client that sends an id already taken.
+	if _, err := d.Exec(ins, a, "b"); !isErr(db.Wrap(err), db.ErrConflict) {
+		t.Fatalf("primary key: %v", db.Wrap(err))
+	}
+	_, err := d.Exec(`INSERT INTO library_folder (id, library_id, path, created_at, modified_at) VALUES (?, ?, '/x', 1, 1)`, uid.New(), uid.N(99))
 	if !isErr(db.Wrap(err), db.ErrReference) {
 		t.Fatalf("fk: %v", db.Wrap(err))
 	}
@@ -139,501 +91,271 @@ func isErr(err, target error) bool {
 	return err != nil && strings.Contains(err.Error(), target.Error())
 }
 
-func TestTaskRunSummaryColumn(t *testing.T) {
-	d := open(t)
-	if err := db.MigrateTo(d, 6); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := d.Exec(`INSERT INTO task (name, kind, created_at) VALUES ('t','scan:1',1)`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := d.Exec(`INSERT INTO task_run (task_id, status, started_at) VALUES (1,'succeeded',1)`); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Migrate(d); err != nil {
-		t.Fatal(err)
-	}
-	var s sql.NullString
-	if err := d.QueryRow(`SELECT summary FROM task_run`).Scan(&s); err != nil || s.Valid {
-		t.Fatalf("old runs keep a NULL summary: %v %v", s, err)
-	}
-}
-
-func TestMatchedItemsAreDueForCredits(t *testing.T) {
-	d := open(t)
-	if err := db.MigrateTo(d, 8); err != nil {
-		t.Fatal(err)
-	}
-	for _, q := range []string{
-		`INSERT INTO library (id, name, kind, created_at, updated_at) VALUES (1,'Films','movies',1,1)`,
-		`INSERT INTO item (id, library_id, kind, parsed_title, added_at, updated_at) VALUES (1,1,'movie','A',1,1), (2,1,'movie','B',1,1)`,
-		`INSERT INTO item_metadata (item_id, provider_id, status, retry_at) VALUES (1,603,'matched',9999999999999), (2,NULL,'unmatched',9999999999999)`,
-		`INSERT INTO task (name, kind, next_run_at, created_at) VALUES ('Refresh metadata','metadata',9999999999999,1)`,
-	} {
-		if _, err := d.Exec(q); err != nil {
+func TestIn(t *testing.T) {
+	d := migrated(t)
+	ids := []uid.ID{uid.N(1), uid.N(2), uid.N(3)}
+	for i, id := range ids {
+		if _, err := d.Exec(`INSERT INTO library (id, name, kind, created_at, modified_at) VALUES (?, ?, 'movies', 1, 1)`, id, fmt.Sprint(i)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := db.Migrate(d); err != nil {
-		t.Fatal(err)
-	}
-	var matched, unmatched, task int64
-	if err := d.QueryRow(`SELECT (SELECT retry_at FROM item_metadata WHERE item_id = 1), (SELECT retry_at FROM item_metadata WHERE item_id = 2),
-		(SELECT next_run_at FROM task)`).Scan(&matched, &unmatched, &task); err != nil {
-		t.Fatal(err)
-	}
-	if matched != 0 || unmatched != 9999999999999 || task != 0 {
-		t.Fatalf("matched %d unmatched %d task %d", matched, unmatched, task)
+	in, args := db.In([]uid.ID{uid.N(3), uid.N(1)})
+	rows, err := d.Query(`SELECT id FROM library WHERE id IN `+in+` ORDER BY id`, args...) //nolint:gosec // placeholders only
+	got, err := db.Collect(rows, err, db.Column[uid.ID])
+	if err != nil || !slices.Equal(got, []uid.ID{uid.N(1), uid.N(3)}) {
+		t.Fatalf("%v %v", got, err)
 	}
 }
 
-// Rebuilding item for music and YouTube kinds keeps every row, its children
-// and everything that refers to it, and leaves foreign keys enforced.
-func TestItemRebuildKeepsRows(t *testing.T) {
-	d := open(t)
-	if err := db.MigrateTo(d, 17); err != nil {
-		t.Fatal(err)
-	}
-	for _, q := range []string{
-		`INSERT INTO library (id, name, kind, created_at, updated_at) VALUES (1,'TV','tv',1,1), (2,'Music','music',1,1)`,
-		`INSERT INTO item (id, library_id, parent_id, kind, path, parsed_title, season_number, episode_number, added_at, updated_at)
-			VALUES (1,1,NULL,'show','/tv/S','S',NULL,NULL,1,1), (2,1,1,'season','/tv/S/1','S',1,NULL,1,1), (3,1,2,'episode',NULL,'S',1,4,1,1)`,
-		`INSERT INTO item_metadata (item_id, provider_id, status, title) VALUES (1,9,'matched','Show')`,
-		`INSERT INTO media_file (id, item_id, path, size_bytes, modified_at) VALUES (1,3,'/tv/S/1/e4.mkv',10,1)`,
-		`INSERT INTO account (id, kind, name, created_at, updated_at) VALUES (1,'adult','A',1,1)`,
-		`INSERT INTO watch_state (account_id, item_id, position_ms, updated_at) VALUES (1,3,500,1)`,
-	} {
-		if _, err := d.Exec(q); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := db.Migrate(d); err != nil {
-		t.Fatal(err)
-	}
-	var items, files, states, metas int
-	if err := d.QueryRow(`SELECT (SELECT COUNT(*) FROM item), (SELECT COUNT(*) FROM media_file), (SELECT COUNT(*) FROM watch_state),
-		(SELECT COUNT(*) FROM item_metadata)`).Scan(&items, &files, &states, &metas); err != nil {
-		t.Fatal(err)
-	}
-	if items != 3 || files != 1 || states != 1 || metas != 1 {
-		t.Fatalf("items %d files %d states %d metadata %d", items, files, states, metas)
-	}
-	var fk int
-	if err := d.QueryRow(`PRAGMA foreign_keys`).Scan(&fk); err != nil || fk != 1 {
-		t.Fatalf("foreign_keys = %d, %v", fk, err)
-	}
-	for _, q := range []string{
-		`INSERT INTO item (id, library_id, kind, parsed_title, sort_title, added_at, updated_at) VALUES (10,2,'artist','The Band','Band',1,1)`,
-		`INSERT INTO item (id, library_id, parent_id, kind, parsed_title, added_at, updated_at) VALUES (11,2,10,'album','LP',1,1)`,
-		`INSERT INTO item (id, library_id, parent_id, kind, parsed_title, disc_number, track_number, artist_id, added_at, updated_at)
-			VALUES (12,2,11,'song','One',1,1,10,1,1)`,
-	} {
-		if _, err := d.Exec(q); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for _, q := range []string{
-		`INSERT INTO item (library_id, kind, parsed_title, added_at, updated_at) VALUES (2,'song','No album',1,1)`,
-		`INSERT INTO item (library_id, parent_id, kind, parsed_title, added_at, updated_at) VALUES (2,10,'artist','Nested',1,1)`,
-		`INSERT INTO item (library_id, parent_id, kind, parsed_title, artist_id, added_at, updated_at) VALUES (2,10,'album','X',10,1,1)`,
-		`INSERT INTO item (library_id, kind, parsed_title, added_at, updated_at) VALUES (2,'track','Bad kind',1,1)`,
-	} {
-		if _, err := d.Exec(q); err == nil {
-			t.Fatalf("accepted %s", q)
-		}
-	}
-	if _, err := d.Exec(`DELETE FROM item WHERE id = 1`); err != nil {
-		t.Fatal(err)
-	}
-	if err := d.QueryRow(`SELECT (SELECT COUNT(*) FROM item WHERE library_id = 1), (SELECT COUNT(*) FROM media_file)`).Scan(&items, &files); err != nil {
-		t.Fatal(err)
-	}
-	if items != 0 || files != 0 {
-		t.Fatalf("cascade after rebuild: items %d files %d", items, files)
-	}
+// The table classes of the v2 schema: U people create (audit timestamps and
+// who), S the system keeps (audit timestamps), C keyed by other rows, B
+// bookkeeping.
+var (
+	userTables = []string{"library", "library_folder", "household", "account", "join_code", "playlist",
+		"playlist_entry", "collection", "station", "station_time", "sso_provider", "cover", "download",
+		"profile_offer", "occasion"}
+	systemTables = []string{"track", "chapter", "device", "playback_session", "task", "task_run",
+		"throughput_sample", "log_entry", "genre", "person", "credit", "seek_preview", "device_link", "item",
+		"watch_together", "edition", "media_file", "station_program", "account_identity", "conversion",
+		"identity_review", "identity_evidence"}
+	keyedTables = []string{"account_allow", "session_plan_entry", "watch_state", "collection_movie",
+		"edition_file", "station_day", "station_loop", "playlist_share", "watch_together_member",
+		"item_metadata", "item_genre", "household_member", "adult_link", "playlist_household_share",
+		"item_keyword", "occasion_keyword", "occasion_item", "occasion_exclusion", "occasion_phrase",
+		"song_release"}
+	bookTables = []string{"server_info", "artwork_generation", "occasion_seed", "sync_clock",
+		"sync_tombstone", "sync_action", "schema_migration"}
+	syncedTables = []string{"account", "account_allow", "adult_link", "chapter", "collection",
+		"collection_movie", "cover", "credit", "download", "edition", "edition_file", "genre", "household",
+		"household_member", "item", "item_genre", "item_keyword", "item_metadata", "library", "media_file",
+		"occasion", "occasion_exclusion", "occasion_item", "occasion_keyword", "occasion_phrase", "person",
+		"playlist", "playlist_entry", "playlist_household_share", "playlist_share", "profile_offer",
+		"server_info", "station", "station_day", "station_loop", "station_program", "station_time", "track",
+		"watch_state"}
+	// Id columns without a foreign key, and BLOB columns that are not ids.
+	unkeyedIDs = []string{"log_entry.session_id", "log_entry.item_id", "station_loop.entry_id",
+		"station_loop.item_id", "conversion.audio_track_id", "conversion.burn_track_id"}
+	notIDBlobs = []string{"cover.jpeg", "sync_tombstone.k1", "sync_tombstone.k2", "sync_tombstone.k3"}
+	// Columns named like ids that hold something else.
+	notIDs = map[string]string{"genre.tmdb_id": "INTEGER", "person.tmdb_id": "INTEGER",
+		"collection.tmdb_id": "INTEGER", "item_metadata.provider_id": "INTEGER",
+		"item_keyword.keyword_id": "INTEGER", "occasion_keyword.keyword_id": "INTEGER",
+		"sso_provider.client_id": "TEXT", "sync_action.uuid": "TEXT", "item_metadata.external_id": "TEXT",
+		"identity_evidence.external_id": "TEXT", "song_release.release_id": "TEXT",
+		"song_release.release_group_id": "TEXT", "server_info.id": "INTEGER",
+		"artwork_generation.id": "INTEGER", "sync_clock.id": "INTEGER"}
+)
+
+type column struct {
+	name, typ     string
+	notNull       bool
+	pk            int
+	dflt          sql.NullString
+	parent, onDel string
 }
 
-// The subscription, queue and channel playlist tables go with the channel
-// check and download tasks, and a channel without a folder with its videos.
-func TestYouTubeBecomesScannedFolders(t *testing.T) {
-	d := open(t)
-	if err := db.MigrateTo(d, 23); err != nil {
+func columns(t *testing.T, d *sql.DB, table string) []column {
+	t.Helper()
+	rows, err := d.Query(`SELECT name, type, "notnull", pk, dflt_value FROM pragma_table_info(?) ORDER BY cid`, table)
+	cs, err := db.Collect(rows, err, func(s db.Scanner) (column, error) {
+		var c column
+		return c, s.Scan(&c.name, &c.typ, &c.notNull, &c.pk, &c.dflt)
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
-	for _, q := range []string{
-		`INSERT INTO library (id, name, kind, created_at, updated_at) VALUES (1,'YouTube','youtube',1,1)`,
-		`INSERT INTO item (id, library_id, parent_id, kind, path, parsed_title, added_at, updated_at)
-			VALUES (1,1,NULL,'channel',NULL,'Subscribed',1,1), (2,1,1,'video',NULL,'Downloaded',1,1),
-			(3,1,NULL,'channel','/yt/Folder','Folder',1,1), (4,1,3,'video','/yt/Folder/v.mp4','Scanned',1,1)`,
-		`INSERT INTO channel_subscription (channel_id, address, created_at, updated_at) VALUES (1,'@example',1,1)`,
-		`INSERT INTO task (id, name, kind, created_at) VALUES (1,'Check channels in YouTube','youtube:1',1),
-			(2,'YouTube download','youtube-downloads',1), (3,'Scan YouTube','scan:1',1)`,
-	} {
-		if _, err := d.Exec(q); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := db.Migrate(d); err != nil {
-		t.Fatal(err)
-	}
-	var itemIDs, taskIDs string
-	var tables int
-	if err := d.QueryRow(`SELECT (SELECT group_concat(id) FROM (SELECT id FROM item ORDER BY id)), (SELECT group_concat(id) FROM (SELECT id FROM task ORDER BY id)),
-		(SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN
-			('youtube_settings','channel_subscription','channel_playlist','channel_playlist_video','channel_video'))`).
-		Scan(&itemIDs, &taskIDs, &tables); err != nil {
-		t.Fatal(err)
-	}
-	if itemIDs != "3,4" || taskIDs != "3" || tables != 0 {
-		t.Fatalf("items %s tasks %s tables %d", itemIDs, taskIDs, tables)
-	}
-	if _, err := d.Exec(`UPDATE item_metadata SET published_at = 1, sidecar_stamp = 2`); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// Video playlists split as 0025_playlist_library_kinds.sql says; music
-// playlists and every kept row's id, entries and play stamp survive.
-func TestPlaylistsTakeLibraryKinds(t *testing.T) {
-	d := open(t)
-	if err := db.MigrateTo(d, 24); err != nil {
-		t.Fatal(err)
-	}
-	for _, q := range []string{
-		`INSERT INTO library (id, name, kind, created_at, updated_at) VALUES (1,'Films','movies',1,1), (2,'TV','tv',1,1), (3,'Music','music',1,1), (4,'YouTube','youtube',1,1)`,
-		`INSERT INTO item (id, library_id, parent_id, kind, parsed_title, season_number, episode_number, added_at, updated_at)
-			VALUES (1,1,NULL,'movie','Film',NULL,NULL,1,1), (2,2,NULL,'show','S',NULL,NULL,1,1), (3,2,2,'season','S',1,NULL,1,1),
-			(4,2,3,'episode','S',1,1,1,1), (5,3,NULL,'artist','Band',NULL,NULL,1,1), (6,3,5,'album','LP',NULL,NULL,1,1),
-			(7,3,6,'song','One',NULL,NULL,1,1), (8,4,NULL,'channel','Ch',NULL,NULL,1,1), (9,4,8,'video','V',NULL,NULL,1,1)`,
-		`INSERT INTO account (id, kind, name, created_at, updated_at) VALUES (1,'adult','A',1,1)`,
-		`INSERT INTO playlist (id, account_id, name, kind, last_played_at, created_at, updated_at) VALUES
-			(1,1,'Films','video',5,1,1), (2,1,'Shows','video',NULL,1,1), (3,1,'Mixed','video',NULL,1,1),
-			(4,1,'Clips','video',NULL,1,1), (5,1,'Empty','video',NULL,1,1), (6,1,'Songs','music',NULL,1,1)`,
-		`INSERT INTO playlist_entry (id, playlist_id, item_id, position, added_at) VALUES
-			(1,1,1,0,1), (2,1,1,1,1), (3,2,4,0,1), (4,3,1,0,1), (5,3,4,1,1), (6,4,9,0,1), (7,6,7,0,1)`,
-	} {
-		if _, err := d.Exec(q); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := db.Migrate(d); err != nil {
-		t.Fatal(err)
-	}
-	var kinds, entries string
-	var played int64
-	if err := d.QueryRow(`SELECT (SELECT group_concat(id || ':' || kind) FROM (SELECT id, kind FROM playlist ORDER BY id)),
-		(SELECT group_concat(id) FROM (SELECT id FROM playlist_entry ORDER BY id)), (SELECT last_played_at FROM playlist WHERE id = 1)`).
-		Scan(&kinds, &entries, &played); err != nil {
-		t.Fatal(err)
-	}
-	if kinds != "1:movies,2:tv,5:movies,6:music" || entries != "1,2,3,7" || played != 5 {
-		t.Fatalf("playlists %s entries %s played %d", kinds, entries, played)
-	}
-	if _, err := d.Exec(`INSERT INTO playlist (account_id, name, kind, created_at, updated_at) VALUES (1,'X','video',1,1)`); err == nil {
-		t.Fatal("video accepted")
-	}
-	if _, err := d.Exec(`DELETE FROM playlist WHERE id = 1`); err != nil {
-		t.Fatal(err)
-	}
-	var n int
-	if err := d.QueryRow(`SELECT COUNT(*) FROM playlist_entry WHERE playlist_id = 1`).Scan(&n); err != nil || n != 0 {
-		t.Fatalf("entries cascade after rebuild: %d %v", n, err)
-	}
-}
-
-// Files become editions as 0027_editions.sql says, tags matched
-// case-insensitively; file, track and session rows keep their ids.
-func TestEditionsCarryEveryRow(t *testing.T) {
-	d := open(t)
-	if err := db.MigrateTo(d, 26); err != nil {
-		t.Fatal(err)
-	}
-	for _, q := range []string{
-		`INSERT INTO library (id, name, kind, created_at, updated_at) VALUES (1,'Films','movies',1,1), (2,'TV','tv',1,1)`,
-		`INSERT INTO item (id, library_id, parent_id, kind, parsed_title, season_number, episode_number, added_at, updated_at)
-			VALUES (1,1,NULL,'movie','Film',NULL,NULL,1,1), (2,2,NULL,'show','S',NULL,NULL,1,1), (3,2,2,'season','S',1,NULL,1,1),
-			(4,2,3,'episode','S',1,1,1,1), (5,1,NULL,'movie','Bare',NULL,NULL,1,1), (6,1,NULL,'movie','Cut',NULL,NULL,1,1)`,
-		`INSERT INTO media_file (id, item_id, path, size_bytes, modified_at, duration_ms) VALUES
-			(7,1,'/f/a.mkv',10,1,6000000), (8,1,'/f/b.mkv',20,1,6100000), (9,4,'/t/e {edition-X}.mkv',5,1,NULL),
-			(10,6,'/f/Cut (2001) {Edition-Director''s Cut} [x].mkv',5,1,7000000), (11,6,'/f/Cut (2001) {edition-director''s cut}.mp4',4,1,1),
-			(12,6,'/f/Cut (2001) {edition-}.mkv',3,1,5000000)`,
-		`INSERT INTO track (id, media_file_id, stream_index, kind, codec) VALUES (3,8,0,'video','h264')`,
-		`INSERT INTO account (id, kind, name, created_at, updated_at) VALUES (1,'adult','A',1,1)`,
-		`INSERT INTO household (id, name, adult_id, created_at) VALUES (1,'H',1,1)`,
-		`INSERT INTO device (id, account_id, household_id, name, platform, token_hash, created_at) VALUES (1,1,1,'D','web','h',1)`,
-		`INSERT INTO playback_session (id, device_id, account_id, item_id, media_file_id, started_at, updated_at) VALUES (4,1,1,1,8,1,1)`,
-		`INSERT INTO watch_state (account_id, item_id, position_ms, updated_at) VALUES (1,1,500,1), (1,4,0,1), (1,5,0,1)`,
-		`INSERT INTO playlist (id, account_id, name, kind, created_at, updated_at) VALUES (1,1,'P','movies',1,1), (2,1,'T','tv',1,1)`,
-		`INSERT INTO playlist_entry (id, playlist_id, item_id, position, added_at) VALUES (1,1,1,0,1), (2,2,2,0,1), (3,2,4,1,1)`,
-	} {
-		if _, err := d.Exec(q); err != nil {
-			t.Fatalf("%s: %v", q, err)
-		}
-	}
-	if err := db.Migrate(d); err != nil {
-		t.Fatal(err)
-	}
-	var editions, links, entries, states string
-	if err := d.QueryRow(`SELECT
-		(SELECT group_concat(item_id || ':' || COALESCE(tag, '-') || ':' || COALESCE(runtime_ms, '-')) FROM (SELECT * FROM edition ORDER BY item_id)),
-		(SELECT group_concat(e.item_id || ':' || ef.media_file_id) FROM (SELECT * FROM edition_file ORDER BY media_file_id) ef JOIN edition e ON e.id = ef.edition_id),
-		(SELECT group_concat(p.id || ':' || COALESCE(e.item_id, '-')) FROM (SELECT * FROM playlist_entry ORDER BY id) p LEFT JOIN edition e ON e.id = p.edition_id),
-		(SELECT group_concat(w.item_id || ':' || COALESCE(e.item_id, '-')) FROM (SELECT * FROM watch_state ORDER BY item_id) w LEFT JOIN edition e ON e.id = w.edition_id)`).
-		Scan(&editions, &links, &entries, &states); err != nil {
-		t.Fatal(err)
-	}
-	if editions != "1:-:6100000,4:-:-,6:-:5000000,6:Director's Cut:7000000" || links != "1:7,1:8,4:9,6:10,6:11,6:12" ||
-		entries != "1:1,2:-,3:4" || states != "1:1,4:4,5:-" {
-		t.Fatalf("editions %s links %s entries %s states %s", editions, links, entries, states)
-	}
-	var sessions, tracks, cols int
-	if err := d.QueryRow(`SELECT (SELECT COUNT(*) FROM playback_session WHERE media_file_id = 8), (SELECT COUNT(*) FROM track WHERE media_file_id = 8),
-		(SELECT COUNT(*) FROM pragma_table_info('media_file') WHERE name = 'item_id')`).Scan(&sessions, &tracks, &cols); err != nil {
-		t.Fatal(err)
-	}
-	if sessions != 1 || tracks != 1 || cols != 0 {
-		t.Fatalf("sessions %d tracks %d item_id columns %d", sessions, tracks, cols)
-	}
-	// A file goes once the last title holding it does.
-	if _, err := d.Exec(`DELETE FROM item WHERE id = 1`); err != nil {
-		t.Fatal(err)
-	}
-	var files int
-	if err := d.QueryRow(`SELECT COUNT(*) FROM media_file`).Scan(&files); err != nil || files != 4 {
-		t.Fatalf("files %d %v", files, err)
-	}
-}
-
-// Every station keeps the timing its kind had: movies on the hour, tv on
-// the hour or half hour, music back to back.
-func TestStationsTakeTheirKindsTiming(t *testing.T) {
-	d := open(t)
-	if err := db.MigrateTo(d, 36); err != nil {
-		t.Fatal(err)
-	}
-	for _, q := range []string{
-		`INSERT INTO account (id, kind, name, created_at, updated_at) VALUES (1,'adult','A',1,1)`,
-		`INSERT INTO playlist (id, account_id, name, kind, created_at, updated_at) VALUES (1,1,'F','movies',1,1), (2,1,'T','tv',1,1), (3,1,'M','music',1,1)`,
-		`INSERT INTO station (id, account_id, playlist_id, name, visibility, created_at, updated_at) VALUES
-			(1,1,1,'F','private',1,1), (2,1,2,'T','private',1,1), (3,1,3,'M','private',1,1)`,
-	} {
-		if _, err := d.Exec(q); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := db.Migrate(d); err != nil {
-		t.Fatal(err)
-	}
-	var timings string
-	if err := d.QueryRow(`SELECT group_concat(id || ':' || timing) FROM (SELECT id, timing FROM station ORDER BY id)`).Scan(&timings); err != nil {
-		t.Fatal(err)
-	}
-	if timings != "1:hour,2:half_hour,3:continuous" {
-		t.Fatalf("timings %s", timings)
-	}
-	if _, err := d.Exec(`UPDATE station SET timing = 'daily' WHERE id = 1`); err == nil {
-		t.Fatal("daily accepted")
-	}
-}
-
-// Provider rows and genre links split by source as
-// 0041_metadata_sources.sql says; movies keep TMDB as remote, and the
-// settings start Local only.
-func TestMetadataSplitsBySource(t *testing.T) {
-	d := open(t)
-	if err := db.MigrateTo(d, 40); err != nil {
-		t.Fatal(err)
-	}
-	for _, q := range []string{
-		`INSERT INTO server_info (id, name, created_at, updated_at) VALUES (1,'S',1,1)`,
-		`INSERT INTO library (id, name, kind, created_at, updated_at) VALUES (1,'M','movies',1,1), (2,'Mu','music',1,1), (3,'Y','youtube',1,1)`,
-		`INSERT INTO item (id, library_id, parent_id, kind, path, parsed_title, added_at, updated_at) VALUES
-			(1,1,NULL,'movie',NULL,'Film',1,1), (2,2,NULL,'artist',NULL,'Band',1,1), (3,2,2,'album',NULL,'Own',1,1),
-			(4,2,2,'album',NULL,'Archive',1,1), (5,3,NULL,'channel','/y/C','C',1,1), (6,3,5,'video',NULL,'V',1,1),
-			(7,3,NULL,'channel','/y/D','D',1,1), (8,2,2,'album',NULL,'Unlooked',1,1)`,
-		`INSERT INTO item_metadata (item_id, provider, provider_id, status, title, poster_path, external_id, fetched_at, retry_at, published_at, sidecar_stamp) VALUES
-			(1,'tmdb',9,'matched','Film!','/p.jpg',NULL,1,2,NULL,NULL),
-			(3,'musicbrainz',NULL,'matched',NULL,'/data/thumbnails/music/ab.jpg','mb-own',1,2,NULL,NULL),
-			(4,'musicbrainz',NULL,'matched',NULL,'/data/images/caa/mb.jpg','mb-arch',1,2,NULL,NULL),
-			(5,'youtube',NULL,'matched','C','/data/cache/youtube/av.jpg','UC1',1,2,NULL,NULL),
-			(6,'youtube',NULL,'matched','V','/y/C/v-thumb.jpg','vid',1,NULL,5,6),
-			(7,'youtube',NULL,'matched','D','/y/D/poster.jpg','UC2',1,NULL,NULL,NULL),
-			(8,'musicbrainz',NULL,'unmatched',NULL,'/data/thumbnails/music/cd.jpg',NULL,NULL,NULL,NULL,NULL)`,
-		`INSERT INTO genre (id, name) VALUES (1,'Drama'), (2,'Rock')`,
-		`INSERT INTO item_genre (item_id, genre_id) VALUES (1,1), (3,2)`,
-	} {
-		if _, err := d.Exec(q); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := db.MigrateTo(d, 41); err != nil {
-		t.Fatal(err)
-	}
-	var rows, genres, setting string
-	if err := d.QueryRow(`SELECT group_concat(r, ' ') FROM (SELECT item_id || ':' || source || ':' || provider || ':' || COALESCE(title, '-') || ':' ||
-			COALESCE(poster_path, '-') || ':' || COALESCE(external_id, '-') || ':' || COALESCE(retry_at, '-') || ':' || COALESCE(published_at, '-') AS r
-			FROM item_metadata ORDER BY item_id, source)`).Scan(&rows); err != nil {
-		t.Fatal(err)
-	}
-	want := "1:remote:tmdb:Film!:/p.jpg:-:2:- " +
-		"3:local:local:-:/data/thumbnails/music/ab.jpg:-:-:- 3:remote:musicbrainz:-:-:mb-own:2:- " +
-		"4:remote:musicbrainz:-:/data/images/caa/mb.jpg:mb-arch:2:- " +
-		"5:local:local:C:-:UC1:-:- 5:remote:youtube:-:/data/cache/youtube/av.jpg:-:2:- " +
-		"6:local:local:V:/y/C/v-thumb.jpg:vid:-:5 " +
-		"7:local:local:D:/y/D/poster.jpg:UC2:-:- " +
-		"8:local:local:-:/data/thumbnails/music/cd.jpg:-:-:-"
-	if rows != want {
-		t.Fatalf("rows\n%s\nwant\n%s", rows, want)
-	}
-	if err := d.QueryRow(`SELECT group_concat(item_id || ':' || genre_id || ':' || source, ' ') FROM (SELECT * FROM item_genre ORDER BY item_id)`).
-		Scan(&genres); err != nil {
-		t.Fatal(err)
-	}
-	if err := d.QueryRow(`SELECT metadata_source || ' ' || metadata_mode FROM server_info`).Scan(&setting); err != nil {
-		t.Fatal(err)
-	}
-	if genres != "1:1:remote 3:2:local" || setting != "local only" {
-		t.Fatalf("genres %s setting %s", genres, setting)
-	}
-}
-
-// Paths the server made under its data folder become relative to it, found
-// from the folder they were made in whatever the data folder was called; a
-// provider's path and a file in a library keep theirs.
-func TestDataPathsBecomeRelative(t *testing.T) {
-	d := open(t)
-	if err := db.MigrateTo(d, 56); err != nil {
-		t.Fatal(err)
-	}
-	for _, q := range []string{
-		`INSERT INTO library (id, name, kind, created_at, updated_at) VALUES (1,'M','movies',1,1), (2,'Mu','music',1,1), (3,'Y','youtube',1,1)`,
-		`INSERT INTO item (id, library_id, parent_id, kind, path, parsed_title, added_at, updated_at) VALUES
-			(1,1,NULL,'movie',NULL,'Film',1,1), (2,2,NULL,'artist',NULL,'Band',1,1), (3,2,2,'album',NULL,'Own',1,1),
-			(4,3,NULL,'channel','/y/C','C',1,1), (5,3,4,'video',NULL,'V',1,1), (6,1,NULL,'movie',NULL,'Odd',1,1)`,
-		`INSERT INTO item_metadata (item_id, source, provider, status, poster_path, backdrop_path) VALUES
-			(1,'local','local','matched','/old/data/thumbnails/local/ab.jpg','/old/data/thumbnails/local/cd.jpg'),
-			(1,'remote','tmdb','matched','/p.jpg','/b.jpg'),
-			(3,'local','local','matched','/old/data/thumbnails/music/ef.jpg',NULL),
-			(3,'remote','musicbrainz','matched','/old/data/images/caa/mb.jpg',NULL),
-			(4,'local','local','matched','/y/C/poster.jpg',NULL),
-			(4,'remote','youtube','matched','/old/data/cache/youtube/UC1.jpg',NULL),
-			(5,'local','local','matched','/y/C/images/v.jpg',NULL),
-			(6,'local','local','matched','thumbnails/local/gh.jpg','/elsewhere/frame.jpg')`,
-		`INSERT INTO media_file (id, path, size_bytes, modified_at) VALUES (1,'/m/a.mkv',1,1), (2,'/m/b.mkv',1,1)`,
-		`INSERT INTO chapter (media_file_id, position, start_ms, end_ms, thumbnail_path) VALUES
-			(1,0,0,1,'/old/data/thumbnails/1/0.jpg'), (1,1,1,2,'/elsewhere/1.jpg'), (2,0,0,1,NULL)`,
-		`INSERT INTO seek_preview (media_file_id, dir, interval_ms, count, width, height, created_at) VALUES
-			(1,'/old/data/previews/1',1,1,1,1,1), (2,'/elsewhere/9',1,1,1,1,1)`,
-	} {
-		if _, err := d.Exec(q); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := db.Migrate(d); err != nil {
-		t.Fatal(err)
-	}
-	var meta, chapters, previews string
-	if err := d.QueryRow(`SELECT group_concat(item_id || ':' || source || ':' || COALESCE(poster_path, '-') || ':' || COALESCE(backdrop_path, '-'), ' ')
-			FROM (SELECT * FROM item_metadata ORDER BY item_id, source)`).Scan(&meta); err != nil {
-		t.Fatal(err)
-	}
-	if err := d.QueryRow(`SELECT group_concat(COALESCE(thumbnail_path, '-'), ' ') FROM (SELECT * FROM chapter ORDER BY media_file_id, position)`).
-		Scan(&chapters); err != nil {
-		t.Fatal(err)
-	}
-	if err := d.QueryRow(`SELECT group_concat(dir, ' ') FROM (SELECT * FROM seek_preview ORDER BY media_file_id)`).Scan(&previews); err != nil {
-		t.Fatal(err)
-	}
-	want := "1:local:thumbnails/local/ab.jpg:thumbnails/local/cd.jpg 1:remote:/p.jpg:/b.jpg " +
-		"3:local:thumbnails/music/ef.jpg:- 3:remote:images/caa/mb.jpg:- " +
-		"4:local:/y/C/poster.jpg:- 4:remote:cache/youtube/UC1.jpg:- " +
-		"5:local:/y/C/images/v.jpg:- 6:local:thumbnails/local/gh.jpg:/elsewhere/frame.jpg"
-	if meta != want {
-		t.Fatalf("metadata\n%s\nwant\n%s", meta, want)
-	}
-	if chapters != "thumbnails/1/0.jpg /elsewhere/1.jpg -" || previews != "previews/1 /elsewhere/9" {
-		t.Fatalf("chapters %s previews %s", chapters, previews)
-	}
-
-	dbtest.DataDir(t, "/new/data")
-	p, err := seekpreview.New(d).ByMediaFile(1)
-	if err != nil || p.Dir != "/new/data/previews/1" {
-		t.Fatalf("%v %+v", err, p)
-	}
-	cs, err := mediafile.New(d).Chapters(1)
-	if err != nil || cs[0].ThumbnailPath != "/new/data/thumbnails/1/0.jpg" || cs[1].ThumbnailPath != "/elsewhere/1.jpg" {
-		t.Fatalf("%v %+v %+v", err, cs[0], cs[1])
-	}
-	items := item.New(d)
-	local, err := items.LocalRow(1)
-	if err != nil || local.PosterPath != "/new/data/thumbnails/local/ab.jpg" || local.BackdropPath != "/new/data/thumbnails/local/cd.jpg" {
-		t.Fatalf("%v %+v", err, local)
-	}
-	if remote, err := items.Remote(1); err != nil || remote.PosterPath != "/p.jpg" {
-		t.Fatalf("%v %+v", err, remote)
-	}
-	if lib, err := items.LocalRow(4); err != nil || lib.PosterPath != "/y/C/poster.jpg" {
-		t.Fatalf("%v %+v", err, lib)
-	}
-}
-
-// Entries take ranks in their old order, the keys rank generation makes
-// for a list built from empty, ties in position by id; every row keeps its
-// id and columns, and position goes.
-func TestPlaylistEntriesTakeRanks(t *testing.T) {
-	d := open(t)
-	if err := db.MigrateTo(d, 57); err != nil {
-		t.Fatal(err)
-	}
-	for _, q := range []string{
-		`INSERT INTO library (id, name, kind, created_at, updated_at) VALUES (1,'M','movies',1,1)`,
-		`INSERT INTO item (id, library_id, kind, parsed_title, added_at, updated_at) VALUES (1,1,'movie','A',1,1), (2,1,'movie','B',1,1)`,
-		`INSERT INTO account (id, kind, name, created_at, updated_at) VALUES (1,'adult','A',1,1)`,
-		`INSERT INTO playlist (id, account_id, name, kind, created_at, updated_at) VALUES (1,1,'Long','movies',1,1), (2,1,'Short','movies',1,1)`,
-		// 64 entries, ids running against their positions, cross from the
-		// one-digit integers into the two-digit ones.
-		`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 63)
-			INSERT INTO playlist_entry (id, playlist_id, item_id, position, added_at) SELECT 100 - i, 1, 1 + i % 2, i, 1000 + i FROM n`,
-		`INSERT INTO playlist_entry (id, playlist_id, item_id, position, added_at) VALUES (7,2,2,5,1), (6,2,1,5,2), (5,2,1,9,3)`,
-	} {
-		if _, err := d.Exec(q); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := db.Migrate(d); err != nil {
-		t.Fatal(err)
-	}
-	rows, err := d.Query(`SELECT id, item_id, added_at, rank FROM playlist_entry WHERE playlist_id = 1 ORDER BY rank`)
+	rows, err = d.Query(`SELECT "from", "table", "to", on_delete FROM pragma_foreign_key_list(?)`, table)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = rows.Close() }()
-	want, err := playlist.NKeysBetween("", "", 64)
+	for rows.Next() {
+		var from, parent, to, onDel string
+		if err := rows.Scan(&from, &parent, &to, &onDel); err != nil {
+			t.Fatal(err)
+		}
+		if to != "id" {
+			t.Errorf("%s.%s references %s.%s, not an id", table, from, parent, to)
+		}
+		for i := range cs {
+			if cs[i].name == from {
+				cs[i].parent, cs[i].onDel = parent, onDel
+			}
+		}
+	}
+	return cs
+}
+
+func names(t *testing.T, d *sql.DB, typ string) []string {
+	t.Helper()
+	rows, err := d.Query(`SELECT name FROM sqlite_master WHERE type = ? AND name NOT LIKE 'sqlite_%' ORDER BY name`, typ)
+	ns, err := db.Collect(rows, err, db.Column[string])
 	if err != nil {
 		t.Fatal(err)
 	}
-	i := 0
-	for ; rows.Next(); i++ {
-		var id, itemID, added int64
-		var rank string
-		if err := rows.Scan(&id, &itemID, &added, &rank); err != nil {
-			t.Fatal(err)
+	return ns
+}
+
+func sorted(ss ...[]string) []string {
+	out := slices.Concat(ss...)
+	slices.Sort(out)
+	return out
+}
+
+// The baseline follows the v2 table rules: UUIDv7 BLOB keys, audit columns by
+// class, no AUTOINCREMENT, ids BLOB everywhere they are held.
+func TestBaselineFollowsTheTableRules(t *testing.T) {
+	d := migrated(t)
+	if got, want := names(t, d, "table"), sorted(userTables, systemTables, keyedTables, bookTables); !slices.Equal(got, want) {
+		t.Fatalf("tables\n%v\nwant\n%v", got, want)
+	}
+	var n int
+	if err := d.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE name = 'sqlite_sequence'
+		OR sql LIKE '%AUTOINCREMENT%' OR sql LIKE '%WITHOUT ROWID%'`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("AUTOINCREMENT or WITHOUT ROWID: %d %v", n, err)
+	}
+	ids := map[string]bool{} // tables keyed by a UUIDv7
+	for _, tb := range slices.Concat(userTables, systemTables) {
+		ids[tb] = true
+	}
+	for _, tb := range names(t, d, "table") {
+		cs := columns(t, d, tb)
+		has := map[string]column{}
+		for _, c := range cs {
+			has[c.name] = c
 		}
-		if id != int64(100-i) || itemID != int64(1+i%2) || added != int64(1000+i) || rank != want[i] {
-			t.Fatalf("row %d: id %d item %d added %d rank %s, want rank %s", i, id, itemID, added, rank, want[i])
+		_, synced := has["sync_version"]
+		if synced != slices.Contains(syncedTables, tb) {
+			t.Errorf("%s: sync_version %v", tb, synced)
+		}
+		if ids[tb] {
+			if c := cs[0]; c.name != "id" || c.typ != "BLOB" || !c.notNull || c.pk != 1 {
+				t.Errorf("%s: first column %+v, want id BLOB NOT NULL PRIMARY KEY", tb, c)
+			}
+			for _, c := range cs[1:] {
+				if c.pk != 0 {
+					t.Errorf("%s: %s is in the primary key", tb, c.name)
+				}
+			}
+			for _, a := range []string{"created_at", "modified_at"} {
+				if c, ok := has[a]; !ok || c.typ != "INTEGER" || !c.notNull || c.dflt.Valid {
+					t.Errorf("%s: %s %+v, want INTEGER NOT NULL without a default", tb, a, c)
+				}
+			}
+		}
+		user := slices.Contains(userTables, tb)
+		for _, a := range []string{"created_by", "modified_by"} {
+			c, ok := has[a]
+			if ok != user {
+				t.Errorf("%s: %s present %v", tb, a, ok)
+			} else if ok && (c.typ != "BLOB" || c.notNull || c.parent != "account" || c.onDel != "SET NULL") {
+				t.Errorf("%s: %s %+v, want a nullable BLOB to account ON DELETE SET NULL", tb, a, c)
+			}
+		}
+		if _, ok := has["modified_at"]; !ids[tb] && ok && tb != "server_info" {
+			t.Errorf("%s: modified_at on a keyed table", tb)
+		}
+		for _, c := range cs {
+			q := tb + "." + c.name
+			switch {
+			case c.name == "updated_at":
+				t.Errorf("%s: updated_at", q)
+			case notIDs[q] != "":
+				if c.typ != notIDs[q] {
+					t.Errorf("%s: %s, want %s", q, c.typ, notIDs[q])
+				}
+			case c.parent != "":
+				if !ids[c.parent] {
+					t.Errorf("%s references %s, which has no UUID key", q, c.parent)
+				}
+				if c.typ != "BLOB" {
+					t.Errorf("%s: %s, want BLOB", q, c.typ)
+				}
+			case c.name == "id" && ids[tb], slices.Contains(unkeyedIDs, q), slices.Contains(notIDBlobs, q):
+				if c.typ != "BLOB" {
+					t.Errorf("%s: %s, want BLOB", q, c.typ)
+				}
+			case c.typ == "BLOB":
+				t.Errorf("%s: BLOB but neither an id nor listed", q)
+			case strings.HasSuffix(c.name, "_id") || c.name == "id":
+				t.Errorf("%s: %s, looks like an id that is not one", q, c.typ)
+			}
 		}
 	}
-	if i != 64 {
-		t.Fatalf("%d entries", i)
+	for _, q := range []string{"conversion.audio_track_id", "conversion.burn_track_id"} {
+		tb, col, _ := strings.Cut(q, ".")
+		for _, c := range columns(t, d, tb) {
+			if c.name == col && (!c.notNull || c.dflt.String != "x''") {
+				t.Errorf("%s: %+v, want NOT NULL DEFAULT x''", q, c)
+			}
+		}
 	}
-	var short string
-	var cols int
-	if err := d.QueryRow(`SELECT (SELECT group_concat(id || ':' || rank, ' ') FROM (SELECT * FROM playlist_entry WHERE playlist_id = 2 ORDER BY rank)),
-		(SELECT COUNT(*) FROM pragma_table_info('playlist_entry') WHERE name = 'position')`).Scan(&short, &cols); err != nil {
+	for tb, col := range map[string]string{"watch_state": "changed_at", "media_file": "file_modified_at", "conversion": "source_modified_at"} {
+		if err := d.QueryRow(`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?`, tb, col).Scan(&n); err != nil || n != 1 {
+			t.Errorf("%s.%s missing", tb, col)
+		}
+	}
+	idx := names(t, d, "index")
+	for _, tb := range syncedTables {
+		if !slices.Contains(idx, tb+"_sync") {
+			t.Errorf("index %s_sync missing", tb)
+		}
+	}
+	if got := names(t, d, "view"); !slices.Equal(got, []string{"credit_shown", "item_file", "item_genre_shown",
+		"item_keyword_shown", "item_shown", "membership", "metadata_setting", "playlist_reach"}) {
+		t.Errorf("views %v", got)
+	}
+	// Sync triggers are installed by internal/replica, never by a migration.
+	if got := names(t, d, "trigger"); !slices.Equal(got, []string{"collection_art_insert", "collection_art_update",
+		"collection_tmdb_empty", "edition_file_orphan", "item_metadata_art_delete", "item_metadata_art_insert",
+		"item_metadata_art_update", "metadata_setting_art_update", "person_art_insert", "person_art_update"}) {
+		t.Errorf("triggers %v", got)
+	}
+}
+
+func TestBaselineSeedsItsRows(t *testing.T) {
+	d := migrated(t)
+	var art, clock string
+	if err := d.QueryRow(`SELECT (SELECT id || generation || settled || changed_at FROM artwork_generation),
+		(SELECT id || version || scope_version || purged_version || '[' || release || ']' FROM sync_clock)`).Scan(&art, &clock); err != nil {
 		t.Fatal(err)
 	}
-	if short != "6:a0 7:a1 5:a2" || cols != 0 {
-		t.Fatalf("short playlist %s, position columns %d", short, cols)
+	if art != "1110" || clock != "1000[]" {
+		t.Fatalf("artwork_generation %s sync_clock %s", art, clock)
+	}
+	rows, err := d.Query(`SELECT o.id, o.name || ':' || o.holiday || ':' || o.days_before || ':' || o.days_after || ':' ||
+			o.created_at || ':' || o.modified_at || ':' || COALESCE(o.created_by, o.modified_by, '-') || ':' ||
+			(SELECT group_concat(keyword_id) FROM occasion_keyword k WHERE k.occasion_id = o.id) || ':' ||
+			(SELECT COUNT(*) FROM occasion_seed s WHERE s.occasion_id = o.id)
+		FROM occasion o ORDER BY o.id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var got []string
+	for rows.Next() {
+		var id uid.ID
+		var s string
+		if err := rows.Scan(&id, &s); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, id.String()+" "+s)
+	}
+	want := []string{
+		"00000000-0000-7000-9000-000000000001 Christmas:christmas:30:5:0:0:-:207317:1",
+		"00000000-0000-7000-9000-000000000002 Halloween:halloween:30:1:0:0:-:3335:1",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("occasions\n%q\nwant\n%q", got, want)
+	}
+	for _, s := range want {
+		id, err := uid.Parse(s[:36])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if id.Compare(uid.N(1<<48-1)) <= 0 || id.Compare(uid.New()) >= 0 {
+			t.Errorf("%s collides with the ids tests or the server mint", id)
+		}
 	}
 }
 
@@ -650,9 +372,21 @@ func copies(t *testing.T, path string) []string {
 	return names
 }
 
+// needs gives the runner, for the test, a set of that many migrations, each
+// adding a table.
+func needs(t *testing.T, versions int) {
+	t.Helper()
+	set := fstest.MapFS{}
+	for v := 1; v <= versions; v++ {
+		set[fmt.Sprintf("migrations/%04d_step.sql", v)] = &fstest.MapFile{Data: fmt.Appendf(nil, "CREATE TABLE step%d (x INTEGER);", v)}
+	}
+	db.UseMigrations(t, set)
+}
+
 // A server refuses a database a newer one has migrated, so the copy from
 // before a migration is the only way back to the older server.
 func TestMigrateCopiesTheDatabaseBeforeChangingIt(t *testing.T) {
+	needs(t, 2)
 	path := filepath.Join(t.TempDir(), "rabbit-ears.db")
 	d, err := db.Open(path)
 	if err != nil {
@@ -690,6 +424,7 @@ func TestMigrateCopiesTheDatabaseBeforeChangingIt(t *testing.T) {
 }
 
 func TestMigrateKeepsTheNewestFiveCopies(t *testing.T) {
+	needs(t, 8)
 	path := filepath.Join(t.TempDir(), "rabbit-ears.db")
 	d, err := db.Open(path)
 	if err != nil {
@@ -712,6 +447,7 @@ func TestMigrateKeepsTheNewestFiveCopies(t *testing.T) {
 }
 
 func TestMigrateRefusesWithoutACopy(t *testing.T) {
+	needs(t, 2)
 	path := filepath.Join(t.TempDir(), "rabbit-ears.db")
 	d, err := db.Open(path)
 	if err != nil {

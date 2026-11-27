@@ -2,15 +2,17 @@ package httpapi_test
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/api"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/playlist"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // song adds an artist, album and song to a music library, without a file.
-func (e *env) song(lib int64, title string) int64 {
+func (e *env) song(lib uid.ID, title string) uid.ID {
 	e.t.Helper()
 	items := e.svc.Items.Repo()
 	artist := &item.Item{LibraryID: lib, Kind: item.Artist, ParsedTitle: "Band " + title}
@@ -22,20 +24,20 @@ func (e *env) song(lib int64, title string) int64 {
 	return song.ID
 }
 
-func (e *env) file(itemID, durationMs int64) {
+func (e *env) file(itemID uid.ID, durationMs int64) {
 	e.t.Helper()
 	e.expect(201, "POST", "/media-files", e.admin.token, map[string]any{"itemId": itemID, "path": e.onDisk("/media/" + itoa(itemID) + ".mp4"),
-		"sizeBytes": 1, "modifiedAt": "2026-01-01T00:00:00Z", "durationMs": durationMs}, nil)
+		"sizeBytes": 1, "fileModifiedAt": "2026-01-01T00:00:00Z", "durationMs": durationMs}, nil)
 }
 
-func entryIDs(page api.PlaylistEntryPage) (ids []int64) {
+func entryIDs(page api.PlaylistEntryPage) (ids []uid.ID) {
 	for _, en := range page.Items {
 		ids = append(ids, *en.ItemId)
 	}
 	return ids
 }
 
-func playIDs(page api.PlaylistPlayOrderPage) (items, entries []int64) {
+func playIDs(page api.PlaylistPlayOrderPage) (items, entries []uid.ID) {
 	for _, r := range page.Items {
 		items, entries = append(items, r.ItemId), append(entries, r.EntryId)
 	}
@@ -80,7 +82,7 @@ func TestPlaylistsMoviesLifecycle(t *testing.T) {
 
 	var page api.PlaylistEntryPage
 	e.expect(200, "GET", one+"/entries", tok, nil, &page)
-	if !slices.Equal(entryIDs(page), []int64{movie, movie, other}) || page.Items[1].Id != en.Id || page.Items[2].Position != 2 {
+	if !slices.Equal(entryIDs(page), []uid.ID{movie, movie, other}) || page.Items[1].Id != en.Id || page.Items[2].Position != 2 {
 		t.Fatalf("%+v", page)
 	}
 	e.expect(200, "GET", one+"/entries?limit=1&offset=1", tok, nil, &page)
@@ -89,7 +91,7 @@ func TestPlaylistsMoviesLifecycle(t *testing.T) {
 	}
 	var order api.PlaylistPlayOrderPage
 	e.expect(200, "GET", one+"/play-order", tok, nil, &order)
-	if items, entries := playIDs(order); !slices.Equal(items, []int64{movie, movie, other}) || !slices.Equal(entries, []int64{again.Id, en.Id, vid.Id}) ||
+	if items, entries := playIDs(order); !slices.Equal(items, []uid.ID{movie, movie, other}) || !slices.Equal(entries, []uid.ID{again.Id, en.Id, vid.Id}) ||
 		order.Items[0].Kind != api.PlaylistEntryKindMovie || order.Items[0].Item == nil || order.Items[0].Show != nil ||
 		order.Items[2].DurationMs == nil || *order.Items[2].DurationMs != 612000 {
 		t.Fatalf("play order %+v", order)
@@ -100,10 +102,10 @@ func TestPlaylistsMoviesLifecycle(t *testing.T) {
 	}
 
 	// Only movies fit: no episode, show, song, YouTube channel or video.
-	for _, id := range []int64{ep, songs, tb.channel, tb.newer} {
+	for _, id := range []uid.ID{ep, songs, tb.channel, tb.newer} {
 		e.expect(400, "POST", one+"/entries", tok, map[string]any{"itemId": id}, nil)
 	}
-	e.expect(404, "POST", one+"/entries", tok, map[string]any{"itemId": 999999}, nil)
+	e.expect(404, "POST", one+"/entries", tok, map[string]any{"itemId": uid.N(999999)}, nil)
 
 	// Reorder: an absent position moves the entry last.
 	e.expect(200, "PUT", one+"/entries/"+itoa(again.Id), tok, map[string]any{"itemId": movie}, &again)
@@ -112,7 +114,7 @@ func TestPlaylistsMoviesLifecycle(t *testing.T) {
 	}
 	e.expect(200, "PUT", one+"/entries/"+itoa(vid.Id), tok, map[string]any{"itemId": other, "position": 0}, &vid)
 	e.expect(200, "GET", one+"/entries", tok, nil, &page)
-	if !slices.Equal(entryIDs(page), []int64{other, movie, movie}) || page.Items[1].Id != en.Id || page.Items[2].Id != again.Id {
+	if !slices.Equal(entryIDs(page), []uid.ID{other, movie, movie}) || page.Items[1].Id != en.Id || page.Items[2].Id != again.Id {
 		t.Fatalf("%+v", page)
 	}
 	e.expect(400, "PUT", one+"/entries/"+itoa(vid.Id), tok, map[string]any{"itemId": movie, "position": 1}, nil)
@@ -203,15 +205,15 @@ func TestPlaylistsTV(t *testing.T) {
 	var order api.PlaylistPlayOrderPage
 	e.expect(200, "GET", one+"/play-order", tok, nil, &order)
 	items, entries := playIDs(order)
-	if !slices.Equal(items, []int64{s1e1, s1e2, s2e1, s1e1, s1e2, s1e2}) ||
-		!slices.Equal(entries, []int64{eShow.Id, eShow.Id, eShow.Id, eSeason.Id, eSeason.Id, eEp.Id}) {
+	if !slices.Equal(items, []uid.ID{s1e1, s1e2, s2e1, s1e1, s1e2, s1e2}) ||
+		!slices.Equal(entries, []uid.ID{eShow.Id, eShow.Id, eShow.Id, eSeason.Id, eSeason.Id, eEp.Id}) {
 		t.Fatalf("play order %v from %v", items, entries)
 	}
 	if r := order.Items[2]; r.Kind != api.PlaylistEntryKindEpisode || r.Item == nil || r.Item.Id != s2e1 || r.Show == nil || r.Show.Id != show || r.Song != nil || r.DurationMs != nil {
 		t.Fatalf("an episode row %+v", r)
 	}
 	e.expect(200, "GET", one+"/play-order?limit=2&offset=2", tok, nil, &order)
-	if items, _ := playIDs(order); !slices.Equal(items, []int64{s2e1, s1e1}) || order.NextOffset == nil || *order.NextOffset != 4 {
+	if items, _ := playIDs(order); !slices.Equal(items, []uid.ID{s2e1, s1e1}) || order.NextOffset == nil || *order.NextOffset != 4 {
 		t.Fatalf("paged %v %v", items, order.NextOffset)
 	}
 	e.expect(200, "GET", one, tok, nil, &pl)
@@ -243,7 +245,7 @@ func TestPlaylistsMusic(t *testing.T) {
 	e.expect(201, "POST", one+"/entries", tok, map[string]any{"itemId": m.album.Id}, &eAlbum)
 	e.expect(201, "POST", one+"/entries", tok, map[string]any{"itemId": m.songs[0].Id}, &eSong)
 	e.expect(201, "POST", one+"/entries", tok, map[string]any{"itemId": m.band.Id}, &eArtist)
-	for _, id := range []int64{movie, tb.newer, tb.channel} {
+	for _, id := range []uid.ID{movie, tb.newer, tb.channel} {
 		e.expect(400, "POST", one+"/entries", tok, map[string]any{"itemId": id}, nil)
 	}
 	if eAlbum.Kind != api.PlaylistEntryKindAlbum || eAlbum.Album == nil || eAlbum.Album.Title != m.album.Title || eAlbum.ItemCount != m.album.SongCount ||
@@ -297,7 +299,7 @@ func TestRecentlyPlayedSkipsVideoPlaylists(t *testing.T) {
 	repo := e.svc.Playlists.Repo()
 	for _, kind := range []string{playlist.Movies, playlist.TV} {
 		p := &playlist.Playlist{AccountID: e.plain.account.ID, Name: kind, Kind: kind}
-		must(t, repo.Create(p))
+		must(t, repo.Create(p, nil))
 		must(t, repo.MarkPlayed(p.ID, p.CreatedAt))
 	}
 	var recent api.MusicRecentPage
@@ -312,8 +314,8 @@ func TestStartPlaybackFromMoviesPlaylist(t *testing.T) {
 	e := newEnv(t)
 	m, _ := e.playable()
 	p := &playlist.Playlist{AccountID: e.plain.account.ID, Name: "Films", Kind: playlist.Movies}
-	must(t, e.svc.Playlists.Repo().Create(p))
-	must(t, e.svc.Playlists.Repo().AddEntry(&playlist.Entry{PlaylistID: p.ID, ItemID: m}, nil))
+	must(t, e.svc.Playlists.Repo().Create(p, nil))
+	must(t, e.svc.Playlists.Repo().AddEntry(&playlist.Entry{PlaylistID: p.ID, ItemID: &m}, nil, nil))
 	e.expect(201, "POST", "/playback/sessions", e.plain.token, map[string]any{"profileId": e.plain.account.ID, "itemId": m,
 		"playlistId": p.ID, "snapshot": snapshot()}, nil)
 	got, err := e.svc.Playlists.Repo().Get(p.ID)
@@ -328,16 +330,16 @@ func TestPlaylistsAreOwnedAndNotForKids(t *testing.T) {
 	repo := e.svc.Playlists.Repo()
 	mine := &playlist.Playlist{AccountID: e.plain.account.ID, Name: "Mine", Kind: playlist.Movies}
 	theirs := &playlist.Playlist{AccountID: e.admin.account.ID, Name: "Theirs", Kind: playlist.Movies}
-	must(t, repo.Create(mine))
-	must(t, repo.Create(theirs))
+	must(t, repo.Create(mine, nil))
+	must(t, repo.Create(theirs, nil))
 	tok := e.plain.token
-	path := func(account, id int64) string { return "/profiles/" + itoa(account) + "/playlists/" + itoa(id) }
+	path := func(account, id uid.ID) string { return "/profiles/" + itoa(account) + "/playlists/" + itoa(id) }
 
 	e.expect(404, "GET", "/profiles/"+itoa(e.admin.account.ID)+"/playlists", tok, nil, nil)
 	e.expect(404, "GET", path(e.plain.account.ID, theirs.ID), tok, nil, nil)
 	e.expect(404, "GET", path(e.plain.account.ID, theirs.ID)+"/play-order", tok, nil, nil)
 	e.expect(404, "DELETE", path(e.plain.account.ID, theirs.ID), tok, nil, nil)
-	e.expect(404, "POST", path(e.plain.account.ID, theirs.ID)+"/entries", tok, map[string]any{"itemId": 1}, nil)
+	e.expect(404, "POST", path(e.plain.account.ID, theirs.ID)+"/entries", tok, map[string]any{"itemId": uid.N(1)}, nil)
 	e.expect(404, "GET", "/profiles/"+itoa(e.admin.account.ID)+"/playlists/"+itoa(theirs.ID), tok, nil, nil)
 	e.expect(401, "GET", path(e.plain.account.ID, mine.ID), "", nil, nil)
 
@@ -363,7 +365,7 @@ func TestPlaylistsAreOwnedAndNotForKids(t *testing.T) {
 	e.expect(403, "GET", path(e.plain.account.ID, mine.ID)+"/play-order", tok, nil, nil)
 	e.expect(403, "POST", "/profiles/"+itoa(e.plain.account.ID)+"/playlists", tok, map[string]any{"name": "X", "kind": "movies"}, nil)
 	e.expect(403, "DELETE", path(e.plain.account.ID, mine.ID), tok, nil, nil)
-	e.expect(403, "POST", path(e.plain.account.ID, mine.ID)+"/entries", tok, map[string]any{"itemId": 1}, nil)
+	e.expect(403, "POST", path(e.plain.account.ID, mine.ID)+"/entries", tok, map[string]any{"itemId": uid.N(1)}, nil)
 	if _, err := repo.Get(mine.ID); err != nil {
 		t.Fatal("a kid deleted an adult's playlist")
 	}
@@ -395,7 +397,7 @@ func TestPlaylistEntryRanks(t *testing.T) {
 	for _, x := range page.Items {
 		ranks = append(ranks, *x.Rank)
 	}
-	if !slices.Equal(entryIDs(page), []int64{c, a, b}) || !slices.Equal(ranks, []string{"Zz", "a0", "a1"}) {
+	if !slices.Equal(entryIDs(page), []uid.ID{c, a, b}) || !slices.Equal(ranks, []string{"Zz", "a0", "a1"}) {
 		t.Fatalf("%v %v", entryIDs(page), ranks)
 	}
 	for _, body := range []map[string]any{
@@ -406,5 +408,71 @@ func TestPlaylistEntryRanks(t *testing.T) {
 	} {
 		e.expect(400, "POST", one+"/entries", tok, body, nil)
 		e.expect(400, "PUT", one+"/entries/"+itoa(en.Id), tok, body, nil)
+	}
+}
+
+// A playlist and its entries take the id a client chose, else get one; an
+// id that is not a UUIDv7 in canonical form answers 400, and one taken 409.
+func TestPlaylistsTakeClientIDs(t *testing.T) {
+	e := newEnv(t)
+	tok, me := e.plain.token, e.plain.account.ID
+	base := "/profiles/" + itoa(me) + "/playlists"
+	films := e.library("movies")
+	m, n := e.movie(films, "Heat"), e.movie(films, "Ronin")
+	bad := []any{"12", 12, strings.ToUpper(uid.New().String()), "00000000-0000-4000-8000-000000000001"}
+
+	var minted api.Playlist
+	e.expect(201, "POST", base, tok, map[string]any{"name": "Minted", "kind": "movies"}, &minted)
+	if minted.Id.IsZero() || minted.CreatedBy == nil || *minted.CreatedBy != me || minted.ModifiedBy == nil || *minted.ModifiedBy != me {
+		t.Fatalf("%+v", minted)
+	}
+	id := uid.New()
+	var pl api.Playlist
+	e.expect(201, "POST", base, tok, map[string]any{"id": id, "name": "Chosen", "kind": "movies"}, &pl)
+	if pl.Id != id {
+		t.Fatalf("%+v", pl)
+	}
+	one := base + "/" + itoa(id)
+	e.expect(200, "GET", one, tok, nil, nil)
+	e.expect(409, "POST", base, tok, map[string]any{"id": id, "name": "Again", "kind": "movies"}, nil)
+	for _, v := range bad {
+		e.expect(400, "POST", base, tok, map[string]any{"id": v, "name": "Bad", "kind": "movies"}, nil)
+	}
+	e.expect(400, "PUT", one, tok, map[string]any{"id": minted.Id, "name": "Renamed", "kind": "movies"}, nil)
+	e.expect(200, "PUT", one, tok, map[string]any{"id": id, "name": "Renamed", "kind": "movies"}, &pl)
+	if pl.Name != "Renamed" || pl.ModifiedAt.Before(pl.CreatedAt) {
+		t.Fatalf("%+v", pl)
+	}
+
+	var en, auto api.PlaylistEntry
+	eid := uid.New()
+	e.expect(201, "POST", one+"/entries", tok, map[string]any{"id": eid, "itemId": m}, &en)
+	if en.Id != eid || en.CreatedBy == nil || *en.CreatedBy != me {
+		t.Fatalf("%+v", en)
+	}
+	e.expect(201, "POST", one+"/entries", tok, map[string]any{"itemId": n}, &auto)
+	if auto.Id.IsZero() || auto.Id == eid {
+		t.Fatalf("%+v", auto)
+	}
+	e.expect(409, "POST", one+"/entries", tok, map[string]any{"id": eid, "itemId": n}, nil)
+	for _, v := range bad {
+		e.expect(400, "POST", one+"/entries", tok, map[string]any{"id": v, "itemId": n}, nil)
+		e.expect(400, "POST", one+"/entries/batch", tok, map[string]any{"entries": []map[string]any{{"id": v, "itemId": n}}}, nil)
+	}
+	e.expect(400, "PUT", one+"/entries/"+itoa(eid), tok, map[string]any{"id": auto.Id, "itemId": m}, nil)
+	e.expect(200, "PUT", one+"/entries/"+itoa(eid), tok, map[string]any{"id": eid, "itemId": m, "position": 1}, &en)
+	if en.Position != 1 {
+		t.Fatalf("%+v", en)
+	}
+
+	b1, b2 := uid.New(), uid.New()
+	e.expect(204, "POST", one+"/entries/batch", tok, map[string]any{"entries": []map[string]any{{"id": b1, "itemId": m}, {"id": b2, "itemId": n}, {"itemId": m}}}, nil)
+	e.expect(200, "GET", one+"/entries/"+itoa(b1), tok, nil, nil)
+	e.expect(200, "GET", one+"/entries/"+itoa(b2), tok, nil, nil)
+	e.expect(409, "POST", one+"/entries/batch", tok, map[string]any{"entries": []map[string]any{{"itemId": m}, {"id": b1, "itemId": n}}}, nil)
+	var page api.PlaylistEntryPage
+	e.expect(200, "GET", one+"/entries", tok, nil, &page)
+	if len(page.Items) != 5 {
+		t.Fatalf("a batch with a taken id adds nothing: %d entries", len(page.Items))
 	}
 }

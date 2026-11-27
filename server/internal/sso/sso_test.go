@@ -15,16 +15,16 @@ func TestProvidersAndIdentities(t *testing.T) {
 	r := sso.New(d)
 	p := &sso.Provider{Name: "Keyhole", Issuer: "https://id.example.com", ClientID: "re", ClientSecret: "s", RequiredGroup: "media",
 		LinksByEmail: true, Enabled: true}
-	if err := r.Create(p); err != nil {
+	if err := r.Create(p, nil); err != nil {
 		t.Fatal(err)
 	}
 	off := &sso.Provider{Name: "Attic", Issuer: "https://attic.example.com", ClientID: "re"}
-	if err := r.Create(off); err != nil {
+	if err := r.Create(off, nil); err != nil {
 		t.Fatal(err)
 	}
 	g, err := r.Get(p.ID)
 	if err == nil {
-		g.CreatedAt, g.UpdatedAt = p.CreatedAt, p.UpdatedAt
+		g.CreatedAt, g.ModifiedAt = p.CreatedAt, p.ModifiedAt
 	}
 	if err != nil || *g != *p {
 		t.Fatalf("%+v %v", g, err)
@@ -36,7 +36,7 @@ func TestProvidersAndIdentities(t *testing.T) {
 		t.Fatalf("%+v", l)
 	}
 	p.ClientSecret, p.RequiredGroup, p.Enabled = "", "", false
-	if err := r.Update(p); err != nil {
+	if err := r.Update(p, nil); err != nil {
 		t.Fatal(err)
 	}
 	if g, _ := r.Get(p.ID); g.ClientSecret != "" || g.RequiredGroup != "" || g.Enabled {
@@ -44,7 +44,7 @@ func TestProvidersAndIdentities(t *testing.T) {
 	}
 
 	a := &account.Account{Kind: account.Adult, Email: "ada@example.com", Name: "Ada"}
-	if err := account.New(d).Create(a); err != nil {
+	if err := account.New(d).Create(a, nil); err != nil {
 		t.Fatal(err)
 	}
 	id := &sso.Identity{AccountID: a.ID, ProviderID: p.ID, Subject: "sub-1", Email: "ada@example.com"}
@@ -55,7 +55,7 @@ func TestProvidersAndIdentities(t *testing.T) {
 		t.Fatalf("one identity per account and provider: %v", err)
 	}
 	b := &account.Account{Kind: account.Adult, Email: "bo@example.com", Name: "Bo"}
-	_ = account.New(d).Create(b)
+	_ = account.New(d).Create(b, nil)
 	if err := r.CreateIdentity(&sso.Identity{AccountID: b.ID, ProviderID: p.ID, Subject: "sub-1"}); !errors.Is(err, db.ErrConflict) {
 		t.Fatalf("one account per subject: %v", err)
 	}

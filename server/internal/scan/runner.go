@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -13,6 +12,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/live"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/logstore"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/task"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 const (
@@ -74,7 +74,7 @@ func nextNightly(now time.Time, hour int) time.Time {
 func ptr[T any](v T) *T { return &v }
 
 // ScanKind is the kind of a library's scan task.
-func ScanKind(libraryID int64) string { return scanKindPrefix + strconv.FormatInt(libraryID, 10) }
+func ScanKind(libraryID uid.ID) string { return scanKindPrefix + libraryID.String() }
 
 // Sync creates a nightly scan task for each library (due at once, so a new
 // library scans promptly), the hourly metadata task, the on-demand Seek
@@ -127,8 +127,19 @@ func (r *Runner) Sync() error {
 		}
 	}
 	for _, l := range libs {
+		want[ScanKind(l.ID)] = true
+	}
+	// Stale scan tasks go first: a library made again under its name keeps
+	// the name but not the id, and task names are unique.
+	for _, t := range tasks {
+		if strings.HasPrefix(t.Kind, scanKindPrefix) && !want[t.Kind] {
+			if err := r.Tasks.Delete(t.ID); err != nil {
+				return err
+			}
+		}
+	}
+	for _, l := range libs {
 		kind := ScanKind(l.ID)
-		want[kind] = true
 		name := "Scan " + l.Name
 		switch t := byKind[kind]; {
 		case t == nil:
@@ -142,13 +153,6 @@ func (r *Runner) Sync() error {
 			}
 		}
 	}
-	for _, t := range tasks {
-		if strings.HasPrefix(t.Kind, scanKindPrefix) && !want[t.Kind] {
-			if err := r.Tasks.Delete(t.ID); err != nil {
-				return err
-			}
-		}
-	}
 	if r.Watch != nil {
 		r.Watch.Sync()
 	}
@@ -156,7 +160,7 @@ func (r *Runner) Sync() error {
 }
 
 // Trigger makes a library's scan due now.
-func (r *Runner) Trigger(libraryID int64) error {
+func (r *Runner) Trigger(libraryID uid.ID) error {
 	return r.makeDue(ScanKind(libraryID))
 }
 
@@ -241,7 +245,7 @@ func (r *Runner) execute(ctx context.Context, t *task.Task) error {
 
 func (r *Runner) nextRun(t *task.Task, now time.Time) *time.Time {
 	if strings.HasPrefix(t.Kind, scanKindPrefix) {
-		id, err := strconv.ParseInt(strings.TrimPrefix(t.Kind, scanKindPrefix), 10, 64)
+		id, err := uid.Parse(strings.TrimPrefix(t.Kind, scanKindPrefix))
 		if err == nil {
 			if lib, err := r.S.Libraries.Get(id); err == nil {
 				n := nextNightly(now.Local(), lib.ScanHour).UTC()
@@ -285,7 +289,7 @@ func (r *Runner) work(ctx context.Context, t *task.Task, progress func(float64))
 		}
 		return sum, err
 	case strings.HasPrefix(t.Kind, scanKindPrefix):
-		id, err := strconv.ParseInt(strings.TrimPrefix(t.Kind, scanKindPrefix), 10, 64)
+		id, err := uid.Parse(strings.TrimPrefix(t.Kind, scanKindPrefix))
 		if err != nil {
 			return "", fmt.Errorf("bad task kind %q", t.Kind)
 		}
@@ -298,7 +302,7 @@ func (r *Runner) work(ctx context.Context, t *task.Task, progress func(float64))
 		sum, err := r.S.Scan(ctx, lib, progress)
 		// A scan that fails partway may still have changed the library.
 		if sum.changed() {
-			r.Events.Publish(live.Event{Kind: live.Library, LibraryID: id})
+			r.Events.Publish(live.Event{Kind: live.Library, LibraryID: &id})
 		}
 		if err != nil {
 			log.Error("Scan of "+lib.Name+" failed: "+sum.String(), "err", err)

@@ -31,7 +31,7 @@ const cover = (c: Collection, cls: string, marked = false) =>
 const list = (ctx: Ctx) =>
   paged((offset) => ok(ctx.api.GET("/collections", { params: { query: { limit: 200, offset } } })));
 const create = (ctx: Ctx, name: string) => ok(ctx.api.POST("/collections", { body: { name } }));
-const member = (collectionId: number, itemId: number) => ({
+const member = (collectionId: string, itemId: string) => ({
   params: { path: { collectionId, itemId } },
 });
 
@@ -63,7 +63,7 @@ export async function collectionTiles(ctx: Ctx) {
   return { tiles, create: make };
 }
 
-export const addToCollection = (ctx: Ctx, itemId: number) =>
+export const addToCollection = (ctx: Ctx, itemId: string) =>
   addButton(
     ctx,
     "Add to collection",
@@ -74,7 +74,7 @@ export const addToCollection = (ctx: Ctx, itemId: number) =>
   );
 
 export async function collection(ctx: Ctx, [id]: string[]) {
-  const collectionId = Number(id);
+  const collectionId = id;
   const p = { params: { path: { collectionId } } };
   const listMovies = () =>
     paged((offset) =>

@@ -1,5 +1,5 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
-import { email, quiet, seed, seedAdult, seedMusic, seedTV, signIn } from "./support";
+import { api, email, quiet, seed, seedAdult, seedMusic, seedTV, signIn } from "./support";
 
 test.describe.configure({ mode: "serial" });
 
@@ -31,9 +31,9 @@ test("an adult plays an album through to its end and it is recently played", asy
   await expect(mini(page)).toContainText("Last Call", { timeout: 20_000 });
   await expect(mini(page)).toBeHidden({ timeout: 20_000 });
 
-  const me = await (await request.get("/api/v1/me", { headers })).json();
+  const me = await (await request.get(`${api}/me`, { headers })).json();
   const recent = await (
-    await request.get(`/api/v1/profiles/${me.account.id}/music/recently-played?kind=album`, {
+    await request.get(`${api}/profiles/${me.account.id}/music/recently-played?kind=album`, {
       headers,
     })
   ).json();
@@ -85,9 +85,9 @@ test("Now playing keeps the stream's details behind the art, and a song goes int
   await expect(mini(page)).toContainText("Opening");
 
   // Playing from a playlist stamps it, so Recently played can list it.
-  const me = await (await request.get("/api/v1/me", { headers })).json();
+  const me = await (await request.get(`${api}/me`, { headers })).json();
   const pls = await (
-    await request.get(`/api/v1/profiles/${me.account.id}/playlists?kind=music`, { headers })
+    await request.get(`${api}/profiles/${me.account.id}/playlists?kind=music`, { headers })
   ).json();
   const road = pls.items.find((p: { name: string }) => p.name === "Road trip");
   expect(road.itemCount).toBe(1);
@@ -96,7 +96,7 @@ test("Now playing keeps the stream's details behind the art, and a song goes int
       async () =>
         (
           await (
-            await request.get(`/api/v1/profiles/${me.account.id}/playlists/${road.id}`, {
+            await request.get(`${api}/profiles/${me.account.id}/playlists/${road.id}`, {
               headers,
             })
           ).json()
@@ -146,7 +146,7 @@ async function openList(page: Page, tabName: string, list: string) {
 /** Plays the playlist's first row, runs it to its end and takes Up next; true for the second row. */
 async function advances(page: Page) {
   await page.getByRole("main").getByRole("button", { name: "Play", exact: true }).click();
-  await expect(page).toHaveURL(/#\/play\/\d+\?playlist=\d+&n=0$/);
+  await expect(page).toHaveURL(/#\/play\/[0-9a-f-]{36}\?playlist=[0-9a-f-]{36}&n=0$/);
   const video = () => page.evaluate(() => document.querySelector("video")?.duration ?? 0);
   await expect.poll(video, { timeout: 30_000 }).toBeGreaterThan(10);
   await page.evaluate(() => {
@@ -163,8 +163,8 @@ async function deleteList(
   headers: { Authorization: string },
   name: string,
 ) {
-  const me = await (await request.get("/api/v1/me", { headers })).json();
-  const base = `/api/v1/profiles/${me.account.id}/playlists`;
+  const me = await (await request.get(`${api}/me`, { headers })).json();
+  const base = `${api}/profiles/${me.account.id}/playlists`;
   const all = await (await request.get(base, { headers })).json();
   for (const p of all.items.filter((x: { name: string }) => x.name === name))
     await request.delete(`${base}/${p.id}`, { headers });
@@ -264,11 +264,11 @@ test("a custom collection holds a movie, shows on its details, is one row in a m
   await expect(entries).toContainText("1 movie");
 
   await deleteList(request, headers, "Collected");
-  const cols = await (await request.get("/api/v1/collections", { headers })).json();
+  const cols = await (await request.get(`${api}/collections`, { headers })).json();
   const rainy = cols.items.find((x: { name: string }) => x.name === "Rainy day picks");
-  const movies = (await (await request.get("/api/v1/items?kind=movie", { headers })).json()).items;
+  const movies = (await (await request.get(`${api}/items?kind=movie`, { headers })).json()).items;
   const other = movies.find((m: { parsedTitle: string }) => m.parsedTitle !== "h264-high41");
-  await request.put(`/api/v1/collections/${rainy.id}/movies/${other.id}`, { headers });
+  await request.put(`${api}/collections/${rainy.id}/movies/${other.id}`, { headers });
   await tab(page, "Movies").click();
   await pick(page, /h264-high41/).click();
   await expect(
@@ -276,7 +276,7 @@ test("a custom collection holds a movie, shows on its details, is one row in a m
   ).toHaveAttribute("href", `#/movie/${other.id}`);
 
   for (const c of cols.items.filter((x: { name: string }) => x.name === "Rainy day picks"))
-    await request.delete(`/api/v1/collections/${c.id}`, { headers });
+    await request.delete(`${api}/collections/${c.id}`, { headers });
 });
 
 test("two adults watch a movie together: join, play, pause and leave apply to both", async ({
@@ -346,15 +346,15 @@ test("a kid opens Watch together on a movie on their allow list and an adult joi
   request,
 }) => {
   const headers = await seed(request);
-  const movies = (await (await request.get("/api/v1/items?kind=movie", { headers })).json()).items;
+  const movies = (await (await request.get(`${api}/items?kind=movie`, { headers })).json()).items;
   const movie = movies.find((m: { parsedTitle: string }) => /h264-high41/.test(m.parsedTitle));
-  const made = await request.post("/api/v1/profiles", {
+  const made = await request.post(`${api}/profiles`, {
     headers,
     data: { name: "Wren", birthday: "2018-05-01", filterMode: "allow_list" },
   });
   expect(made.ok()).toBeTruthy();
   const kid = await made.json();
-  await request.put(`/api/v1/profiles/${kid.id}/allowed-items/${movie.id}`, { headers });
+  await request.put(`${api}/profiles/${kid.id}/allowed-items/${movie.id}`, { headers });
   const other = await browser.newContext();
   await other.addInitScript(quiet);
   const tablet = await other.newPage();
@@ -383,6 +383,6 @@ test("a kid opens Watch together on a movie on their allow list and an adult joi
     });
   } finally {
     await other.close();
-    await request.delete(`/api/v1/profiles/${kid.id}`, { headers });
+    await request.delete(`${api}/profiles/${kid.id}`, { headers });
   }
 });

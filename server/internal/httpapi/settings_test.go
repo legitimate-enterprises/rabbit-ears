@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/sysinfo"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/tmdb"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/transcode"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 type fakeSampler struct{ path string }
@@ -37,8 +39,8 @@ func TestSettingsReadAndEdit(t *testing.T) {
 	e.svc.TMDB.Client = tmdb.New(tmdb.Config{Key: "k"})
 	root := t.TempDir()
 	e.svc.Playback.Engine = transcode.New(transcode.Config{Root: root})
-	must(t, os.MkdirAll(filepath.Join(root, "9"), 0o750))
-	must(t, os.WriteFile(filepath.Join(root, "9", "0.m4s"), make([]byte, 500), 0o600))
+	must(t, os.MkdirAll(filepath.Join(root, itoa(uid.N(9))), 0o750))
+	must(t, os.WriteFile(filepath.Join(root, itoa(uid.N(9)), "0.m4s"), make([]byte, 500), 0o600))
 	must(t, e.svc.Server.Save("Den"))
 
 	var got api.Settings
@@ -265,7 +267,7 @@ func TestStats(t *testing.T) {
 	e := newEnv(t)
 	e.svc.Sampler, e.svc.DataDir = &fakeSampler{}, t.TempDir()
 	e.svc.Playback.Engine = transcode.New(transcode.Config{Root: t.TempDir(), MaxVideo: 3})
-	must(t, e.svc.Playback.Engine.Acquire(41))
+	must(t, e.svc.Playback.Engine.Acquire(uid.N(41)))
 	var st api.ServerStats
 	e.expect(200, "GET", "/stats", e.admin.token, nil, &st)
 	want := api.ServerStats{CpuPercent: 12.5, MemoryUsedBytes: 6 << 30, MemoryTotalBytes: 16 << 30, StorageUsedBytes: 400 << 30,
@@ -283,7 +285,7 @@ func TestDangerZone(t *testing.T) {
 	live := &session.Session{DeviceID: e.plain.deviceID, AccountID: e.plain.account.ID, ItemID: m, MediaFileID: f}
 	must(t, e.svc.Sessions.Repo().Create(live, []*session.PlanEntry{{Verdict: session.DirectPlay, VideoAction: session.ActionCopy,
 		AudioAction: session.ActionCopy, SubtitleAction: session.SubtitleNone}}))
-	for _, d := range []string{itoa(live.ID), "999"} {
+	for _, d := range []string{itoa(live.ID), itoa(uid.N(999))} {
 		must(t, os.MkdirAll(filepath.Join(root, d), 0o750))
 		must(t, os.WriteFile(filepath.Join(root, d, "0.m4s"), []byte("x"), 0o600))
 	}
@@ -291,7 +293,7 @@ func TestDangerZone(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, itoa(live.ID), "0.m4s")); err != nil {
 		t.Fatal("an active session keeps its segments")
 	}
-	if _, err := os.Stat(filepath.Join(root, "999")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(root, itoa(uid.N(999)))); !os.IsNotExist(err) {
 		t.Fatal("idle segments are cleared")
 	}
 
@@ -318,7 +320,7 @@ func TestTaskRunNowAndRunDetail(t *testing.T) {
 	if tk.RunRequestedAt == nil {
 		t.Fatalf("%+v", tk)
 	}
-	e.expect(404, "POST", "/tasks/999/runs", e.admin.token, nil, nil)
+	e.expect(404, "POST", "/tasks/"+itoa(uid.N(999))+"/runs", e.admin.token, nil, nil)
 	run, err := e.svc.Tasks.Repo().StartRun(tk.Id, time.Now())
 	must(t, err)
 	var got api.TaskRun
@@ -344,10 +346,10 @@ func TestLibraryFoldersListAndGet(t *testing.T) {
 	}
 	var got api.Folder
 	e.expect(200, "GET", "/libraries/"+itoa(lib)+"/folders/"+itoa(a.Id), e.admin.token, nil, &got)
-	if got != a {
+	if !reflect.DeepEqual(got, a) {
 		t.Fatalf("%+v", got)
 	}
-	e.expect(404, "GET", "/libraries/999/folders", e.admin.token, nil, nil)
+	e.expect(404, "GET", "/libraries/"+itoa(uid.N(999))+"/folders", e.admin.token, nil, nil)
 	other := e.library("tv")
 	e.expect(404, "GET", "/libraries/"+itoa(other)+"/folders/"+itoa(a.Id), e.admin.token, nil, nil)
 }
@@ -356,7 +358,7 @@ func TestNewAdminOperationsAreAdminOnly(t *testing.T) {
 	e := newEnv(t)
 	for _, c := range []struct{ method, path string }{
 		{"GET", "/settings"}, {"PUT", "/settings"}, {"GET", "/stats"}, {"DELETE", "/transcode-cache"},
-		{"POST", "/metadata/refresh"}, {"POST", "/tasks/1/runs"}, {"GET", "/tasks/1/runs/1"},
+		{"POST", "/metadata/refresh"}, {"POST", "/tasks/" + itoa(uid.N(1)) + "/runs"}, {"GET", "/tasks/" + itoa(uid.N(1)) + "/runs/" + itoa(uid.N(1))},
 	} {
 		e.expect(403, c.method, c.path, e.plain.token, map[string]any{"serverName": "x"}, nil)
 		e.expect(401, c.method, c.path, "", map[string]any{"serverName": "x"}, nil)

@@ -7,6 +7,7 @@ import (
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/api"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/occasion"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 func occasionBody(kv ...any) map[string]any {
@@ -78,7 +79,7 @@ func TestOccasionPhrasesAndColors(t *testing.T) {
 	if len(got.Phrases) != 1 || got.Colors != nil || len(o.Phrases) != 1 || o.Colors != nil {
 		t.Fatalf("empty arrays clear them: %+v %+v", o, got)
 	}
-	e.expect(404, "PUT", "/occasions/999", e.admin.token, occasionBody("name", "Gone", "month", 7, "day", 7), nil)
+	e.expect(404, "PUT", "/occasions/"+itoa(uid.N(999)), e.admin.token, occasionBody("name", "Gone", "month", 7, "day", 7), nil)
 }
 
 func TestHolidaysCarryTheirColors(t *testing.T) {
@@ -96,7 +97,7 @@ func TestHolidaysCarryTheirColors(t *testing.T) {
 func TestActiveOccasionHeadlineAndItem(t *testing.T) {
 	e := newEnv(t)
 	c := e.catalog()
-	e.expect(204, "PUT", "/occasions/1/members/"+itoa(c.g), e.admin.token, nil, nil)
+	e.expect(204, "PUT", "/occasions/"+christmasID+"/members/"+itoa(c.g), e.admin.token, nil, nil)
 	colors := []string{"#112233", "#445566", "#778899"}
 	var o api.Occasion
 	e.expect(201, "POST", "/occasions", e.admin.token, occasionBody("name", "Advent", "month", 12, "day", 1, "daysAfter", 30,

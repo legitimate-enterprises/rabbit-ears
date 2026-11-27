@@ -8,6 +8,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db/dbtest"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/task"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 func TestTaskCRUDAndDue(t *testing.T) {
@@ -66,7 +67,7 @@ func TestRuns(t *testing.T) {
 	tk := &task.Task{Name: "scan", Kind: "scan", Enabled: true}
 	_ = r.Create(tk)
 	t0 := time.Now().UTC().Truncate(time.Millisecond)
-	if _, err := r.StartRun(999, t0); !errors.Is(err, db.ErrReference) {
+	if _, err := r.StartRun(uid.N(999), t0); !errors.Is(err, db.ErrReference) {
 		t.Fatal(err)
 	}
 	if _, err := r.LastRun(tk.ID); !errors.Is(err, db.ErrNotFound) {
@@ -100,7 +101,7 @@ func TestRuns(t *testing.T) {
 	if last.ID != bad.ID || last.Status != task.Failed || last.Error != "tmdb down" {
 		t.Fatalf("%+v", last)
 	}
-	if h, _ := r.History(tk.ID, 10); len(h) != 2 || h[0].ID != bad.ID {
+	if h, _ := r.History(&tk.ID, 10); len(h) != 2 || h[0].ID != bad.ID {
 		t.Fatalf("%+v", h)
 	}
 	hung, _ := r.StartRun(tk.ID, t0.Add(time.Hour))
@@ -111,7 +112,7 @@ func TestRuns(t *testing.T) {
 		t.Fatalf("%+v", g)
 	}
 	_ = r.Delete(tk.ID)
-	if h, _ := r.History(0, 10); len(h) != 0 {
+	if h, _ := r.History(nil, 10); len(h) != 0 {
 		t.Fatal("runs should cascade")
 	}
 }
@@ -156,7 +157,7 @@ func TestRunRequests(t *testing.T) {
 	if err := r.RequestRun(b.ID, now); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.RequestRun(999, now); !errors.Is(err, db.ErrNotFound) {
+	if err := r.RequestRun(uid.N(999), now); !errors.Is(err, db.ErrNotFound) {
 		t.Fatal(err)
 	}
 	req, _ := r.Requested()

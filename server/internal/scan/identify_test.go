@@ -265,8 +265,8 @@ func TestSameTitledMoviesWithDifferentIdsStayApart(t *testing.T) {
 	must(t, err)
 	fb, err := e.files.FileByPath(b)
 	must(t, err)
-	if fa.ItemID == fb.ItemID || e.matched(&item.Item{ID: fa.ItemID}) != 11 || e.matched(&item.Item{ID: fb.ItemID}) != 12 || f.called("search") != 0 || len(e.reviews("")) != 0 {
-		t.Fatalf("a in %d matched %d, b in %d matched %d, calls %v", fa.ItemID, e.matched(&item.Item{ID: fa.ItemID}), fb.ItemID, e.matched(&item.Item{ID: fb.ItemID}), f.calls)
+	if *fa.ItemID == *fb.ItemID || e.matched(&item.Item{ID: *fa.ItemID}) != 11 || e.matched(&item.Item{ID: *fb.ItemID}) != 12 || f.called("search") != 0 || len(e.reviews("")) != 0 {
+		t.Fatalf("a in %s matched %d, b in %s matched %d, calls %v", fa.ItemID, e.matched(&item.Item{ID: *fa.ItemID}), fb.ItemID, e.matched(&item.Item{ID: *fb.ItemID}), f.calls)
 	}
 	e.mustScan()
 	if len(e.list(item.Movie)) != 2 {
@@ -346,7 +346,7 @@ func TestRenamedFolderStatingAnIdRematches(t *testing.T) {
 	e.mustScan()
 	got := e.showAt("The Office (2001) {tvdb-78107}")
 	if got.ID != show.ID || e.matched(got) != 2996 || e.firstEpisode(got) != "Downsize" || len(e.reviews("")) != 0 || len(e.list(item.Show)) != 1 {
-		t.Fatalf("show %d was %d, matched %d, episode %q, reviews %+v", got.ID, show.ID, e.matched(got), e.firstEpisode(got), e.reviews(""))
+		t.Fatalf("show %s was %s, matched %d, episode %q, reviews %+v", got.ID, show.ID, e.matched(got), e.firstEpisode(got), e.reviews(""))
 	}
 }
 
@@ -382,7 +382,7 @@ func TestMatchMadeBeforeIdentityIsReviewedNotReplaced(t *testing.T) {
 	gotUK, gotUS := e.showAt("The Office (2001) {tvdb-78107}"), e.showAt("The Office US (2005) {tvdb-73244}")
 	rs := e.reviews("")
 	if gotUK.ID != uk.ID || gotUS.ID != us.ID || e.matched(gotUK) != 2316 || e.matched(gotUS) != 2316 || e.firstEpisode(gotUK) != "Pilot" {
-		t.Fatalf("UK %d was %d matched %d, US %d was %d matched %d", gotUK.ID, uk.ID, e.matched(gotUK), gotUS.ID, us.ID, e.matched(gotUS))
+		t.Fatalf("UK %s was %s matched %d, US %s was %s matched %d", gotUK.ID, uk.ID, e.matched(gotUK), gotUS.ID, us.ID, e.matched(gotUS))
 	}
 	if len(rs) != 1 || *rs[0].ItemID != uk.ID || rs[0].Reason != review.ConflictingIdentity ||
 		!slices.Equal(said(rs[0]), []string{"current tmdb 2316", "stated tvdb 78107", "candidate tmdb 2996"}) || rs[0].Evidence[2].Country != "GB" {

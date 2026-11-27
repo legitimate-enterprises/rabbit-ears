@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/api"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 var tv = map[string]any{"deviceName": "Living room TV", "platform": "roku"}
@@ -63,7 +64,7 @@ func TestDeviceLinkSignsTheTVInOnce(t *testing.T) {
 		t.Fatalf("%+v", p)
 	}
 	e.expect(404, "GET", "/device-links/"+itoa(c.Id)+"?token=wrong", "", nil, nil)
-	e.expect(404, "GET", "/device-links/999?token="+c.PollToken, "", nil, nil)
+	e.expect(404, "GET", "/device-links/"+itoa(uid.N(999))+"?token="+c.PollToken, "", nil, nil)
 
 	res, b := e.raw("GET", "/device-links/"+itoa(c.Id)+"/qr?token="+c.PollToken, "")
 	if res.StatusCode != 200 || res.Header.Get("Content-Type") != "image/png" {
@@ -253,12 +254,12 @@ func TestUncollectedLinksArePruned(t *testing.T) {
 	fresh := e.newLink()
 	var page api.DeviceLinkPage
 	e.expect(200, "GET", "/device-links", e.admin.token, nil, &page)
-	var ids []int64
+	var ids []uid.ID
 	for _, l := range page.Items {
 		ids = append(ids, l.Id)
 	}
 	if len(ids) != 2 || ids[0] != fresh.Id || ids[1] != used.Id {
-		t.Fatalf("kept %v; stale %d denied %d", ids, stale.Id, denied.Id)
+		t.Fatalf("kept %v; stale %v denied %v", ids, stale.Id, denied.Id)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/device"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/playlist"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/service"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // Playlist shares: the owner alone reads and changes who a playlist is
@@ -17,7 +18,7 @@ import (
 
 // toPlaylist is a playlist with its totals over what the active profile may
 // see, and what profileID may do with it, else not found.
-func (s *Server) toPlaylist(ctx context.Context, p *playlist.Playlist, profileID int64) (api.Playlist, error) {
+func (s *Server) toPlaylist(ctx context.Context, p *playlist.Playlist, profileID uid.ID) (api.Playlist, error) {
 	access, err := s.svc.Playlists.Access(p, profileID)
 	if err != nil {
 		return api.Playlist{}, playlistError(err)
@@ -26,7 +27,7 @@ func (s *Server) toPlaylist(ctx context.Context, p *playlist.Playlist, profileID
 	shared := access != service.Owner || p.Shared
 	out := api.Playlist{Id: p.ID, ProfileId: p.AccountID, Name: p.Name, Kind: api.PlaylistKind(p.Kind), Access: api.PlaylistAccess(access),
 		Shared: &shared, ItemCount: n, DurationMs: ms, ArtItemId: first, LastPlayedAt: p.LastPlayedAt,
-		CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt}
+		CreatedAt: p.CreatedAt, ModifiedAt: p.ModifiedAt, CreatedBy: p.CreatedBy, ModifiedBy: p.ModifiedBy}
 	if err != nil {
 		return out, err
 	}
@@ -43,7 +44,7 @@ func (s *Server) toPlaylist(ctx context.Context, p *playlist.Playlist, profileID
 }
 
 // toShare is sh with to, labeled with its household in labels.
-func toShare(sh *playlist.Share, to *account.Account, labels map[int64]account.Label) api.PlaylistShare {
+func toShare(sh *playlist.Share, to *account.Account, labels map[uid.ID]account.Label) api.PlaylistShare {
 	color := to.ShownColor()
 	out := api.PlaylistShare{PlaylistId: sh.PlaylistID, ProfileId: sh.AccountID, Name: to.Name, Kind: api.AccountKind(to.Kind),
 		Access: api.PlaylistShareAccess(sh.Access), CreatedAt: sh.CreatedAt, Color: &color}
@@ -54,7 +55,7 @@ func toShare(sh *playlist.Share, to *account.Account, labels map[int64]account.L
 }
 
 // labels is the household each of ids is labeled with to the owner.
-func (s *Server) labels(ownerID int64, ids ...int64) (map[int64]account.Label, error) {
+func (s *Server) labels(ownerID uid.ID, ids ...uid.ID) (map[uid.ID]account.Label, error) {
 	owner, err := s.svc.Accounts.Repo().Get(ownerID)
 	if err != nil {
 		return nil, err
@@ -63,13 +64,13 @@ func (s *Server) labels(ownerID int64, ids ...int64) (map[int64]account.Label, e
 }
 
 // oneShare is sh with to as the owner sees it.
-func (s *Server) oneShare(ownerID int64, sh *playlist.Share, to *account.Account) (api.PlaylistShare, error) {
+func (s *Server) oneShare(ownerID uid.ID, sh *playlist.Share, to *account.Account) (api.PlaylistShare, error) {
 	labels, err := s.labels(ownerID, to.ID)
 	return toShare(sh, to, labels), err
 }
 
 // shareOf finds the owned playlist's share with a profile, and that profile.
-func (s *Server) shareOf(ctx context.Context, profileID, playlistID, with int64) (*playlist.Share, *account.Account, error) {
+func (s *Server) shareOf(ctx context.Context, profileID, playlistID, with uid.ID) (*playlist.Share, *account.Account, error) {
 	p, err := s.playlistOf(ctx, profileID, playlistID, service.Owner)
 	if err != nil {
 		return nil, nil, err
@@ -95,7 +96,7 @@ func (s *Server) ListPlaylistShares(ctx context.Context, r api.ListPlaylistShare
 	}
 	out := api.ListPlaylistShares200JSONResponse{Items: []api.PlaylistShare{}}
 	rows, out.NextOffset = window(rows, limit, offset)
-	tos, ids := make([]*account.Account, len(rows)), make([]int64, len(rows))
+	tos, ids := make([]*account.Account, len(rows)), make([]uid.ID, len(rows))
 	for i, sh := range rows {
 		if tos[i], err = s.svc.Accounts.Repo().Get(sh.AccountID); err != nil {
 			return nil, err
@@ -178,7 +179,7 @@ func (s *Server) toHouseholdShare(sh *playlist.HouseholdShare) (api.PlaylistHous
 }
 
 // householdShareOf finds the owned playlist's share with a household.
-func (s *Server) householdShareOf(ctx context.Context, profileID, playlistID, householdID int64) (*playlist.HouseholdShare, error) {
+func (s *Server) householdShareOf(ctx context.Context, profileID, playlistID, householdID uid.ID) (*playlist.HouseholdShare, error) {
 	p, err := s.playlistOf(ctx, profileID, playlistID, service.Owner)
 	if err != nil {
 		return nil, err
@@ -277,7 +278,7 @@ func (s *Server) ListShareCandidates(ctx context.Context, r api.ListShareCandida
 	}
 	out := api.ListShareCandidates200JSONResponse{Items: []api.ShareCandidate{}}
 	rows, out.NextOffset = window(rows, limit, offset)
-	ids := make([]int64, len(rows))
+	ids := make([]uid.ID, len(rows))
 	for i, a := range rows {
 		ids[i] = a.ID
 	}

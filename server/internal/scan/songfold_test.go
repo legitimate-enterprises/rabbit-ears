@@ -34,7 +34,7 @@ func TestRenamedUnprintedSongFoldsIntoItsTwin(t *testing.T) {
 	sum, err := e.s.Scan(context.Background(), e.lib, nil)
 	must(t, err)
 	songs = e.list(item.Song)
-	if len(songs) != 1 || e.plays() != fmt.Sprintf("%d:5000", songs[0].ID) {
+	if len(songs) != 1 || e.plays() != fmt.Sprintf("%s:5000", songs[0].ID) {
 		t.Fatalf("state %q, plays %q", e.state(), e.plays())
 	}
 	if got := sum.String(); got != "1 song updated; 1 file missing" {
@@ -57,7 +57,7 @@ func TestRenamedUnprintedSongFoldsIntoItsTwin(t *testing.T) {
 func TestUnmountedSongDoesNotFold(t *testing.T) {
 	e := newEnv(t, library.Music, "")
 	volume := filepath.Join(t.TempDir(), "volume")
-	_, err := library.New(e.d).AddFolder(e.lib.ID, volume)
+	err := library.New(e.d).AddFolder(&library.Folder{LibraryID: e.lib.ID, Path: volume}, nil)
 	must(t, err)
 	fixtureCopy(t, "sample.flac", filepath.Join(volume, "Artist", "Album", "01 - One.flac"))
 	fixtureCopy(t, "sample.flac", filepath.Join(e.root, "Artist", "Album", "01 - One.flac"))

@@ -17,6 +17,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/mediafile"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/review"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/service"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // audience is what the device's active profile may see.
@@ -34,7 +35,7 @@ func browse(ctx context.Context) item.Audience {
 
 // seen returns an item only if the active profile may see it; anything
 // else is not found.
-func (s *Server) seen(ctx context.Context, id int64) (*item.Item, error) {
+func (s *Server) seen(ctx context.Context, id uid.ID) (*item.Item, error) {
 	return s.visibleTo(audience(ctx), id)
 }
 
@@ -47,7 +48,7 @@ func catalogItem(it *item.Item, err error) (*item.Item, error) {
 	return it, err
 }
 
-func (s *Server) visibleTo(a item.Audience, id int64) (*item.Item, error) {
+func (s *Server) visibleTo(a item.Audience, id uid.ID) (*item.Item, error) {
 	ok, err := s.svc.Items.Repo().Visible(id, a)
 	if err != nil {
 		return nil, err
@@ -115,10 +116,10 @@ func (s *Server) ListLibraries(ctx context.Context, r api.ListLibrariesRequestOb
 }
 
 // CreateLibrary adds a library with no folders.
-func (s *Server) CreateLibrary(_ context.Context, r api.CreateLibraryRequestObject) (api.CreateLibraryResponseObject, error) {
-	var l library.Library
+func (s *Server) CreateLibrary(ctx context.Context, r api.CreateLibraryRequestObject) (api.CreateLibraryResponseObject, error) {
+	l := library.Library{ID: or(r.Body.Id, uid.ID{})}
 	libraryFrom(r.Body, &l)
-	if err := s.svc.Libraries.Repo().Create(&l); err != nil {
+	if err := s.svc.Libraries.Repo().Create(&l, actor(ctx)); err != nil {
 		return nil, err
 	}
 	v, err := s.library(&l, true)
@@ -162,13 +163,16 @@ func (s *Server) GetLibraryFolder(ctx context.Context, r api.GetLibraryFolderReq
 }
 
 // ReplaceLibrary rewrites a library's settings; folders are kept.
-func (s *Server) ReplaceLibrary(_ context.Context, r api.ReplaceLibraryRequestObject) (api.ReplaceLibraryResponseObject, error) {
+func (s *Server) ReplaceLibrary(ctx context.Context, r api.ReplaceLibraryRequestObject) (api.ReplaceLibraryResponseObject, error) {
+	if err := sameID(r.Body.Id, r.LibraryId); err != nil {
+		return nil, err
+	}
 	l, err := s.svc.Libraries.Repo().Get(r.LibraryId)
 	if err != nil {
 		return nil, err
 	}
 	libraryFrom(r.Body, l)
-	if err := s.svc.Libraries.Repo().Update(l); err != nil {
+	if err := s.svc.Libraries.Repo().Update(l, actor(ctx)); err != nil {
 		return nil, err
 	}
 	v, err := s.library(l, true)
@@ -181,21 +185,24 @@ func (s *Server) DeleteLibrary(_ context.Context, r api.DeleteLibraryRequestObje
 }
 
 // AddLibraryFolder attaches a root path; a path may belong to one library.
-func (s *Server) AddLibraryFolder(_ context.Context, r api.AddLibraryFolderRequestObject) (api.AddLibraryFolderResponseObject, error) {
+func (s *Server) AddLibraryFolder(ctx context.Context, r api.AddLibraryFolderRequestObject) (api.AddLibraryFolderResponseObject, error) {
 	if _, err := s.svc.Libraries.Repo().Get(r.LibraryId); err != nil {
 		return nil, err
 	}
-	f, err := s.svc.Libraries.AddFolder(r.LibraryId, r.Body.Path)
-	if err != nil {
+	f := &library.Folder{ID: or(r.Body.Id, uid.ID{}), LibraryID: r.LibraryId, Path: r.Body.Path}
+	if err := s.svc.Libraries.AddFolder(f, actor(ctx)); err != nil {
 		return nil, err
 	}
 	return api.AddLibraryFolder201JSONResponse(toFolder(f)), nil
 }
 
 // ReplaceLibraryFolder gives a folder of this library a new path.
-func (s *Server) ReplaceLibraryFolder(_ context.Context, r api.ReplaceLibraryFolderRequestObject) (api.ReplaceLibraryFolderResponseObject, error) {
+func (s *Server) ReplaceLibraryFolder(ctx context.Context, r api.ReplaceLibraryFolderRequestObject) (api.ReplaceLibraryFolderResponseObject, error) {
+	if err := sameID(r.Body.Id, r.FolderId); err != nil {
+		return nil, err
+	}
 	f := &library.Folder{ID: r.FolderId, LibraryID: r.LibraryId, Path: r.Body.Path}
-	if err := s.svc.Libraries.UpdateFolder(f); err != nil {
+	if err := s.svc.Libraries.UpdateFolder(f, actor(ctx)); err != nil {
 		return nil, err
 	}
 	return api.ReplaceLibraryFolder200JSONResponse(toFolder(f)), nil
@@ -227,7 +234,7 @@ func (s *Server) item(it *item.Item, admin bool) (api.Item, error) {
 	if err != nil {
 		return api.Item{}, err
 	}
-	gone, err := s.svc.MediaFiles.Repo().Unavailable([]int64{it.ID})
+	gone, err := s.svc.MediaFiles.Repo().Unavailable([]uid.ID{it.ID})
 	out, gs := toItem(it, m, admin), mapAll(genres, toGenre)
 	out.Genres, out.Unavailable = &gs, optTrue(gone[it.ID])
 	return out, err
@@ -254,8 +261,8 @@ func (s *Server) ListItems(ctx context.Context, r api.ListItemsRequestObject) (a
 	if kidsOnly || r.Params.ParentId != nil {
 		a = audience(ctx)
 	}
-	rows, err := s.svc.Items.Repo().List(item.Filter{LibraryID: or(r.Params.LibraryId, 0), ParentID: or(r.Params.ParentId, 0), KidsOnly: kidsOnly,
-		Kind: enumStr(r.Params.Kind), Q: or(r.Params.Q, ""), GenreID: or(r.Params.GenreId, 0), PersonID: or(r.Params.PersonId, 0), OccasionID: or(r.Params.OccasionId, 0),
+	rows, err := s.svc.Items.Repo().List(item.Filter{LibraryID: r.Params.LibraryId, ParentID: r.Params.ParentId, KidsOnly: kidsOnly,
+		Kind: enumStr(r.Params.Kind), Q: or(r.Params.Q, ""), GenreID: r.Params.GenreId, PersonID: r.Params.PersonId, OccasionID: r.Params.OccasionId,
 		Catalog: true, UHD: r.Params.Resolution != nil, Newest: r.Params.Sort != nil && *r.Params.Sort == api.ItemSortAdded, Audience: a, Limit: limit + 1, Offset: offset})
 	if err != nil {
 		return nil, err
@@ -269,7 +276,7 @@ func (s *Server) ListItems(ctx context.Context, r api.ListItemsRequestObject) (a
 // items converts a page of catalog items with their metadata, genres and
 // whether they are unavailable.
 func (s *Server) items(rows []*item.Item, admin bool) ([]api.Item, error) {
-	ids := make([]int64, len(rows))
+	ids := make([]uid.ID, len(rows))
 	for i, it := range rows {
 		ids[i] = it.ID
 	}
@@ -323,7 +330,7 @@ func (s *Server) GetItem(ctx context.Context, r api.GetItemRequestObject) (api.G
 }
 
 // editions lists an item's editions that have files, each with its copies.
-func (s *Server) editions(itemID int64) (*[]api.Edition, error) {
+func (s *Server) editions(itemID uid.ID) (*[]api.Edition, error) {
 	eds, err := s.svc.Editions.Repo().ForItem(itemID)
 	if err != nil {
 		return nil, err
@@ -479,7 +486,7 @@ func (s *Server) mediaFile(f *mediafile.File, admin bool) (api.MediaFile, error)
 }
 
 func mediaFileFrom(in *api.MediaFileInput, f *mediafile.File) {
-	f.ItemID, f.Path, f.SizeBytes, f.ModifiedAt = in.ItemId, in.Path, in.SizeBytes, in.ModifiedAt
+	f.ItemID, f.Path, f.SizeBytes, f.FileModifiedAt = &in.ItemId, in.Path, in.SizeBytes, in.FileModifiedAt
 	f.Container, f.DurationMs, f.Bitrate = or(in.Container, ""), in.DurationMs, in.Bitrate
 }
 
@@ -518,7 +525,7 @@ func (s *Server) problemFiles(ctx context.Context, p api.ListMediaFilesParams) (
 	if !caller(ctx).asAdmin() {
 		return nil, errForbidden
 	}
-	all, err := s.svc.MediaFiles.Repo().Problems(string(*p.Problem), or(p.LibraryId, 0))
+	all, err := s.svc.MediaFiles.Repo().Problems(string(*p.Problem), p.LibraryId)
 	if err != nil {
 		return nil, err
 	}
@@ -530,9 +537,7 @@ func (s *Server) problemFiles(ctx context.Context, p api.ListMediaFilesParams) (
 		if err != nil {
 			return nil, err
 		}
-		if f.LibraryID != 0 {
-			v.LibraryId = &f.LibraryID
-		}
+		v.LibraryId = f.LibraryID
 		v.Title = text(f.Title)
 		out.Items = append(out.Items, v)
 	}
@@ -548,8 +553,8 @@ func (s *Server) ProbeMediaFile(_ context.Context, r api.ProbeMediaFileRequestOb
 	if err := s.svc.MediaFiles.Repo().ForgetProbe(f.ID); err != nil {
 		return nil, err
 	}
-	if f.ItemID != 0 {
-		it, err := s.svc.Items.Repo().Get(f.ItemID)
+	if f.ItemID != nil {
+		it, err := s.svc.Items.Repo().Get(*f.ItemID)
 		if err != nil {
 			return nil, err
 		}
@@ -577,7 +582,10 @@ func (s *Server) GetMediaFile(ctx context.Context, r api.GetMediaFileRequestObje
 	if err != nil {
 		return nil, err
 	}
-	if _, err := s.seen(ctx, f.ItemID); err != nil {
+	if f.ItemID == nil {
+		return nil, errNotFound
+	}
+	if _, err := s.seen(ctx, *f.ItemID); err != nil {
 		return nil, err
 	}
 	v, err := s.mediaFile(f, caller(ctx).asAdmin())

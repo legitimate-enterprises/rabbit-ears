@@ -1,4 +1,5 @@
 import { defineConfig } from "@playwright/test";
+import { API_BASE } from "./src/api/client";
 
 // Real server (built from ../server, fresh database, the fixtures as media)
 // behind the Vite dev server, which proxies /api to it.
@@ -41,7 +42,7 @@ export default defineConfig({
   webServer: [
     {
       command: `rm -rf ${data} && mkdir -p ${data} && (cd ../server && go build -o ${data}/rabbit-ears ./cmd/rabbit-ears) && RABBIT_EARS_PORT=${API} RABBIT_EARS_DB=${data}/re.db RABBIT_EARS_DATA=${data} ${data}/rabbit-ears`,
-      url: `http://localhost:${API}/api/v1/health`,
+      url: `http://localhost:${API}${API_BASE}/health`,
       timeout: 180_000,
     },
     {

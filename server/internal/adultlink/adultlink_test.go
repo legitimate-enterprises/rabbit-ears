@@ -8,17 +8,21 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/adultlink"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db/dbtest"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 func TestAdultLink(t *testing.T) {
 	d := dbtest.Open(t)
-	var ids []int64
+	var ids []uid.ID
 	for _, email := range []string{"a@example.test", "b@example.test", "c@example.test"} {
 		a := &account.Account{Kind: account.Adult, Email: email, Name: email}
-		if err := account.New(d).Create(a); err != nil {
+		if err := account.New(d).Create(a, nil); err != nil {
 			t.Fatal(err)
 		}
 		ids = append(ids, a.ID)
+	}
+	if ids[0].Compare(ids[1]) >= 0 {
+		t.Fatalf("ids are minted in order: %v", ids)
 	}
 	r := adultlink.New(d)
 	l := &adultlink.Link{AID: ids[1], BID: ids[0]}
@@ -28,7 +32,7 @@ func TestAdultLink(t *testing.T) {
 	if err := r.Create(&adultlink.Link{AID: ids[0], BID: ids[1]}); !errors.Is(err, db.ErrConflict) {
 		t.Fatalf("a pair is linked once: %v", err)
 	}
-	if err := r.Create(&adultlink.Link{AID: ids[0], BID: 999}); !errors.Is(err, db.ErrReference) {
+	if err := r.Create(&adultlink.Link{AID: ids[0], BID: uid.N(999)}); !errors.Is(err, db.ErrReference) {
 		t.Fatalf("an unknown adult: %v", err)
 	}
 	if err := r.Create(&adultlink.Link{AID: ids[2], BID: ids[0], TV: true}); err != nil {

@@ -5,6 +5,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/mediafile"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/playlist"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/youtube"
 )
 
@@ -25,7 +26,7 @@ func NewUpNextService(items *item.Repo, collections *collection.Repo, yt *youtub
 
 // Next is what follows it for the audience, nil for nothing.
 func (s *UpNextService) Next(it *item.Item, a item.Audience) (*item.Item, error) {
-	var id int64
+	var id *uid.ID
 	var err error
 	switch it.Kind {
 	case item.Episode:
@@ -35,16 +36,16 @@ func (s *UpNextService) Next(it *item.Item, a item.Audience) (*item.Item, error)
 	case item.Video:
 		id, err = s.youtube.NextVideo(it.ID, a)
 	}
-	if err != nil || id == 0 {
+	if err != nil || id == nil {
 		return nil, err
 	}
-	return s.items.Get(id)
+	return s.items.Get(*id)
 }
 
 // NextRow is the row after index of the playlist's play order for the
 // audience, else after itemID's first row, skipping rows with no file on
 // disk; it answers the row's index too, and ok false for none.
-func (s *UpNextService) NextRow(playlistID, itemID int64, index *int, a item.Audience) (row playlist.Row, at int, ok bool, err error) {
+func (s *UpNextService) NextRow(playlistID, itemID uid.ID, index *int, a item.Audience) (row playlist.Row, at int, ok bool, err error) {
 	rows, err := s.playlists.PlayOrder(playlistID, a, -1, 0)
 	if err != nil {
 		return row, 0, false, err
@@ -65,7 +66,7 @@ func (s *UpNextService) NextRow(playlistID, itemID int64, index *int, a item.Aud
 	const chunk = 500
 	for from := at + 1; from < len(rows); from += chunk {
 		tail := rows[from:min(from+chunk, len(rows))]
-		ids := make([]int64, len(tail))
+		ids := make([]uid.ID, len(tail))
 		for i, r := range tail {
 			ids[i] = r.ItemID
 		}

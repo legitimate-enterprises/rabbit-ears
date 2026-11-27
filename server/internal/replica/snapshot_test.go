@@ -14,6 +14,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db/dbtest"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/occasion"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/replica"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // elsewhere adds household 202 beside fixture's 201, with something of its
@@ -21,44 +22,47 @@ import (
 // playing a collection of 202's, and a device in each. 201's stations are
 // seen apart by its kids and its adult hiding kids' content.
 const elsewhere = `
-INSERT INTO account (id, kind, email, name, password_hash, created_at, updated_at) VALUES (111, 'adult', 'zed@example.test', 'Zed', 'zed-hash', 0, 0);
-INSERT INTO household (id, name, adult_id, created_at) VALUES (202, 'Away', 111, 0);
-UPDATE account SET household_id = 202 WHERE id = 111;
-INSERT INTO account (id, kind, name, household_id, pin_hash, created_at, updated_at) VALUES (112, 'kid', 'Yan', 202, 'yan-pin', 0, 0);
-UPDATE account SET email = 'ada@example.test', password_hash = 'ada-hash' WHERE id = 101;
-INSERT INTO genre (id, name) VALUES (1, 'Drama');
-INSERT INTO item_genre (item_id, genre_id, source) VALUES (1, 1, 'local');
-INSERT INTO person (id, name) VALUES (1, 'Pat');
-INSERT INTO credit (id, item_id, person_id, kind, character, position) VALUES (1, 1, 1, 'cast', 'Lead', 0);
-INSERT INTO playlist_share (playlist_id, account_id, access, created_at) VALUES (501, 104, 'read', 0);
-INSERT INTO watch_state (account_id, item_id, position_ms, updated_at) VALUES (112, 1, 5, 0), (103, 2, 7, 0);
-INSERT INTO account_allow (account_id, item_id) VALUES (112, 3);
-INSERT INTO collection (id, source, household_id, name, created_at, updated_at) VALUES (402, 'custom', 202, 'Theirs', 0, 0);
-INSERT INTO collection_movie (collection_id, item_id, position) VALUES (402, 1, 0);
-INSERT INTO playlist (id, account_id, name, kind, created_at, updated_at) VALUES (511, 111, 'Private', 'movies', 0, 0);
-INSERT INTO playlist_entry (id, playlist_id, item_id, rank, added_at) VALUES (621, 511, 1, 'a0', 0);
-INSERT INTO station (id, account_id, playlist_id, name, visibility, created_at, updated_at) VALUES
-  (701, 111, 511, 'Theirs', 'private', 0, 0), (702, 101, 501, 'Ours', 'private', 0, 0);
-INSERT INTO station_day (station_id, weekday) VALUES (701, 1), (702, 1);
-INSERT INTO playlist (id, account_id, name, kind, station_owned, created_at, updated_at) VALUES
-  (512, 111, 'Wide', 'movies', 1, 0, 0), (513, 102, 'Small', 'movies', 0, 0, 0), (514, 101, 'Blank', 'movies', 1, 0, 0);
-INSERT INTO playlist_entry (id, playlist_id, item_id, rank, added_at) VALUES (622, 512, 1, 'a0', 0), (623, 512, 2, 'a1', 0), (624, 513, 7, 'a0', 0);
-INSERT INTO station (id, account_id, playlist_id, name, visibility, created_at, updated_at) VALUES
-  (703, 111, 512, 'Wide', 'server', 0, 0), (704, 102, 513, 'Small', 'household', 0, 0), (705, 111, 511, 'Near', 'household', 0, 0),
-  (706, 101, 514, 'Blank', 'server', 0, 0);
-INSERT INTO station_day (station_id, weekday) VALUES (703, 2);
-INSERT INTO station_time (id, station_id, from_minute, to_minute) VALUES (721, 703, 60, 120);
-INSERT INTO station_program (id, station_id, item_id, edition_id, entry_id, loop, position, starts_at, ends_at) VALUES (731, 703, 1, 9, 622, 0, 0, 0, 1000);
-INSERT INTO station_loop (station_id, position, entry_id, item_id) VALUES (703, 0, 622, 1);
-INSERT INTO cover (id, station_id, item_id, created_at) VALUES (741, 703, 1, 0);
-INSERT INTO collection (id, source, household_id, name, created_at, updated_at) VALUES (403, 'custom', 202, 'Lent', 0, 0);
-INSERT INTO collection_movie (collection_id, item_id, position) VALUES (403, 1, 0), (403, 4, 1);
-INSERT INTO playlist (id, account_id, name, kind, created_at, updated_at) VALUES (515, 111, 'Lent', 'movies', 0, 0);
-INSERT INTO playlist_entry (id, playlist_id, item_id, collection_id, rank, added_at) VALUES (626, 515, NULL, 403, 'a0', 0), (627, 512, NULL, 403, 'a2', 0);
-INSERT INTO device (id, token_hash, name, platform, account_id, household_id, created_at) VALUES
-  (1, 'tok-here', 'Here', 'ios', 101, 201, 0), (2, 'tok-there', 'There', 'ios', 111, 202, 0);
-INSERT INTO download (id, device_id, account_id, item_id, media_file_id, quality, created_at) VALUES
-  (801, 1, 103, 1, 1, 'original', 0), (802, 2, 112, 1, 1, 'original', 0);
+INSERT INTO account (id, kind, email, name, password_hash, created_at, modified_at) VALUES (uid(111), 'adult', 'zed@example.test', 'Zed', 'zed-hash', 0, 0);
+INSERT INTO household (id, name, adult_id, created_at, modified_at) VALUES (uid(202), 'Away', uid(111), 0, 0);
+UPDATE account SET household_id = uid(202) WHERE id = uid(111);
+INSERT INTO account (id, kind, name, household_id, pin_hash, created_at, modified_at) VALUES (uid(112), 'kid', 'Yan', uid(202), 'yan-pin', 0, 0);
+UPDATE account SET email = 'ada@example.test', password_hash = 'ada-hash' WHERE id = uid(101);
+INSERT INTO genre (id, name, created_at, modified_at) VALUES (uid(1), 'Drama', 0, 0);
+INSERT INTO item_genre (item_id, genre_id, source) VALUES (uid(1), uid(1), 'local');
+INSERT INTO person (id, name, created_at, modified_at) VALUES (uid(1), 'Pat', 0, 0);
+INSERT INTO credit (id, item_id, person_id, kind, character, position, created_at, modified_at) VALUES (uid(1), uid(1), uid(1), 'cast', 'Lead', 0, 0, 0);
+INSERT INTO playlist_share (playlist_id, account_id, access, created_at) VALUES (uid(501), uid(104), 'read', 0);
+INSERT INTO watch_state (account_id, item_id, position_ms, changed_at) VALUES (uid(112), uid(1), 5, 0), (uid(103), uid(2), 7, 0);
+INSERT INTO account_allow (account_id, item_id) VALUES (uid(112), uid(3));
+INSERT INTO collection (id, source, household_id, name, created_at, modified_at) VALUES (uid(402), 'custom', uid(202), 'Theirs', 0, 0);
+INSERT INTO collection_movie (collection_id, item_id, position) VALUES (uid(402), uid(1), 0);
+INSERT INTO playlist (id, account_id, name, kind, created_at, modified_at) VALUES (uid(511), uid(111), 'Private', 'movies', 0, 0);
+INSERT INTO playlist_entry (id, playlist_id, item_id, rank, added_at, created_at, modified_at) VALUES (uid(621), uid(511), uid(1), 'a0', 0, 0, 0);
+INSERT INTO station (id, account_id, playlist_id, name, visibility, created_at, modified_at) VALUES
+  (uid(701), uid(111), uid(511), 'Theirs', 'private', 0, 0), (uid(702), uid(101), uid(501), 'Ours', 'private', 0, 0);
+INSERT INTO station_day (station_id, weekday) VALUES (uid(701), 1), (uid(702), 1);
+INSERT INTO playlist (id, account_id, name, kind, station_owned, created_at, modified_at) VALUES
+  (uid(512), uid(111), 'Wide', 'movies', 1, 0, 0), (uid(513), uid(102), 'Small', 'movies', 0, 0, 0), (uid(514), uid(101), 'Blank', 'movies', 1, 0, 0);
+INSERT INTO playlist_entry (id, playlist_id, item_id, rank, added_at, created_at, modified_at) VALUES
+  (uid(622), uid(512), uid(1), 'a0', 0, 0, 0), (uid(623), uid(512), uid(2), 'a1', 0, 0, 0), (uid(624), uid(513), uid(7), 'a0', 0, 0, 0);
+INSERT INTO station (id, account_id, playlist_id, name, visibility, created_at, modified_at) VALUES
+  (uid(703), uid(111), uid(512), 'Wide', 'server', 0, 0), (uid(704), uid(102), uid(513), 'Small', 'household', 0, 0),
+  (uid(705), uid(111), uid(511), 'Near', 'household', 0, 0), (uid(706), uid(101), uid(514), 'Blank', 'server', 0, 0);
+INSERT INTO station_day (station_id, weekday) VALUES (uid(703), 2);
+INSERT INTO station_time (id, station_id, from_minute, to_minute, created_at, modified_at) VALUES (uid(721), uid(703), 60, 120, 0, 0);
+INSERT INTO station_program (id, station_id, item_id, edition_id, entry_id, loop, position, starts_at, ends_at, created_at, modified_at) VALUES
+  (uid(731), uid(703), uid(1), uid(9), uid(622), 0, 0, 0, 1000, 0, 0);
+INSERT INTO station_loop (station_id, position, entry_id, item_id) VALUES (uid(703), 0, uid(622), uid(1));
+INSERT INTO cover (id, station_id, item_id, created_at, modified_at) VALUES (uid(741), uid(703), uid(1), 0, 0);
+INSERT INTO collection (id, source, household_id, name, created_at, modified_at) VALUES (uid(403), 'custom', uid(202), 'Lent', 0, 0);
+INSERT INTO collection_movie (collection_id, item_id, position) VALUES (uid(403), uid(1), 0), (uid(403), uid(4), 1);
+INSERT INTO playlist (id, account_id, name, kind, created_at, modified_at) VALUES (uid(515), uid(111), 'Lent', 'movies', 0, 0);
+INSERT INTO playlist_entry (id, playlist_id, item_id, collection_id, rank, added_at, created_at, modified_at) VALUES
+  (uid(626), uid(515), NULL, uid(403), 'a0', 0, 0, 0), (uid(627), uid(512), NULL, uid(403), 'a2', 0, 0, 0);
+INSERT INTO device (id, token_hash, name, platform, account_id, household_id, created_at, modified_at) VALUES
+  (uid(1), 'tok-here', 'Here', 'ios', uid(101), uid(201), 0, 0), (uid(2), 'tok-there', 'There', 'ios', uid(111), uid(202), 0, 0);
+INSERT INTO download (id, device_id, account_id, item_id, media_file_id, quality, created_at, modified_at) VALUES
+  (uid(801), uid(1), uid(103), uid(1), uid(1), 'original', 0, 0), (uid(802), uid(2), uid(112), uid(1), uid(1), 'original', 0, 0);
 `
 
 // syncOf is d's replica service, its snapshots kept for the test.
@@ -70,7 +74,7 @@ func syncOf(t *testing.T, d *sql.DB) *replica.Sync {
 }
 
 // snapshotOf builds household's snapshot and opens it.
-func snapshotOf(t *testing.T, s *replica.Sync, household int64) (*sql.DB, replica.File) {
+func snapshotOf(t *testing.T, s *replica.Sync, household uid.ID) (*sql.DB, replica.File) {
 	t.Helper()
 	f, err := s.Snapshot(context.Background(), household)
 	if err != nil {
@@ -104,59 +108,59 @@ func count(t *testing.T, d *sql.DB, q string, args ...any) int64 {
 
 func TestSnapshotHoldsTheHouseholdAndNoOther(t *testing.T) {
 	d := twoHouseholds(t)
-	r, f := snapshotOf(t, syncOf(t, d), 201)
+	r, f := snapshotOf(t, syncOf(t, d), uid.N(201))
 	v, _ := clock(t, d)
 	if f.Version != v {
 		t.Errorf("snapshot at %d, clock %d", f.Version, v)
 	}
-	if got := rowsOf(t, r, `SELECT schema, version, household_id FROM replica_meta`); !slices.Equal(got, []string{row(1, v, 201)}) {
+	if got := rowsOf(t, r, `SELECT schema, version, household_id FROM replica_meta`); !slices.Equal(got, []string{row(1, v, uid.N(201))}) {
 		t.Errorf("replica_meta %v", got)
 	}
 	for q, want := range map[string]int64{
-		`SELECT count(*) FROM account WHERE id IN (111, 112)`:             0,
-		`SELECT count(*) FROM account_card WHERE id IN (111, 112)`:        0,
-		`SELECT count(*) FROM household WHERE id = 202`:                   0,
-		`SELECT count(*) FROM watch_state WHERE account_id = 112`:         0,
-		`SELECT count(*) FROM account_allow WHERE account_id = 112`:       0,
-		`SELECT count(*) FROM collection WHERE id = 402`:                  0,
-		`SELECT count(*) FROM collection_movie WHERE collection_id = 402`: 0,
-		`SELECT count(*) FROM playlist WHERE id = 511`:                    0,
-		`SELECT count(*) FROM playlist_entry WHERE id = 621`:              0,
-		`SELECT count(*) FROM station WHERE id = 701`:                     0,
-		`SELECT count(*) FROM station_day WHERE station_id = 701`:         0,
-		`SELECT count(*) FROM download WHERE device_id = 2`:               0,
-		`SELECT count(*) FROM station WHERE id = 705`:                     0,
-		`SELECT count(*) FROM playlist_share WHERE playlist_id = 512`:     0,
+		`SELECT count(*) FROM account WHERE id IN (uid(111), uid(112))`:        0,
+		`SELECT count(*) FROM account_card WHERE id IN (uid(111), uid(112))`:   0,
+		`SELECT count(*) FROM household WHERE id = uid(202)`:                   0,
+		`SELECT count(*) FROM watch_state WHERE account_id = uid(112)`:         0,
+		`SELECT count(*) FROM account_allow WHERE account_id = uid(112)`:       0,
+		`SELECT count(*) FROM collection WHERE id = uid(402)`:                  0,
+		`SELECT count(*) FROM collection_movie WHERE collection_id = uid(402)`: 0,
+		`SELECT count(*) FROM playlist WHERE id = uid(511)`:                    0,
+		`SELECT count(*) FROM playlist_entry WHERE id = uid(621)`:              0,
+		`SELECT count(*) FROM station WHERE id = uid(701)`:                     0,
+		`SELECT count(*) FROM station_day WHERE station_id = uid(701)`:         0,
+		`SELECT count(*) FROM download WHERE device_id = uid(2)`:               0,
+		`SELECT count(*) FROM station WHERE id = uid(705)`:                     0,
+		`SELECT count(*) FROM playlist_share WHERE playlist_id = uid(512)`:     0,
 		// Another household's server station brings what shows and plays
 		// it, and nothing more of its owner.
-		`SELECT count(*) FROM station WHERE id = 703 AND household_id = 202`: 1,
-		`SELECT count(*) FROM playlist WHERE id = 512`:                       1,
-		`SELECT count(*) FROM playlist_entry WHERE playlist_id = 512`:        3,
-		`SELECT count(*) FROM station_day WHERE station_id = 703`:            1,
-		`SELECT count(*) FROM station_time WHERE station_id = 703`:           1,
-		`SELECT count(*) FROM station_program WHERE station_id = 703`:        1,
-		`SELECT count(*) FROM station_loop WHERE station_id = 703`:           1,
-		`SELECT count(*) FROM cover WHERE station_id = 703`:                  1,
-		`SELECT count(*) FROM collection WHERE id = 403`:                     1,
-		`SELECT count(*) FROM collection_movie WHERE collection_id = 403`:    2,
-		`SELECT count(*) FROM playlist WHERE id = 515`:                       0,
-		`SELECT count(*) FROM station WHERE id IN (702, 704, 706)`:           3,
-		`SELECT count(*) FROM account`:                                       7,
-		`SELECT count(*) FROM household WHERE id = 201`:                      1,
-		`SELECT count(*) FROM watch_state WHERE account_id = 103`:            1,
-		`SELECT count(*) FROM collection WHERE id = 401`:                     1,
-		`SELECT count(*) FROM playlist WHERE id IN (501, 502)`:               2,
-		`SELECT count(*) FROM station_day WHERE station_id = 702`:            1,
-		`SELECT count(*) FROM download WHERE device_id = 1`:                  1,
-		`SELECT count(*) FROM item`:                                          count(t, d, `SELECT count(*) FROM item`),
-		`SELECT count(*) FROM account WHERE has_pin`:                         2,
-		`SELECT count(*) FROM genre WHERE name = 'DRAMA'`:                    1,
-		`SELECT count(*) FROM occasion WHERE name = 'snow'`:                  1,
-		`SELECT count(*) FROM item_genre WHERE source = 'local'`:             1,
-		`SELECT count(*) FROM holiday`:                                       int64(len(occasion.Holidays())),
-		`SELECT count(*) FROM holiday_date WHERE key = 'christmas'`:          int64(len(holiday(t, "christmas").Dates)),
-		`SELECT count(*) FROM holiday_color WHERE key = 'christmas'`:         int64(len(holiday(t, "christmas").Colors)),
-		`SELECT count(*) FROM holiday_date WHERE day = '2030-12-25'`:         1,
+		`SELECT count(*) FROM station WHERE id = uid(703) AND household_id = uid(202)`: 1,
+		`SELECT count(*) FROM playlist WHERE id = uid(512)`:                            1,
+		`SELECT count(*) FROM playlist_entry WHERE playlist_id = uid(512)`:             3,
+		`SELECT count(*) FROM station_day WHERE station_id = uid(703)`:                 1,
+		`SELECT count(*) FROM station_time WHERE station_id = uid(703)`:                1,
+		`SELECT count(*) FROM station_program WHERE station_id = uid(703)`:             1,
+		`SELECT count(*) FROM station_loop WHERE station_id = uid(703)`:                1,
+		`SELECT count(*) FROM cover WHERE station_id = uid(703)`:                       1,
+		`SELECT count(*) FROM collection WHERE id = uid(403)`:                          1,
+		`SELECT count(*) FROM collection_movie WHERE collection_id = uid(403)`:         2,
+		`SELECT count(*) FROM playlist WHERE id = uid(515)`:                            0,
+		`SELECT count(*) FROM station WHERE id IN (uid(702), uid(704), uid(706))`:      3,
+		`SELECT count(*) FROM account`:                                                 7,
+		`SELECT count(*) FROM household WHERE id = uid(201)`:                           1,
+		`SELECT count(*) FROM watch_state WHERE account_id = uid(103)`:                 1,
+		`SELECT count(*) FROM collection WHERE id = uid(401)`:                          1,
+		`SELECT count(*) FROM playlist WHERE id IN (uid(501), uid(502))`:               2,
+		`SELECT count(*) FROM station_day WHERE station_id = uid(702)`:                 1,
+		`SELECT count(*) FROM download WHERE device_id = uid(1)`:                       1,
+		`SELECT count(*) FROM item`:                                                    count(t, d, `SELECT count(*) FROM item`),
+		`SELECT count(*) FROM account WHERE has_pin`:                                   2,
+		`SELECT count(*) FROM genre WHERE name = 'DRAMA'`:                              1,
+		`SELECT count(*) FROM occasion WHERE name = 'snow'`:                            1,
+		`SELECT count(*) FROM item_genre WHERE source = 'local'`:                       1,
+		`SELECT count(*) FROM holiday`:                                                 int64(len(occasion.Holidays())),
+		`SELECT count(*) FROM holiday_date WHERE key = 'christmas'`:                    int64(len(holiday(t, "christmas").Dates)),
+		`SELECT count(*) FROM holiday_color WHERE key = 'christmas'`:                   int64(len(holiday(t, "christmas").Colors)),
+		`SELECT count(*) FROM holiday_date WHERE day = '2030-12-25'`:                   1,
 	} {
 		if got := count(t, r, q); got != want {
 			t.Errorf("%s = %d, want %d", q, got, want)
@@ -177,7 +181,7 @@ func holiday(t *testing.T, key string) occasion.Holiday {
 // snapshot: by column name across every table and view, and by value.
 func TestSnapshotCarriesNoSecret(t *testing.T) {
 	d := twoHouseholds(t)
-	r, _ := snapshotOf(t, syncOf(t, d), 201)
+	r, _ := snapshotOf(t, syncOf(t, d), uid.N(201))
 	never := []string{"password_hash", "pin_hash", "pin_failures", "pin_locked_until", "token_hash", "poll_token_hash", "tmdb_key",
 		"client_secret", "secret", "code", "path", "thumbnail_path", "dir", "jpeg", "probe_error", "fingerprint", "sync_version"}
 	secrets := strs(t, d, `SELECT path FROM item WHERE path IS NOT NULL UNION SELECT path FROM media_file
@@ -207,7 +211,7 @@ func TestSnapshotCarriesNoSecret(t *testing.T) {
 // row by row in any order. It keeps the server's indexes on what it holds.
 func TestSnapshotSchema(t *testing.T) {
 	d := twoHouseholds(t)
-	r, _ := snapshotOf(t, syncOf(t, d), 201)
+	r, _ := snapshotOf(t, syncOf(t, d), uid.N(201))
 	for _, tb := range replica.V1.Tables {
 		q := strs(t, r, `SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?`, tb.Name)
 		if len(q) != 1 {
@@ -249,7 +253,7 @@ func TestSnapshotSchema(t *testing.T) {
 // Every view a snapshot ships compiles there and answers rows.
 func TestSnapshotViewsAnswer(t *testing.T) {
 	d := twoHouseholds(t)
-	r, _ := snapshotOf(t, syncOf(t, d), 201)
+	r, _ := snapshotOf(t, syncOf(t, d), uid.N(201))
 	views := strs(t, r, `SELECT name FROM sqlite_schema WHERE type = 'view'`)
 	if len(views) < 15 {
 		t.Fatalf("views %v", views)
@@ -272,7 +276,7 @@ func TestSnapshotIsCachedUntilTheHouseholdChanges(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := range files {
 		wg.Go(func() {
-			f, err := s.Snapshot(ctx, 201)
+			f, err := s.Snapshot(ctx, uid.N(201))
 			if err != nil {
 				t.Error(err)
 				return
@@ -291,8 +295,8 @@ func TestSnapshotIsCachedUntilTheHouseholdChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mustExec(t, d, `UPDATE watch_state SET position_ms = 99 WHERE account_id = 112`)
-	again, err := s.Snapshot(ctx, 201)
+	mustExec(t, d, `UPDATE watch_state SET position_ms = 99 WHERE account_id = uid(112)`)
+	again, err := s.Snapshot(ctx, uid.N(201))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,8 +305,8 @@ func TestSnapshotIsCachedUntilTheHouseholdChanges(t *testing.T) {
 	if err != nil || again.Path != files[0].Path || !bytes.Equal(b, first) {
 		t.Errorf("another household's write made %s (%v)", again.Path, err)
 	}
-	mustExec(t, d, `UPDATE watch_state SET position_ms = 99 WHERE account_id = 103`)
-	fresh, err := s.Snapshot(ctx, 201)
+	mustExec(t, d, `UPDATE watch_state SET position_ms = 99 WHERE account_id = uid(103)`)
+	fresh, err := s.Snapshot(ctx, uid.N(201))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -312,5 +316,30 @@ func TestSnapshotIsCachedUntilTheHouseholdChanges(t *testing.T) {
 	}
 	if left, _ := filepath.Glob(filepath.Join(s.Dir, "*")); !slices.Equal(left, []string{fresh.Path}) {
 		t.Errorf("cache holds %v", left)
+	}
+}
+
+// Every id of a snapshot, and nothing else, is declared BLOB and holds an
+// id's 16 bytes, so a client reads a declared BLOB as a UUID.
+func TestSnapshotIdsAreBlobs(t *testing.T) {
+	d := twoHouseholds(t)
+	r, _ := snapshotOf(t, syncOf(t, d), uid.N(201))
+	notIDs := []string{"tmdb_id", "provider_id", "keyword_id", "external_id"}
+	for _, tb := range replica.V1.Tables {
+		for _, c := range tb.Cols {
+			// server_info's id is the constant 1, not an id.
+			id := c.Name == "id" && tb.Name != "server_info" || c.Name == "created_by" || c.Name == "modified_by" ||
+				strings.HasSuffix(c.Name, "_id") && !slices.Contains(notIDs, c.Name)
+			if typ := strs(t, r, `SELECT type FROM pragma_table_info(?) WHERE name = ?`, tb.Name, c.Name); (typ[0] == "BLOB") != id {
+				t.Errorf("%s.%s declared %s", tb.Name, c.Name, typ[0])
+			}
+			if n := count(t, r, `SELECT count(*) FROM "`+tb.Name+`" WHERE `+c.Name+` IS NOT NULL AND
+				(typeof(`+c.Name+`) = 'blob' AND length(`+c.Name+`) = 16) != ?`, id); n > 0 {
+				t.Errorf("%s.%s: %d values not as declared", tb.Name, c.Name, n)
+			}
+		}
+	}
+	if count(t, r, `SELECT count(*) FROM station WHERE typeof(household_id) = 'blob'`) == 0 {
+		t.Error("no station carries its household's id")
 	}
 }

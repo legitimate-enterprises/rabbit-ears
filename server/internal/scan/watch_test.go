@@ -11,12 +11,13 @@ import (
 	"time"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/library"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 func TestWatcherTriggersOncePerQuietPeriod(t *testing.T) {
 	e := newEnv(t, library.Movies, "")
-	got := make(chan int64, 10)
-	w, err := NewWatcher(e.s.Libraries, func(id int64) { got <- id }, 100*time.Millisecond)
+	got := make(chan uid.ID, 10)
+	w, err := NewWatcher(e.s.Libraries, func(id uid.ID) { got <- id }, 100*time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +40,7 @@ func TestWatcherTriggersOncePerQuietPeriod(t *testing.T) {
 	select {
 	case id := <-got:
 		if id != e.lib.ID {
-			t.Errorf("library %d", id)
+			t.Errorf("library %s", id)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("no trigger")
@@ -53,8 +54,8 @@ func TestWatcherTriggersOncePerQuietPeriod(t *testing.T) {
 
 func TestWatcherIgnoresPartialFilesAndUnwatchedLibraries(t *testing.T) {
 	e := newEnv(t, library.Movies, "")
-	got := make(chan int64, 10)
-	w, _ := NewWatcher(e.s.Libraries, func(id int64) { got <- id }, 50*time.Millisecond)
+	got := make(chan uid.ID, 10)
+	w, _ := NewWatcher(e.s.Libraries, func(id uid.ID) { got <- id }, 50*time.Millisecond)
 	w.Sync()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -67,7 +68,7 @@ func TestWatcherIgnoresPartialFilesAndUnwatchedLibraries(t *testing.T) {
 	case <-time.After(400 * time.Millisecond):
 	}
 	e.lib.WatchFiles = false
-	if err := e.s.Libraries.Update(e.lib); err != nil {
+	if err := e.s.Libraries.Update(e.lib, nil); err != nil {
 		t.Fatal(err)
 	}
 	_ = os.WriteFile(filepath.Join(e.root, "m.mkv"), []byte("x"), 0o600)
@@ -84,8 +85,8 @@ func TestWatcherSyncWalksAWatchedRootOnce(t *testing.T) {
 	if err := os.Mkdir(sub, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	got := make(chan int64, 10)
-	w, err := NewWatcher(e.s.Libraries, func(id int64) { got <- id }, 50*time.Millisecond)
+	got := make(chan uid.ID, 10)
+	w, err := NewWatcher(e.s.Libraries, func(id uid.ID) { got <- id }, 50*time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,8 +135,8 @@ func TestWalkTreeSkipsExtrasWhereScansDo(t *testing.T) {
 
 func TestWatcherWatchesARootAgainOnceItIsBack(t *testing.T) {
 	e := newEnv(t, library.Movies, "")
-	got := make(chan int64, 10)
-	w, err := NewWatcher(e.s.Libraries, func(id int64) { got <- id }, 50*time.Millisecond)
+	got := make(chan uid.ID, 10)
+	w, err := NewWatcher(e.s.Libraries, func(id uid.ID) { got <- id }, 50*time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,8 +172,8 @@ func TestWatcherWatchesARootAgainOnceItIsBack(t *testing.T) {
 // it does, not at the next nightly one; a root that stays does not scan.
 func TestWatcherTriggersAScanWhenARootIsBack(t *testing.T) {
 	e := newEnv(t, library.Movies, "")
-	got := make(chan int64, 10)
-	w, err := NewWatcher(e.s.Libraries, func(id int64) { got <- id }, time.Second)
+	got := make(chan uid.ID, 10)
+	w, err := NewWatcher(e.s.Libraries, func(id uid.ID) { got <- id }, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,11 +197,12 @@ func TestWatcherTriggersAScanWhenARootIsBack(t *testing.T) {
 
 func TestWatcherStopsWatchingAFolderTakenOutOfItsLibrary(t *testing.T) {
 	e := newEnv(t, library.Movies, "")
-	gone, err := e.s.Libraries.AddFolder(e.lib.ID, t.TempDir())
+	gone := &library.Folder{LibraryID: e.lib.ID, Path: t.TempDir()}
+	err := e.s.Libraries.AddFolder(gone, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	w, err := NewWatcher(e.s.Libraries, func(int64) {}, time.Second)
+	w, err := NewWatcher(e.s.Libraries, func(uid.ID) {}, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,18 +219,19 @@ func TestWatcherStopsWatchingAFolderTakenOutOfItsLibrary(t *testing.T) {
 
 func TestWatcherFollowsAFolderGivenANewPath(t *testing.T) {
 	e := newEnv(t, library.Movies, "")
-	f, err := e.s.Libraries.AddFolder(e.lib.ID, t.TempDir())
+	f := &library.Folder{LibraryID: e.lib.ID, Path: t.TempDir()}
+	err := e.s.Libraries.AddFolder(f, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	w, err := NewWatcher(e.s.Libraries, func(int64) {}, time.Second)
+	w, err := NewWatcher(e.s.Libraries, func(uid.ID) {}, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = w.fsw.Close() }()
 	w.Sync()
 	f.Path = t.TempDir()
-	if err := e.s.Libraries.UpdateFolder(f); err != nil {
+	if err := e.s.Libraries.UpdateFolder(f, nil); err != nil {
 		t.Fatal(err)
 	}
 	w.Sync()
@@ -254,7 +257,7 @@ func TestWatcherReleasesDescriptorsWhenARootComesAndGoes(t *testing.T) {
 	vol := filepath.Join(t.TempDir(), "vol")
 	fill(vol)
 	for _, p := range []string{stay, vol} {
-		_, err := e.s.Libraries.AddFolder(e.lib.ID, p)
+		err := e.s.Libraries.AddFolder(&library.Folder{LibraryID: e.lib.ID, Path: p}, nil)
 		must(t, err)
 	}
 	open := func() int {
@@ -262,7 +265,7 @@ func TestWatcherReleasesDescriptorsWhenARootComesAndGoes(t *testing.T) {
 		must(t, err)
 		return len(fds)
 	}
-	w, err := NewWatcher(e.s.Libraries, func(int64) {}, time.Second)
+	w, err := NewWatcher(e.s.Libraries, func(uid.ID) {}, time.Second)
 	must(t, err)
 	w.Sync()
 	watching := open()
@@ -287,9 +290,9 @@ func TestWatcherLeavesARootPastItsBudgetToTheScan(t *testing.T) {
 	for i := range 5 {
 		must(t, os.WriteFile(filepath.Join(big, strconv.Itoa(i)+".mkv"), nil, 0o600))
 	}
-	_, err := e.s.Libraries.AddFolder(e.lib.ID, big)
+	err := e.s.Libraries.AddFolder(&library.Folder{LibraryID: e.lib.ID, Path: big}, nil)
 	must(t, err)
-	w, err := NewWatcher(e.s.Libraries, func(int64) {}, time.Second)
+	w, err := NewWatcher(e.s.Libraries, func(uid.ID) {}, time.Second)
 	must(t, err)
 	defer func() { closeWatcher(w.fsw) }()
 	watching := func(want ...string) {
@@ -313,10 +316,10 @@ func TestWatcherLeavesARootPastItsBudgetToTheScan(t *testing.T) {
 	w.Sync()
 	watching(big)
 
-	_, err = e.s.Libraries.AddFolder(e.lib.ID, e.root)
+	err = e.s.Libraries.AddFolder(&library.Folder{LibraryID: e.lib.ID, Path: e.root}, nil)
 	must(t, err)
 	closeWatcher(w.fsw)
-	w, err = NewWatcher(e.s.Libraries, func(int64) {}, time.Second)
+	w, err = NewWatcher(e.s.Libraries, func(uid.ID) {}, time.Second)
 	must(t, err)
 	w.budget = 4
 	w.Sync()
@@ -342,8 +345,8 @@ func TestWatcherCoversASymlinkedRoot(t *testing.T) {
 	if err := os.Symlink(real, e.root); err != nil {
 		t.Fatal(err)
 	}
-	got := make(chan int64, 10)
-	w, err := NewWatcher(e.s.Libraries, func(id int64) { got <- id }, 50*time.Millisecond)
+	got := make(chan uid.ID, 10)
+	w, err := NewWatcher(e.s.Libraries, func(id uid.ID) { got <- id }, 50*time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
 	}

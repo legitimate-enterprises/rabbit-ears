@@ -16,6 +16,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/playlist"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/service"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/session"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // A claim racing the removal of conversions nobody claims, as the worker,
@@ -36,9 +37,9 @@ func TestAClaimSurvivesARacingRemovalOfUnclaimedConversions(t *testing.T) {
 	for i := range 200 {
 		created, cleaned := make(chan error, 1), make(chan error, 1)
 		var wg sync.WaitGroup
-		var id int64
+		var id uid.ID
 		wg.Go(func() {
-			d, err := p.s.Downloads.Create(sess.DeviceID, sess.AccountID, title)
+			d, err := p.s.Downloads.Create(sess.DeviceID, sess.AccountID, title, nil, nil)
 			if err == nil {
 				id = d.ID
 			}
@@ -69,18 +70,18 @@ func TestConversionsTakeTurnsByDevice(t *testing.T) {
 	s := service.New(dbtest.Open(t))
 	a, h := adultWithHousehold(t, s, "a@example.test")
 	l := &library.Library{Name: "m", Kind: library.Movies}
-	must(t, s.Libraries.Repo().Create(l))
+	must(t, s.Libraries.Repo().Create(l, nil))
 	titles := map[string]*service.DownloadTitle{}
 	for _, name := range []string{"A1", "A2", "A3", "A4", "B1", "B2", "C1"} {
 		it := &item.Item{LibraryID: l.ID, Kind: item.Movie, ParsedTitle: name}
 		must(t, s.Items.Repo().Create(it))
-		f := &mediafile.File{ItemID: it.ID, Path: "/" + name + ".mkv", Container: "mkv"}
+		f := &mediafile.File{ItemID: &it.ID, Path: "/" + name + ".mkv", Container: "mkv"}
 		must(t, s.MediaFiles.Repo().CreateFile(f))
 		titles[name] = &service.DownloadTitle{Row: playlist.Row{ItemID: it.ID}, File: f, Plan: &playback.DownloadPlan{Container: "mp4", Quality: "720p",
 			Entry: &session.PlanEntry{Verdict: session.VideoTranscode, VideoAction: session.ActionConvert, AudioAction: session.ActionCopy, VideoCodec: "h264", TopHeight: 720,
 				SubtitleAction: session.SubtitleNone, SingleRung: true}}}
 	}
-	devices := map[string]int64{}
+	devices := map[string]uid.ID{}
 	for _, name := range []string{"A", "B", "C"} {
 		_, dev, err := s.Devices.Register(a.ID, h.ID, name, "web")
 		must(t, err)
@@ -88,7 +89,7 @@ func TestConversionsTakeTurnsByDevice(t *testing.T) {
 	}
 	claim := func(device string, names ...string) {
 		for _, name := range names {
-			_, err := s.Downloads.Create(devices[device], a.ID, titles[name])
+			_, err := s.Downloads.Create(devices[device], a.ID, titles[name], nil, nil)
 			must(t, err)
 		}
 	}
@@ -121,6 +122,28 @@ func TestConversionsTakeTurnsByDevice(t *testing.T) {
 	claim("B", "B2", "C1")
 	claim("C", "C1")
 	if got := run(3); got != "C1 A4 B2" {
+		t.Fatalf("ran %s", got)
+	}
+	// Devices tied on service go in claim order, whatever ids the clients
+	// chose: B claimed first, under an id sorting after A's.
+	lateID, earlyID := uid.N(2), uid.N(1)
+	for _, name := range []string{"A5", "B3"} {
+		it := &item.Item{LibraryID: l.ID, Kind: item.Movie, ParsedTitle: name}
+		must(t, s.Items.Repo().Create(it))
+		f := &mediafile.File{ItemID: &it.ID, Path: "/" + name + ".mkv", Container: "mkv"}
+		must(t, s.MediaFiles.Repo().CreateFile(f))
+		titles[name] = &service.DownloadTitle{Row: playlist.Row{ItemID: it.ID}, File: f, Plan: titles["A1"].Plan}
+	}
+	_, d, err := s.Devices.Register(a.ID, h.ID, "D", "web")
+	must(t, err)
+	_, e, err := s.Devices.Register(a.ID, h.ID, "E", "web")
+	must(t, err)
+	_, err = s.Downloads.Create(d.ID, a.ID, titles["B3"], &lateID, nil)
+	must(t, err)
+	time.Sleep(2 * time.Millisecond)
+	_, err = s.Downloads.Create(e.ID, a.ID, titles["A5"], &earlyID, nil)
+	must(t, err)
+	if got := run(2); got != "B3 A5" {
 		t.Fatalf("ran %s", got)
 	}
 }

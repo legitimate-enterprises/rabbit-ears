@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // Sync serves households' replicas of d: the changes since a version, a
@@ -17,7 +19,7 @@ type Sync struct {
 	// Dir keeps the snapshots built, one file per household at most.
 	Dir    string
 	builds sync.Map // household id to *sync.Mutex
-	keys   sync.Map // source table to intKey's answer
+	keys   sync.Map // source table to keyTypes' answer
 }
 
 // New serves the replicas of d; set Dir before asking for a snapshot.
@@ -43,7 +45,8 @@ type Page struct {
 	Tombstones []Keys
 }
 
-// Rows are rows of one replica table, each a value per column.
+// Rows are rows of one replica table, each a value per column, an id as
+// its canonical string.
 type Rows struct {
 	Name    string
 	Columns []string
@@ -51,7 +54,7 @@ type Rows struct {
 }
 
 // Keys are the keys of rows deleted from one replica table, each its key
-// columns in the table's key order.
+// columns in the table's key order, an id as its canonical string.
 type Keys struct {
 	Table string
 	Keys  [][]any
@@ -72,13 +75,13 @@ func cursorOf(target int64, phase int, last int64) string {
 // Changes reads the page of household's changes since a version, nil for
 // none held, that cursor names, empty for a pass's first. A first page is a
 // snapshot when more rows changed than half the replica holds.
-func (s *Sync) Changes(ctx context.Context, household int64, since *int64, cursor string, limit int) (Page, error) {
+func (s *Sync) Changes(ctx context.Context, household uid.ID, since *int64, cursor string, limit int) (Page, error) {
 	return s.changes(ctx, household, since, cursor, limit, true)
 }
 
 // Changed reports whether household has anything to read since after: a
 // change it may see or a snapshot to take.
-func (s *Sync) Changed(ctx context.Context, household, after int64) (bool, error) {
+func (s *Sync) Changed(ctx context.Context, household uid.ID, after int64) (bool, error) {
 	p, err := s.changes(ctx, household, &after, "", 1, false)
 	return p.Mode == Snapshot || len(p.Tables)+len(p.Tombstones) > 0, err
 }
@@ -90,7 +93,7 @@ func (s *Sync) Version(ctx context.Context) (int64, error) {
 	return v, err
 }
 
-func (s *Sync) changes(ctx context.Context, household int64, since *int64, cursor string, limit int, whole bool) (Page, error) {
+func (s *Sync) changes(ctx context.Context, household uid.ID, since *int64, cursor string, limit int, whole bool) (Page, error) {
 	tx, err := s.d.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return Page{}, err
@@ -187,7 +190,7 @@ func scoped(scope string) string {
 // It reads by version, which a page and a doorbell span narrowly, never
 // by scope or table, which would read and sort all a household or a
 // table ever held.
-func read(ctx context.Context, tx *sql.Tx, p int, household, lo, hi int64, limit int) ([][]any, []int64, error) {
+func read(ctx context.Context, tx *sql.Tx, p int, household uid.ID, lo, hi int64, limit int) ([][]any, []int64, error) {
 	tb := V1.Tables[p%len(V1.Tables)]
 	var q string
 	var width int
@@ -221,6 +224,17 @@ func read(ctx context.Context, tx *sql.Tx, p int, household, lo, hi int64, limit
 		if err := rows.Scan(dest...); err != nil {
 			return nil, nil, err
 		}
+		// The projection's only BLOBs are ids, and a tombstone's key parts
+		// hold the bytes of the ids they stand for.
+		for i, x := range r {
+			if b, ok := x.([]byte); ok {
+				var id uid.ID
+				if err := id.Scan(b); err != nil {
+					return nil, nil, fmt.Errorf("%s: %w", tb.Name, err)
+				}
+				r[i] = id.String()
+			}
+		}
 		vals, versions = append(vals, r), append(versions, v)
 	}
 	return vals, versions, rows.Err()
@@ -229,7 +243,7 @@ func read(ctx context.Context, tx *sql.Tx, p int, household, lo, hi int64, limit
 // mostChanged reports whether more of household's rows changed, deleted
 // ones included, in (lo, hi] than half the rows its replica holds. It
 // counts the replica only as far as settles that.
-func mostChanged(ctx context.Context, tx *sql.Tx, household, lo, hi int64) (bool, error) {
+func mostChanged(ctx context.Context, tx *sql.Tx, household uid.ID, lo, hi int64) (bool, error) {
 	var changed int64
 	for _, tb := range V1.Tables {
 		var n, gone int64

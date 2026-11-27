@@ -2,11 +2,19 @@ package api_test
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/getkin/kin-openapi/openapi3filter"
+	"github.com/getkin/kin-openapi/routers/gorillamux"
+	"github.com/oapi-codegen/runtime"
+
 	"github.com/legitimate-enterprises/rabbit-ears/server/api"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 func TestSpecValidates(t *testing.T) {
@@ -90,6 +98,83 @@ func TestReplayableOperations(t *testing.T) {
 	slices.Sort(want)
 	if !slices.Equal(got, want) {
 		t.Errorf("replayable:\n got %v\nwant %v", got, want)
+	}
+}
+
+// The guard validates with these options before binding: an id that is not
+// a canonical UUIDv7 fails in a path, a query and a body (400), and one that
+// passes binds into uid.ID through UnmarshalText.
+func TestIdsAreCanonicalUUIDv7(t *testing.T) {
+	doc, err := api.GetSpec()
+	if err != nil {
+		t.Fatal(err)
+	}
+	router, err := gorillamux.NewRouter(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validate := func(method, target, body string) error {
+		var r *http.Request
+		if body == "" {
+			r = httptest.NewRequest(method, target, nil)
+		} else {
+			r = httptest.NewRequest(method, target, strings.NewReader(body))
+			r.Header.Set("Content-Type", "application/json")
+		}
+		route, params, err := router.FindRoute(r)
+		if err != nil {
+			t.Fatalf("%s %s: %v", method, target, err)
+		}
+		return openapi3filter.ValidateRequest(context.Background(), &openapi3filter.RequestValidationInput{
+			Request: r, PathParams: params, Route: route,
+			Options: &openapi3filter.Options{AuthenticationFunc: openapi3filter.NoopAuthenticationFunc, MultiError: true},
+		})
+	}
+	good := uid.New().String()
+	for _, id := range []string{good, uid.N(1).String()} {
+		if err := validate("GET", "/api/v2/profiles/"+id, ""); err != nil {
+			t.Errorf("path %s: %v", id, err)
+		}
+		if err := validate("GET", "/api/v2/items?libraryId="+id, ""); err != nil {
+			t.Errorf("query %s: %v", id, err)
+		}
+		if err := validate("POST", "/api/v2/collections", `{"name":"x","id":"`+id+`"}`); err != nil {
+			t.Errorf("body %s: %v", id, err)
+		}
+	}
+	bad := []string{
+		"1",
+		strings.ToUpper(good),
+		"6ba7b810-9dad-41d1-80b4-00c04fd430c8", // version 4
+		"01936f0e-7c3a-7b2d-1e41-5a8c0d2f6b19", // variant 0xxx
+		"01936f0e7c3a7b2d9e415a8c0d2f6b19",
+		"{" + good + "}",
+	}
+	for _, id := range bad {
+		if validate("GET", "/api/v2/profiles/"+id, "") == nil {
+			t.Errorf("path %s passed", id)
+		}
+		if validate("GET", "/api/v2/items?libraryId="+id, "") == nil {
+			t.Errorf("query %s passed", id)
+		}
+		if validate("POST", "/api/v2/collections", `{"name":"x","id":"`+id+`"}`) == nil {
+			t.Errorf("body %s passed", id)
+		}
+	}
+	if validate("POST", "/api/v2/collections", `{"name":"x","id":1}`) == nil {
+		t.Error("integer id passed")
+	}
+
+	var path api.Id
+	if err := runtime.BindStyledParameterWithOptions("simple", "profileId", good, &path, runtime.BindStyledParameterOptions{
+		ParamLocation: runtime.ParamLocationPath, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true,
+	}); err != nil || path.String() != good {
+		t.Errorf("path bound %v, %v", path, err)
+	}
+	var query *api.Id
+	if err := runtime.BindQueryParameterWithOptions("form", true, false, "libraryId", url.Values{"libraryId": {good}}, &query,
+		runtime.BindQueryParameterOptions{Type: "string", Format: "uuid"}); err != nil || query == nil || query.String() != good {
+		t.Errorf("query bound %v, %v", query, err)
 	}
 }
 

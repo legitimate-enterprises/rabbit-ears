@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -22,6 +21,7 @@ import (
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/logstore"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/mediafile"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 var (
@@ -48,7 +48,7 @@ type Config struct {
 // Stream is one entry at one rung of a session. Key names it within the
 // session; a request with another key replaces the session's encoder.
 type Stream struct {
-	SessionID int64
+	SessionID uid.ID
 	Key       string
 	// Ahead is the segments encoded past the reported playhead, or without
 	// one the newest request, before pausing, which the stream's player is
@@ -62,14 +62,14 @@ type Stream struct {
 type Manager struct {
 	cfg      Config
 	mu       sync.Mutex
-	encoders map[int64]*encoder
-	slots    map[int64]bool
+	encoders map[uid.ID]*encoder
+	slots    map[uid.ID]bool
 	bounds   map[string][]Bound
 	probes   singleflight.Group
 	// locks serialize, per session, choosing an encoder with starting or
 	// stopping one, so racing requests never run two, and with deleting the
 	// session's segments; m.mu is not held while a process starts or dies.
-	locks map[int64]*sessionLock
+	locks map[uid.ID]*sessionLock
 }
 
 type sessionLock struct {
@@ -78,7 +78,7 @@ type sessionLock struct {
 }
 
 // lock takes the session's lock and returns its release.
-func (m *Manager) lock(sessionID int64) func() {
+func (m *Manager) lock(sessionID uid.ID) func() {
 	m.mu.Lock()
 	l := m.locks[sessionID]
 	if l == nil {
@@ -93,7 +93,7 @@ func (m *Manager) lock(sessionID int64) func() {
 
 // tryLock is lock without the wait: nil while the session's lock is held or
 // awaited.
-func (m *Manager) tryLock(sessionID int64) func() {
+func (m *Manager) tryLock(sessionID uid.ID) func() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.locks[sessionID] != nil {
@@ -105,7 +105,7 @@ func (m *Manager) tryLock(sessionID int64) func() {
 	return func() { m.unlock(sessionID, l) }
 }
 
-func (m *Manager) unlock(sessionID int64, l *sessionLock) {
+func (m *Manager) unlock(sessionID uid.ID, l *sessionLock) {
 	l.Unlock()
 	m.mu.Lock()
 	if l.users--; l.users == 0 {
@@ -164,7 +164,7 @@ func New(cfg Config) *Manager {
 	if cfg.Idle == 0 {
 		cfg.Idle = 5 * time.Minute
 	}
-	return &Manager{cfg: cfg, encoders: map[int64]*encoder{}, slots: map[int64]bool{}, bounds: map[string][]Bound{}, locks: map[int64]*sessionLock{}}
+	return &Manager{cfg: cfg, encoders: map[uid.ID]*encoder{}, slots: map[uid.ID]bool{}, bounds: map[string][]Bound{}, locks: map[uid.ID]*sessionLock{}}
 }
 
 func (m *Manager) root() string {
@@ -182,7 +182,7 @@ func (m *Manager) root() string {
 
 // Acquire reserves a video transcode slot for a session; holding one already
 // succeeds.
-func (m *Manager) Acquire(sessionID int64) error {
+func (m *Manager) Acquire(sessionID uid.ID) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if !m.slots[sessionID] && len(m.slots) >= m.cfg.MaxVideo {
@@ -193,21 +193,21 @@ func (m *Manager) Acquire(sessionID int64) error {
 }
 
 // Release frees a session's slot, if it holds one.
-func (m *Manager) Release(sessionID int64) {
+func (m *Manager) Release(sessionID uid.ID) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.slots, sessionID)
 }
 
 // Transcoding lists sessions holding a video transcode slot.
-func (m *Manager) Transcoding() []int64 {
+func (m *Manager) Transcoding() []uid.ID {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	var out []int64
+	var out []uid.ID
 	for id := range m.slots {
 		out = append(out, id)
 	}
-	slices.Sort(out)
+	slices.SortFunc(out, uid.ID.Compare)
 	return out
 }
 
@@ -238,7 +238,7 @@ func (m *Manager) Busy() bool {
 }
 
 // Encoding lists sessions with an encoder, running or stopped.
-func (m *Manager) Encoding() []int64 {
+func (m *Manager) Encoding() []uid.ID {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return slices.Collect(maps.Keys(m.encoders))
@@ -272,7 +272,7 @@ func (m *Manager) Usage() int64 { return dirSize(m.root()) }
 // Clear deletes everything in the cache except the segments of sessions in
 // keep, of sessions whose encoder runs and of sessions whose lock is held;
 // sidecars are re-extracted on demand.
-func (m *Manager) Clear(keep map[int64]bool) error {
+func (m *Manager) Clear(keep map[uid.ID]bool) error {
 	root := m.root()
 	entries, err := os.ReadDir(root)
 	if err != nil && !os.IsNotExist(err) {
@@ -280,7 +280,7 @@ func (m *Manager) Clear(keep map[int64]bool) error {
 	}
 	var errs []error
 	for _, de := range entries {
-		if id, perr := strconv.ParseInt(de.Name(), 10, 64); perr != nil || !keep[id] {
+		if id, perr := uid.Parse(de.Name()); perr != nil || !keep[id] {
 			_, rerr := m.removeIdle(filepath.Join(root, de.Name()))
 			errs = append(errs, rerr)
 		}
@@ -294,7 +294,7 @@ func (m *Manager) Clear(keep map[int64]bool) error {
 // its next request. The lock is tried, not waited for, as prune holds its
 // caller's.
 func (m *Manager) removeIdle(path string) (bool, error) {
-	if id, err := strconv.ParseInt(filepath.Base(path), 10, 64); err == nil {
+	if id, err := uid.Parse(filepath.Base(path)); err == nil {
 		unlock := m.tryLock(id)
 		if unlock == nil {
 			return false, nil
@@ -327,7 +327,7 @@ func dirSize(p string) int64 {
 // Rest frees the slot of a session whose encoder ran to the end of its
 // input, and reports whether it did. As after an idle stop, the session's
 // segments stay and it takes a slot again to start another encoder.
-func (m *Manager) Rest(sessionID int64) bool {
+func (m *Manager) Rest(sessionID uid.ID) bool {
 	defer m.lock(sessionID)()
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -340,7 +340,7 @@ func (m *Manager) Rest(sessionID int64) bool {
 }
 
 func (m *Manager) dir(st Stream) string {
-	return filepath.Join(m.root(), strconv.FormatInt(st.SessionID, 10), st.Key)
+	return filepath.Join(m.root(), st.SessionID.String(), st.Key)
 }
 
 // Init returns the stream's initialization segment, starting the encoder at
@@ -528,7 +528,7 @@ func (m *Manager) start(st Stream, n int) (*encoder, error) {
 
 // pace pauses the encoder once it leads the player and resumes it when the
 // player catches up. Paused for Idle, it stops.
-func (m *Manager) pace(sessionID int64, e *encoder) {
+func (m *Manager) pace(sessionID uid.ID, e *encoder) {
 	tick := time.NewTicker(100 * time.Millisecond)
 	defer tick.Stop()
 	for {
@@ -579,7 +579,7 @@ func (e *encoder) freshLocked() bool {
 // shortcut: an encoder started for a seek or rung switch paces from its
 // newest request until the next report, up to ten seconds; carry the
 // playhead over in start if that burst of read-ahead shows on disk.
-func (m *Manager) Playhead(sessionID, positionMs int64) {
+func (m *Manager) Playhead(sessionID uid.ID, positionMs int64) {
 	m.mu.Lock()
 	e := m.encoders[sessionID]
 	m.mu.Unlock()
@@ -598,7 +598,7 @@ func (e *encoder) idleLocked(after time.Duration) bool {
 // sleep stops a session's idle encoder, keeping its segments and its place
 // among the encoders so the session's next request starts one, and frees
 // its slot: a paused ffmpeg still holds its hardware encoder session.
-func (m *Manager) sleep(sessionID int64, e *encoder) {
+func (m *Manager) sleep(sessionID uid.ID, e *encoder) {
 	defer m.lock(sessionID)()
 	m.mu.Lock()
 	current := m.encoders[sessionID] == e
@@ -819,7 +819,7 @@ func (m *Manager) kill(e *encoder) {
 
 // Stop kills the session's encoder and deletes its segments; the slot stays
 // with the session until Release.
-func (m *Manager) Stop(sessionID int64) {
+func (m *Manager) Stop(sessionID uid.ID) {
 	defer m.lock(sessionID)()
 	m.mu.Lock()
 	e := m.encoders[sessionID]
@@ -834,7 +834,7 @@ func (m *Manager) Stop(sessionID int64) {
 // Close stops every encoder.
 func (m *Manager) Close() {
 	m.mu.Lock()
-	ids := make([]int64, 0, len(m.encoders))
+	ids := make([]uid.ID, 0, len(m.encoders))
 	for id := range m.encoders {
 		ids = append(ids, id)
 	}
@@ -889,14 +889,14 @@ var sidecarTimeout = 30 * time.Minute
 // file once; a track that read fails on is read alone, so a track ffmpeg
 // cannot convert fails only itself. Writing sidecars removes the file's
 // from before its modification time.
-func (m *Manager) Sidecar(ctx context.Context, fileID int64, input string, streamIndex int, tracks []*mediafile.Track) (string, error) {
+func (m *Manager) Sidecar(ctx context.Context, fileID uid.ID, input string, streamIndex int, tracks []*mediafile.Track) (string, error) {
 	info, err := os.Stat(input)
 	if err != nil {
 		return "", err
 	}
 	dir, stamp := filepath.Join(m.root(), "sidecars"), info.ModTime().UnixNano()
 	name := func(i int) string {
-		return filepath.Join(dir, fmt.Sprintf("%d-%d-%d.vtt", fileID, i, stamp))
+		return filepath.Join(dir, fmt.Sprintf("%s-%d-%d.vtt", fileID, i, stamp))
 	}
 	out := name(streamIndex)
 	if exists(out) {
@@ -918,7 +918,7 @@ func (m *Manager) Sidecar(ctx context.Context, fileID int64, input string, strea
 			return read, r.Err
 		}
 	}
-	read, err := extract(fmt.Sprintf("sidecars %d %d", fileID, stamp), func() []int {
+	read, err := extract(fmt.Sprintf("sidecars %s %d", fileID, stamp), func() []int {
 		ids := []int{streamIndex}
 		for _, t := range tracks {
 			if t.StreamIndex != streamIndex && t.Kind == mediafile.Subtitle && t.SubtitleIsText != nil && *t.SubtitleIsText && !exists(name(t.StreamIndex)) {
@@ -936,7 +936,7 @@ func (m *Manager) Sidecar(ctx context.Context, fileID int64, input string, strea
 		return "", err
 	}
 	// The shared read failed on some track or did not take this one.
-	if _, err := extract(fmt.Sprintf("sidecar %d %d %d", fileID, streamIndex, stamp), func() []int { return []int{streamIndex} }); err != nil {
+	if _, err := extract(fmt.Sprintf("sidecar %s %d %d", fileID, streamIndex, stamp), func() []int { return []int{streamIndex} }); err != nil {
 		return "", err
 	}
 	return out, nil
@@ -946,7 +946,7 @@ func (m *Manager) Sidecar(ctx context.Context, fileID int64, input string, strea
 // its name, in one read of input, all or none. Each read writes in a
 // directory of its own, so reads of one track that overlap never write one
 // file.
-func extractSidecars(ctx context.Context, input, dir string, ids []int, name func(int) string, fileID, stamp int64) error {
+func extractSidecars(ctx context.Context, input, dir string, ids []int, name func(int) string, fileID uid.ID, stamp int64) error {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return err
 	}
@@ -972,7 +972,7 @@ func extractSidecars(ctx context.Context, input, dir string, ids []int, name fun
 	}
 	// The file's sidecars named with another modification time, or with
 	// none, are stale.
-	old, _ := filepath.Glob(filepath.Join(dir, fmt.Sprintf("%d-*.vtt", fileID)))
+	old, _ := filepath.Glob(filepath.Join(dir, fmt.Sprintf("%s-*.vtt", fileID)))
 	for _, p := range old {
 		if !strings.HasSuffix(p, fmt.Sprintf("-%d.vtt", stamp)) {
 			_ = os.Remove(p)

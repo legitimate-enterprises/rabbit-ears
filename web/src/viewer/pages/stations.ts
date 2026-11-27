@@ -42,7 +42,7 @@ const DAYS: [Weekday, string][] = [
   ["sunday", "Sun"],
 ];
 const stationsHref = (k: Kind) => `#/${k}?view=stations`;
-const path = (stationId: number) => ({ params: { path: { stationId } } });
+const path = (stationId: string) => ({ params: { path: { stationId } } });
 
 /**
  * The station's own image, else the art of what is on, else of what is next, else its own tile
@@ -135,7 +135,7 @@ export const onNowTiles = (ctx: Ctx) =>
   );
 
 export async function stationPage(ctx: Ctx, [id]: string[]) {
-  const stationId = Number(id);
+  const stationId = id;
   const s = await ok(ctx.api.GET("/stations/{stationId}", path(stationId)));
   // shortcut: a music station's day is hundreds of songs and the schedule has no "from now"
   // filter, so its page shows only what is on and next; list it once the server can page from now.
@@ -257,7 +257,7 @@ const offAir = (s: Station, onAir: OnAir) =>
  * screen and asks again when the next program starts. A music station plays in the music engine.
  */
 export async function tune(ctx: Ctx, [id]: string[]): Promise<HTMLElement[]> {
-  const stationId = Number(id);
+  const stationId = id;
   let left = false;
   window.addEventListener("hashchange", () => (left = true), { once: true });
   const s = await ok(ctx.api.GET("/stations/{stationId}", path(stationId)));
@@ -279,7 +279,7 @@ export async function tune(ctx: Ctx, [id]: string[]): Promise<HTMLElement[]> {
     if (t.state === "on_air") void t.pb.end().catch(() => {});
     return [];
   }
-  if (t.state === "on_air") return player(ctx, 0, new URLSearchParams(), { station: s, pb: t.pb });
+  if (t.state === "on_air") return player(ctx, "", new URLSearchParams(), { station: s, pb: t.pb });
   const wait = untilMs(t.resumesAt);
   if (wait !== undefined) {
     const timer = setTimeout(refresh, wait);
@@ -301,7 +301,7 @@ export const newStation = async (ctx: Ctx, _a: string[], q: URLSearchParams) =>
   editor(ctx, undefined, (q.get("kind") ?? "movies") as Kind);
 
 export async function editStation(ctx: Ctx, [id]: string[]) {
-  const s = await ok(ctx.api.GET("/stations/{stationId}", path(Number(id))));
+  const s = await ok(ctx.api.GET("/stations/{stationId}", path(id)));
   return editor(ctx, s, s.kind);
 }
 

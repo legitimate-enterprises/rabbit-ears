@@ -6,6 +6,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/adultlink"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/offer"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // AdultLinkService manages the links between adults of different
@@ -22,7 +23,7 @@ func NewAdultLinkService(d *sql.DB) *AdultLinkService { return &AdultLinkService
 func (s *AdultLinkService) Repo() *adultlink.Repo { return s.repo }
 
 // Delete unlinks two adults and deletes the offers between them.
-func (s *AdultLinkService) Delete(a, b int64) error {
+func (s *AdultLinkService) Delete(a, b uid.ID) error {
 	return db.InTx(s.d, func(d db.DBTX) error {
 		if err := adultlink.New(d).Delete(a, b); err != nil {
 			return err

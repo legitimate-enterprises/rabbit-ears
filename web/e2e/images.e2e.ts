@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { quiet, seed, signIn } from "./support";
+import { api, quiet, seed, signIn } from "./support";
 
 test.beforeEach(({ page }) => page.addInitScript(quiet));
 
@@ -11,8 +11,8 @@ const png = Buffer.from(
 
 test("a playlist's owner uploads its image, sees it, and removes it", async ({ page, request }) => {
   const headers = await seed(request);
-  const me = await (await request.get("/api/v1/me", { headers })).json();
-  const made = await request.post(`/api/v1/profiles/${me.account.id}/playlists`, {
+  const me = await (await request.get(`${api}/me`, { headers })).json();
+  const made = await request.post(`${api}/profiles/${me.account.id}/playlists`, {
     headers,
     data: { name: "Covers", kind: "movies" },
   });
@@ -28,7 +28,8 @@ test("a playlist's owner uploads its image, sees it, and removes it", async ({ p
   const dlg = page.getByRole("dialog", { name: "Set image" });
   await expect(dlg.getByText("Nothing in it has artwork to pick.")).toBeVisible();
   const shown = page.waitForResponse(
-    (r) => /\/playlists\/\d+\/image\?v=\d+$/.test(r.url()) && r.status() === 200,
+    (r) =>
+      /\/playlists\/[0-9a-f-]{36}\/image\?v=[0-9a-f-]{36}$/.test(r.url()) && r.status() === 200,
   );
   await dlg.getByLabel("Upload a file").setInputFiles({
     name: "red.png",
@@ -41,7 +42,7 @@ test("a playlist's owner uploads its image, sees it, and removes it", async ({ p
   await page.getByRole("button", { name: "Remove image" }).click();
   await expect(page.getByRole("button", { name: "Remove image" })).toBeHidden();
   const after = await (
-    await request.get(`/api/v1/profiles/${me.account.id}/playlists/${list.id}`, { headers })
+    await request.get(`${api}/profiles/${me.account.id}/playlists/${list.id}`, { headers })
   ).json();
   expect(after.imageUrl).toBeUndefined();
 });

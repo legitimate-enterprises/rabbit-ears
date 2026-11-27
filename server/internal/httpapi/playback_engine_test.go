@@ -14,10 +14,12 @@ import (
 	"time"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/api"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/httpapi"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/library"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/mediafile"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/probe"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/transcode"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 func fixturePath(t *testing.T, name string) string {
@@ -35,20 +37,20 @@ func fixturePath(t *testing.T, name string) string {
 // probed adds a G-rated movie whose file is a probed fixture, the way a scan
 // stores it, in the first movie library. path overrides where the file is
 // said to live.
-func (e *env) probed(name, path string) int64 {
+func (e *env) probed(name, path string) uid.ID {
 	e.t.Helper()
 	src := fixturePath(e.t, name)
 	r, err := probe.Run(context.Background(), src)
 	must(e.t, err)
 	libs, err := e.svc.Libraries.Repo().List()
 	must(e.t, err)
-	lib := int64(0)
+	var lib uid.ID
 	for _, l := range libs {
-		if l.Kind == library.Movies && lib == 0 {
+		if l.Kind == library.Movies && lib.IsZero() {
 			lib = l.ID
 		}
 	}
-	if lib == 0 {
+	if lib.IsZero() {
 		lib = e.library("movies")
 	}
 	m := e.movie(lib, name)
@@ -57,7 +59,7 @@ func (e *env) probed(name, path string) int64 {
 		path = src
 	}
 	now := time.Now().UTC()
-	f := &mediafile.File{ItemID: m, Path: path, SizeBytes: 1, ModifiedAt: now, Container: r.Container, DurationMs: r.DurationMs, Bitrate: r.Bitrate, ProbedAt: &now}
+	f := &mediafile.File{ItemID: &m, Path: path, SizeBytes: 1, FileModifiedAt: now, Container: r.Container, DurationMs: r.DurationMs, Bitrate: r.Bitrate, ProbedAt: &now}
 	must(e.t, e.svc.MediaFiles.Repo().CreateFile(f))
 	must(e.t, e.svc.MediaFiles.Repo().ReplaceTracks(f.ID, r.Tracks))
 	return m
@@ -79,7 +81,7 @@ func sdrWeb() map[string]any {
 	return s
 }
 
-func (e *env) trackID(item int64, codec string) int64 {
+func (e *env) trackID(item uid.ID, codec string) uid.ID {
 	e.t.Helper()
 	files, err := e.svc.MediaFiles.Repo().FilesForItem(item)
 	must(e.t, err)
@@ -91,19 +93,19 @@ func (e *env) trackID(item int64, codec string) int64 {
 		}
 	}
 	e.t.Fatalf("no %s track", codec)
-	return 0
+	return uid.ID{}
 }
 
 func (e *env) get(path string) (*http.Response, []byte) {
 	e.t.Helper()
-	res, err := http.Get(strings.TrimSuffix(e.url, "/api/v1") + path)
+	res, err := http.Get(strings.TrimSuffix(e.url, httpapi.BasePath) + path)
 	must(e.t, err)
 	defer func() { _ = res.Body.Close() }()
 	b, _ := io.ReadAll(res.Body)
 	return res, b
 }
 
-func (e *env) start(item int64, snap map[string]any) api.PlaybackStream {
+func (e *env) start(item uid.ID, snap map[string]any) api.PlaybackStream {
 	e.t.Helper()
 	var st api.PlaybackStream
 	e.expect(201, "POST", "/playback/sessions", e.plain.token, map[string]any{"profileId": e.plain.account.ID, "itemId": item, "snapshot": snap}, &st)
@@ -117,7 +119,7 @@ func TestDirectPlayServesRanges(t *testing.T) {
 	if st.Entry.Verdict != api.DirectPlay || st.StreamKind != api.PlaybackStreamStreamKindFile || st.Negotiated.Width != 640 || st.Rungs[0].Verdict != api.DirectPlay {
 		t.Fatalf("%+v", st)
 	}
-	req, _ := http.NewRequest("GET", strings.TrimSuffix(e.url, "/api/v1")+st.StreamUrl, nil)
+	req, _ := http.NewRequest("GET", strings.TrimSuffix(e.url, httpapi.BasePath)+st.StreamUrl, nil)
 	req.Header.Set("Range", "bytes=0-99")
 	res, err := http.DefaultClient.Do(req)
 	must(t, err)
@@ -302,7 +304,7 @@ func TestRouteChangeResumesAtSamePosition(t *testing.T) {
 
 // hdrCopy starts the HDR10 fixture's item m on an HDR display, which takes
 // its HEVC as is.
-func (e *env) hdrCopy(m int64) api.PlaybackStream {
+func (e *env) hdrCopy(m uid.ID) api.PlaybackStream {
 	e.t.Helper()
 	hdr := sdrWeb()
 	hdr["display"] = map[string]any{"width": 3840, "height": 2160, "refreshRate": 60, "hdrFormats": []string{"hdr10"}}
@@ -591,7 +593,7 @@ func TestAbandonedRequestFailsNoEntry(t *testing.T) {
 	if st.Entry.Verdict != api.Remux {
 		t.Fatalf("%+v", st.Entry)
 	}
-	index := strings.TrimSuffix(e.url, "/api/v1") + st.StreamUrl[:strings.LastIndex(st.StreamUrl, "/")+1] + "0/index.m3u8"
+	index := strings.TrimSuffix(e.url, httpapi.BasePath) + st.StreamUrl[:strings.LastIndex(st.StreamUrl, "/")+1] + "0/index.m3u8"
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, "GET", index, nil)
@@ -605,7 +607,7 @@ func TestAbandonedRequestFailsNoEntry(t *testing.T) {
 	if sess.Plan[0].Bad || sess.CurrentEntry != 0 {
 		t.Fatalf("%+v", sess.Plan[0])
 	}
-	if res, b := e.get(strings.TrimPrefix(index, strings.TrimSuffix(e.url, "/api/v1"))); res.StatusCode != 200 {
+	if res, b := e.get(strings.TrimPrefix(index, strings.TrimSuffix(e.url, httpapi.BasePath))); res.StatusCode != 200 {
 		t.Fatalf("%d %s", res.StatusCode, b)
 	}
 }
@@ -672,16 +674,17 @@ func (e *env) firstSegment(st api.PlaybackStream) []byte {
 	return seg
 }
 
-// A session removed with its device leaves an id SQLite gives the next
-// session; that session plays its own file, not the removed one's segments.
+// A session removed with its device leaves no id for the next session to
+// take; that session plays its own file, not the removed one's segments.
 func TestReusedSessionIDServesItsOwnFile(t *testing.T) {
 	e := newEnv(t)
-	gone := e.firstSegment(e.start(e.probed("hdr10-main10.mkv", ""), sdrWeb()))
+	first := e.start(e.probed("hdr10-main10.mkv", ""), sdrWeb())
+	gone := e.firstSegment(first)
 	must(t, e.svc.Devices.Repo().Delete(e.plain.deviceID))
 	var st api.PlaybackStream
 	e.expect(201, "POST", "/playback/sessions", e.admin.token, map[string]any{"profileId": e.admin.account.ID, "itemId": e.probed("chapters.mkv", ""), "snapshot": sdrWeb()}, &st)
-	if st.SessionId != 1 {
-		t.Fatalf("the id is not reused: %d", st.SessionId)
+	if st.SessionId == first.SessionId {
+		t.Fatalf("the id is reused: %s", st.SessionId)
 	}
 	if bytes.Equal(e.firstSegment(st), gone) {
 		t.Fatal("the new session is served the removed session's segment")
@@ -710,7 +713,7 @@ func TestConvertedStreamListsOnlyWhatItsEncoderWrites(t *testing.T) {
 	m := e.movie(e.library("movies"), "Sliver")
 	e.rate(m, "G")
 	now := time.Now().UTC()
-	f := &mediafile.File{ItemID: m, Path: src, SizeBytes: 1, ModifiedAt: now, Container: r.Container, DurationMs: r.DurationMs, Bitrate: r.Bitrate, ProbedAt: &now}
+	f := &mediafile.File{ItemID: &m, Path: src, SizeBytes: 1, FileModifiedAt: now, Container: r.Container, DurationMs: r.DurationMs, Bitrate: r.Bitrate, ProbedAt: &now}
 	must(t, e.svc.MediaFiles.Repo().CreateFile(f))
 	must(t, e.svc.MediaFiles.Repo().ReplaceTracks(f.ID, r.Tracks))
 	st := e.start(m, sdrWeb())

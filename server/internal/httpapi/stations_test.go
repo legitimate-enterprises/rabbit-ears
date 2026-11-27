@@ -3,11 +3,13 @@ package httpapi_test
 import (
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/api"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/account"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // stationClock fixes the stations' clock in the server's local time and
@@ -25,7 +27,7 @@ func (e *env) stationClock() func(h, m int) time.Time {
 func (e *env) neighbor(u user) string {
 	e.t.Helper()
 	a := &account.Account{Kind: account.Adult, Email: "neighbor@example.test", Name: "Neighbor", PasswordHash: "x", HouseholdID: &u.household.ID}
-	must(e.t, e.svc.Accounts.Repo().Create(a))
+	must(e.t, e.svc.Accounts.Repo().Create(a, nil))
 	token, _, err := e.svc.Devices.Register(a.ID, u.household.ID, "Phone", "ios")
 	must(e.t, err)
 	return token
@@ -33,7 +35,7 @@ func (e *env) neighbor(u user) string {
 
 // nightsPlaylist is a movies playlist of plain's holding films, each with
 // a file of minutes.
-func (e *env) nightsPlaylist(films map[int64]int64) int64 {
+func (e *env) nightsPlaylist(films map[uid.ID]int64) uid.ID {
 	e.t.Helper()
 	var pl api.Playlist
 	e.expect(201, "POST", "/profiles/"+itoa(e.plain.account.ID)+"/playlists", e.plain.token, map[string]any{"name": "Nights", "kind": "movies"}, &pl)
@@ -44,7 +46,7 @@ func (e *env) nightsPlaylist(films map[int64]int64) int64 {
 	return pl.Id
 }
 
-func stationIDs(page api.StationPage) (out []int64) {
+func stationIDs(page api.StationPage) (out []uid.ID) {
 	for _, s := range page.Items {
 		out = append(out, s.Id)
 	}
@@ -56,7 +58,7 @@ func TestStationLifecycle(t *testing.T) {
 	at := e.stationClock()
 	films := e.library("movies")
 	lantern := e.film(films, "Lantern", "2001-01-01", "PG")
-	pl := e.nightsPlaylist(map[int64]int64{lantern: 90})
+	pl := e.nightsPlaylist(map[uid.ID]int64{lantern: 90})
 	neighbor := e.neighbor(e.plain)
 
 	var st api.Station
@@ -139,7 +141,7 @@ func TestStationLifecycle(t *testing.T) {
 
 	var day api.StationProgramPage
 	e.expect(200, "GET", one+"/schedule", e.plain.token, nil, &day)
-	if len(day.Items) < 2 || !day.Items[0].StartsAt.Equal(at(16, 0)) || day.Items[0].EditionId == 0 || day.Items[0].Kind != api.PlaylistEntryKindMovie {
+	if len(day.Items) < 2 || !day.Items[0].StartsAt.Equal(at(16, 0)) || day.Items[0].EditionId.IsZero() || day.Items[0].Kind != api.PlaylistEntryKindMovie {
 		t.Fatalf("%+v", day)
 	}
 	e.expect(200, "GET", one+"/schedule?date=2026-11-20", e.plain.token, nil, &day)
@@ -170,7 +172,7 @@ func TestStationLifecycle(t *testing.T) {
 func TestServerWideStations(t *testing.T) {
 	e := newEnv(t)
 	e.stationClock()
-	pl := e.nightsPlaylist(map[int64]int64{e.film(e.library("movies"), "Lantern", "2001-01-01", "PG"): 90})
+	pl := e.nightsPlaylist(map[uid.ID]int64{e.film(e.library("movies"), "Lantern", "2001-01-01", "PG"): 90})
 	var st api.Station
 	e.expect(201, "POST", "/stations", e.plain.token, map[string]any{"name": "Nights", "playlistId": pl}, &st)
 	if st.Visibility != api.StationVisibilityPrivate {
@@ -185,7 +187,7 @@ func TestServerWideStations(t *testing.T) {
 	if len(page.Items) != 1 || page.Items[0].Id != st.Id {
 		t.Fatalf("every station, private ones included: %+v", page)
 	}
-	e.expect(404, "PUT", "/admin/stations/999/server-wide", e.admin.token, map[string]any{"serverWide": true}, nil)
+	e.expect(404, "PUT", "/admin/stations/"+itoa(uid.N(999))+"/server-wide", e.admin.token, map[string]any{"serverWide": true}, nil)
 	e.expect(200, "PUT", path, e.admin.token, map[string]any{"serverWide": true}, &st)
 	if st.Visibility != api.StationVisibilityServer {
 		t.Fatalf("%+v", st)
@@ -216,9 +218,9 @@ func TestStationsForKids(t *testing.T) {
 	films := e.library("movies")
 	meadow := e.film(films, "Meadow", "2001-01-01", "G")
 	undertow := e.film(films, "Undertow", "2001-01-01", "R")
-	gentle := e.nightsPlaylist(map[int64]int64{meadow: 90})
-	strong := e.nightsPlaylist(map[int64]int64{undertow: 90})
-	mixed := e.nightsPlaylist(map[int64]int64{e.film(films, "Pasture", "2001-01-01", "G"): 90, e.film(films, "Unrated", "2001-01-01", ""): 90})
+	gentle := e.nightsPlaylist(map[uid.ID]int64{meadow: 90})
+	strong := e.nightsPlaylist(map[uid.ID]int64{undertow: 90})
+	mixed := e.nightsPlaylist(map[uid.ID]int64{e.film(films, "Pasture", "2001-01-01", "G"): 90, e.film(films, "Unrated", "2001-01-01", ""): 90})
 	music := e.library("music")
 	var songs api.Playlist
 	e.expect(201, "POST", "/profiles/"+itoa(e.plain.account.ID)+"/playlists", e.plain.token, map[string]any{"name": "Songs", "kind": "music"}, &songs)
@@ -297,7 +299,7 @@ func TestTuneIn(t *testing.T) {
 	e := newEnv(t)
 	at := e.stationClock()
 	lantern := e.film(e.library("movies"), "Lantern", "2001-01-01", "PG")
-	pl := e.nightsPlaylist(map[int64]int64{lantern: 90})
+	pl := e.nightsPlaylist(map[uid.ID]int64{lantern: 90})
 	var st api.Station
 	e.expect(201, "POST", "/stations", e.plain.token, map[string]any{"name": "Nights", "playlistId": pl}, &st)
 	tune := "/stations/" + itoa(st.Id) + "/playback"
@@ -364,7 +366,7 @@ func TestPlayOrderAndProgramsShowPathsAsTheCallerMay(t *testing.T) {
 	var it api.Item
 	e.expect(201, "POST", "/items", e.admin.token, map[string]any{"libraryId": e.library("movies"), "kind": "movie", "parsedTitle": "Lantern", "path": "/films/Lantern"}, &it)
 	e.rate(it.Id, "PG")
-	pl := e.nightsPlaylist(map[int64]int64{it.Id: 90})
+	pl := e.nightsPlaylist(map[uid.ID]int64{it.Id: 90})
 	var mine api.Playlist
 	e.expect(201, "POST", "/profiles/"+itoa(e.admin.account.ID)+"/playlists", e.admin.token, map[string]any{"name": "Mine", "kind": "movies"}, &mine)
 	e.expect(201, "POST", "/profiles/"+itoa(e.admin.account.ID)+"/playlists/"+itoa(mine.Id)+"/entries", e.admin.token, map[string]any{"itemId": it.Id}, nil)
@@ -487,4 +489,75 @@ func TestStationProgramsCarryTheirShow(t *testing.T) {
 	for _, p := range day.Items {
 		check(&p)
 	}
+}
+
+// A new station takes the ids its creator gives, for itself, its own
+// playlist and its time ranges, else minted ones; a malformed id is refused
+// and one in use conflicts. A replace keeps the station's id and may keep a
+// range's. The acting profile is recorded as author and last editor.
+func TestStationsTakeClientIDs(t *testing.T) {
+	e := newEnv(t)
+	e.stationClock()
+	tok, me := e.plain.token, e.plain.account.ID
+	pl := e.nightsPlaylist(map[uid.ID]int64{e.film(e.library("movies"), "Lantern", "2001-01-01", "PG"): 90})
+
+	var minted api.Station
+	e.expect(201, "POST", "/stations", tok, map[string]any{"name": "Minted", "playlistId": pl, "times": []map[string]any{{"from": "16:00", "to": "02:00"}}}, &minted)
+	if _, err := uid.Parse(minted.Id.String()); err != nil || minted.Times[0].Id == nil || minted.CreatedBy == nil || *minted.CreatedBy != me ||
+		minted.ModifiedBy == nil || *minted.ModifiedBy != me {
+		t.Fatalf("minted ids, authored by the acting profile: %+v", minted)
+	}
+
+	id, own, slot := uid.New(), uid.New(), uid.New()
+	in := map[string]any{"id": id, "ownPlaylistId": own, "name": "Films", "kind": "movies", "times": []map[string]any{{"id": slot, "from": "16:00", "to": "02:00"}}}
+	var st api.Station
+	e.expect(201, "POST", "/stations", tok, in, &st)
+	if st.Id != id || st.PlaylistId != own || len(st.Times) != 1 || st.Times[0].Id == nil || *st.Times[0].Id != slot {
+		t.Fatalf("the client's ids: %+v", st)
+	}
+	one := "/stations/" + itoa(id)
+	e.expect(200, "GET", one, tok, nil, nil)
+	e.expect(200, "GET", "/profiles/"+itoa(me)+"/playlists/"+itoa(own), tok, nil, nil)
+	for _, bad := range []any{"12", 12, strings.ToUpper(uid.New().String()), "6ba7b810-9dad-41d1-80b4-00c04fd430c8"} {
+		e.expect(400, "POST", "/stations", tok, map[string]any{"id": bad, "name": "Bad", "kind": "movies"}, nil)
+		e.expect(400, "POST", "/stations", tok, map[string]any{"ownPlaylistId": bad, "name": "Bad", "kind": "movies"}, nil)
+	}
+	e.expect(400, "POST", "/stations", tok, map[string]any{"name": "Both", "playlistId": pl, "ownPlaylistId": uid.New()}, nil)
+	e.expect(409, "POST", "/stations", tok, map[string]any{"id": id, "name": "Again", "kind": "movies"}, nil)
+	e.expect(409, "POST", "/stations", tok, map[string]any{"ownPlaylistId": own, "name": "Again", "kind": "movies"}, nil)
+	e.expect(409, "POST", "/stations", tok, map[string]any{"name": "Again", "kind": "movies", "times": []map[string]any{{"id": slot, "from": "16:00", "to": "02:00"}}}, nil)
+
+	e.expect(400, "PUT", one, tok, map[string]any{"id": minted.Id, "name": "Films"}, nil)
+	e.expect(400, "PUT", one, tok, map[string]any{"name": "Films", "ownPlaylistId": uid.New()}, nil)
+	time.Sleep(2 * time.Millisecond) // modifiedAt is kept to the millisecond
+	var renamed api.Station
+	e.expect(200, "PUT", one, tok, map[string]any{"id": id, "name": "Late films", "times": []map[string]any{{"id": slot, "from": "17:00", "to": "02:00"}}}, &renamed)
+	if renamed.Id != id || len(renamed.Times) != 1 || renamed.Times[0].Id == nil || *renamed.Times[0].Id != slot || renamed.Times[0].From != "17:00" ||
+		!renamed.ModifiedAt.After(st.ModifiedAt) || !renamed.CreatedAt.Equal(st.CreatedAt) {
+		t.Fatalf("a replace keeps the ids given and moves modifiedAt only: %+v then %+v", st, renamed)
+	}
+}
+
+// A station write refused for a taken time-range id, or for a range that
+// airs nothing, leaves nothing changed: no own playlist of another kind, no
+// own playlist made.
+func TestARefusedStationWriteChangesNothing(t *testing.T) {
+	e := newEnv(t)
+	e.stationClock()
+	tok, me := e.plain.token, e.plain.account.ID
+	slot := uid.New()
+	e.expect(201, "POST", "/stations", tok, map[string]any{"name": "A", "kind": "movies", "times": []map[string]any{{"id": slot, "from": "16:00", "to": "02:00"}}}, nil)
+	var b api.Station
+	e.expect(201, "POST", "/stations", tok, map[string]any{"name": "B", "kind": "movies"}, &b)
+	one := "/stations/" + itoa(b.Id)
+	e.expect(409, "PUT", one, tok, map[string]any{"name": "B", "kind": "tv", "times": []map[string]any{{"id": slot, "from": "16:00", "to": "02:00"}}}, nil)
+	e.expect(400, "PUT", one, tok, map[string]any{"name": "B", "kind": "tv", "times": []map[string]any{{"from": "16:10", "to": "16:20"}}}, nil)
+	var got api.Station
+	if e.expect(200, "GET", one, tok, nil, &got); got.Kind != b.Kind {
+		t.Fatalf("a refused replace changed the kind from %s to %s", b.Kind, got.Kind)
+	}
+	own := uid.New()
+	e.expect(409, "POST", "/stations", tok, map[string]any{"ownPlaylistId": own, "name": "C", "kind": "movies",
+		"times": []map[string]any{{"id": slot, "from": "16:00", "to": "02:00"}}}, nil)
+	e.expect(404, "GET", "/profiles/"+itoa(me)+"/playlists/"+itoa(own), tok, nil, nil)
 }

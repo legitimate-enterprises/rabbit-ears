@@ -3,6 +3,7 @@ package service
 import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/collection"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // RelatedService answers what relates to a title: a movie's collections,
@@ -41,9 +42,9 @@ type RelatedCollection struct {
 
 // Related answers for household and audience what relates to it; a kind
 // other than movie or episode has nothing.
-func (s *RelatedService) Related(householdID int64, it *item.Item, a item.Audience) (*Related, error) {
+func (s *RelatedService) Related(householdID uid.ID, it *item.Item, a item.Audience) (*Related, error) {
 	out := &Related{}
-	var prev, next int64
+	var prev, next *uid.ID
 	var err error
 	switch it.Kind {
 	case item.Movie:
@@ -63,7 +64,7 @@ func (s *RelatedService) Related(householdID int64, it *item.Item, a item.Audien
 }
 
 // movies fills out's Collections for movie id.
-func (s *RelatedService) movies(out *Related, householdID, id int64, a item.Audience) error {
+func (s *RelatedService) movies(out *Related, householdID, id uid.ID, a item.Audience) error {
 	vs, err := s.collections.ForMovie(householdID, id, a)
 	if err != nil {
 		return err
@@ -93,10 +94,10 @@ func (s *RelatedService) movies(out *Related, householdID, id int64, a item.Audi
 	return nil
 }
 
-// get is item id, nil for 0.
-func (s *RelatedService) get(id int64) (*item.Item, error) {
-	if id == 0 {
+// get is item id, nil for none.
+func (s *RelatedService) get(id *uid.ID) (*item.Item, error) {
+	if id == nil {
 		return nil, nil
 	}
-	return s.items.Get(id)
+	return s.items.Get(*id)
 }

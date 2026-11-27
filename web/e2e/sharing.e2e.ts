@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { quiet, seed, signIn } from "./support";
+import { api, quiet, seed, signIn } from "./support";
 
 test.beforeEach(({ page }) => page.addInitScript(quiet));
 
@@ -8,8 +8,8 @@ test("a playlist's owner shares it with their household and it shows as Shared",
   request,
 }) => {
   const headers = await seed(request);
-  const me = await (await request.get("/api/v1/me", { headers })).json();
-  const base = `/api/v1/profiles/${me.account.id}`;
+  const me = await (await request.get(`${api}/me`, { headers })).json();
+  const base = `${api}/profiles/${me.account.id}`;
   const made = await request.post(`${base}/playlists`, {
     headers,
     data: { name: "Family night", kind: "movies" },

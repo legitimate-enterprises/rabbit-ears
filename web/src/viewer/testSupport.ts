@@ -1,6 +1,7 @@
 // Shared by the viewer's component tests: the real pages and generated client
 // against a mocked API. Each test file gets its own copy of this module's state.
 import { expect, vi } from "vitest";
+import { API_BASE } from "../api/client";
 
 export type Handler = (body: unknown, url: URL) => unknown;
 
@@ -14,7 +15,7 @@ export const calls: { key: string; body: unknown; keepalive: boolean; query: str
 export function mockFetch(routes: Record<string, Handler | unknown>) {
   return async (req: Request) => {
     const url = new URL(req.url, "http://x");
-    const key = `${req.method} ${url.pathname.replace("/api/v1", "")}`;
+    const key = `${req.method} ${url.pathname.replace(API_BASE, "")}`;
     const body =
       req.method === "GET" || req.method === "DELETE"
         ? undefined

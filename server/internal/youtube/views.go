@@ -7,6 +7,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/mediafile"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // Provider names the metadata rows of channels and videos. Their
@@ -15,13 +16,13 @@ const Provider = "youtube"
 
 // ChannelFilter narrows Channels. Zero values mean no constraint.
 type ChannelFilter struct {
-	LibraryID int64
+	LibraryID *uid.ID
 	// ID finds one channel, with or without videos; otherwise only
 	// channels with videos are listed.
-	ID        int64
+	ID        *uid.ID
 	Q         string
-	Sort      string // title (default), latest, or best: a title starting with Q first
-	AccountID int64  // whose watch state counts as unwatched
+	Sort      string  // title (default), latest, or best: a title starting with Q first
+	AccountID *uid.ID // whose watch state counts as unwatched
 	Audience  item.Audience
 	Limit     int // 0 means 100, negative means all
 	Offset    int
@@ -29,8 +30,8 @@ type ChannelFilter struct {
 
 // ChannelView is a channel with its counts.
 type ChannelView struct {
-	ID             int64
-	LibraryID      int64
+	ID             uid.ID
+	LibraryID      uid.ID
 	Title          string
 	Overview       string
 	ExternalID     string
@@ -66,8 +67,8 @@ func (r *Repo) Channels(f ChannelFilter) ([]*ChannelView, error) {
 				AND NOT EXISTS (SELECT 1 FROM watch_state w WHERE w.item_id = v.id AND w.account_id = ?4 AND w.watched = 1)),
 			(SELECT MAX(vm.published_at) FROM item v JOIN item_metadata vm ON vm.item_id = v.id AND vm.source = 'local' WHERE v.parent_id = c.id) AS last
 		FROM item c
-		WHERE c.kind = 'channel' AND (?1 = 0 OR c.library_id = ?1) AND (?3 = '' OR instr(lower(c.parsed_title), lower(?3)) > 0)
-			AND (?2 = 0 AND EXISTS (SELECT 1 FROM item v WHERE v.parent_id = c.id) OR c.id = ?2) AND `+item.VisibleOf("c")+`
+		WHERE c.kind = 'channel' AND (?1 IS NULL OR c.library_id = ?1) AND (?3 = '' OR instr(lower(c.parsed_title), lower(?3)) > 0)
+			AND (?2 IS NULL AND EXISTS (SELECT 1 FROM item v WHERE v.parent_id = c.id) OR c.id = ?2) AND `+item.VisibleOf("c")+`
 		ORDER BY `+by+` LIMIT ?5 OFFSET ?11`, append(append([]any{f.LibraryID, f.ID, f.Q, f.AccountID, limitOf(f.Limit)}, f.Audience.Args()...), f.Offset)...)
 	return db.Collect(rows, err, func(s db.Scanner) (*ChannelView, error) {
 		var v ChannelView
@@ -84,9 +85,9 @@ func (r *Repo) Channels(f ChannelFilter) ([]*ChannelView, error) {
 
 // VideoFilter narrows Videos. Zero values mean no constraint.
 type VideoFilter struct {
-	LibraryID int64
-	ChannelID int64
-	ID        int64
+	LibraryID *uid.ID
+	ChannelID *uid.ID
+	ID        *uid.ID
 	Unwatched bool
 	// InProgress keeps videos with a resume position, watched or not.
 	InProgress bool
@@ -94,7 +95,7 @@ type VideoFilter struct {
 	// Sort is newest (default), oldest, title, channel, length, played, or
 	// best: a title starting with Q first, then by title.
 	Sort      string
-	AccountID int64 // whose watch state the views carry
+	AccountID *uid.ID // whose watch state the views carry
 	Audience  item.Audience
 	Limit     int // 0 means 100, negative means all
 	Offset    int
@@ -103,9 +104,9 @@ type VideoFilter struct {
 // VideoView is a video with its channel, file facts and one profile's
 // watch state.
 type VideoView struct {
-	ID           int64
-	LibraryID    int64
-	ChannelID    int64
+	ID           uid.ID
+	LibraryID    uid.ID
+	ChannelID    uid.ID
 	ChannelTitle string
 	Title        string
 	Overview     string
@@ -124,7 +125,7 @@ const newest = `COALESCE(m.published_at, 0) DESC, v.added_at DESC, v.id DESC`
 
 // NextVideo is, as item.Repo.Next finds it, the video after id in its
 // channel in the oldest sort's order.
-func (r *Repo) NextVideo(id int64, a item.Audience) (int64, error) {
+func (r *Repo) NextVideo(id uid.ID, a item.Audience) (*uid.ID, error) {
 	return item.New(r.d).Next(`FROM item LEFT JOIN item_metadata m ON m.item_id = item.id AND m.source = 'local'
 		WHERE +item.kind = 'video' AND item.parent_id = (SELECT pv.parent_id FROM item pv WHERE pv.id = ?1)`,
 		`m.published_at IS NULL, m.published_at, item.added_at, item.id`, id, a)
@@ -152,8 +153,8 @@ func (r *Repo) Videos(f VideoFilter) ([]*VideoView, error) {
 			COALESCE(w.watched, 0), COALESCE(w.position_ms, 0), w.last_played_at, `+mediafile.UnavailableOf("v.id")+`
 		FROM item v JOIN item c ON c.id = v.parent_id LEFT JOIN item_metadata m ON m.item_id = v.id AND m.source = 'local'
 			LEFT JOIN watch_state w ON w.item_id = v.id AND w.account_id = ?5
-		WHERE v.kind = 'video' AND (?1 = 0 OR v.library_id = ?1) AND (?2 = 0 OR v.parent_id = ?2)
-			AND (?3 = 0 OR v.id = ?3) AND (?4 = 0 OR COALESCE(w.watched, 0) = 0) AND (?11 = '' OR instr(lower(v.parsed_title), lower(?11)) > 0)
+		WHERE v.kind = 'video' AND (?1 IS NULL OR v.library_id = ?1) AND (?2 IS NULL OR v.parent_id = ?2)
+			AND (?3 IS NULL OR v.id = ?3) AND (?4 = 0 OR COALESCE(w.watched, 0) = 0) AND (?11 = '' OR instr(lower(v.parsed_title), lower(?11)) > 0)
 			AND (?14 = 0 OR COALESCE(w.position_ms, 0) > 0) AND `+item.VisibleOf("v")+`
 		ORDER BY `+by+` LIMIT ?12 OFFSET ?13`,
 		append(append([]any{f.LibraryID, f.ChannelID, f.ID, f.Unwatched, f.AccountID}, f.Audience.Args()...),

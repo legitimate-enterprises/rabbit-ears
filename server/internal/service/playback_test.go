@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"testing"
 	"time"
 
@@ -36,11 +35,11 @@ func newPlayed(t *testing.T, maxVideo int) played {
 	a, h := adultWithHousehold(t, s, "a@example.test")
 	_, dev, _ := s.Devices.Register(a.ID, h.ID, "Laptop", "web")
 	l := &library.Library{Name: "m", Kind: library.Movies}
-	_ = s.Libraries.Repo().Create(l)
+	_ = s.Libraries.Repo().Create(l, nil)
 	it := &item.Item{LibraryID: l.ID, Kind: item.Movie, ParsedTitle: "m"}
 	_ = s.Items.Repo().Create(it)
 	ms := int64(600000)
-	f := &mediafile.File{ItemID: it.ID, Path: "/m.mkv", Container: "mkv", DurationMs: &ms}
+	f := &mediafile.File{ItemID: &it.ID, Path: "/m.mkv", Container: "mkv", DurationMs: &ms}
 	_ = s.MediaFiles.Repo().CreateFile(f)
 	w, hgt := 1920, 1080
 	_ = s.MediaFiles.Repo().ReplaceTracks(f.ID, []*mediafile.Track{{Kind: mediafile.Video, Codec: "vc1", Width: &w, Height: &hgt}})
@@ -109,7 +108,7 @@ func TestReapFreesAnEncoderOfASessionFromBeforeARestart(t *testing.T) {
 	}
 	st := transcode.Stream{SessionID: sess.ID, Key: "0-0", Job: transcode.Job{Input: "/m.mkv", Entry: plan[0]}}
 	_, _ = p.s.Playback.Engine.Segment(context.Background(), st, 0)
-	dir := filepath.Join(root, strconv.FormatInt(sess.ID, 10))
+	dir := filepath.Join(root, sess.ID.String())
 	if _, err := os.Stat(dir); err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +226,7 @@ func TestBestPassesOverACopyItCouldOnlyStreamWithoutALength(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	unknown := &mediafile.File{ItemID: sess.ItemID, Path: "/a.mkv", Container: "mkv"}
+	unknown := &mediafile.File{ItemID: &sess.ItemID, Path: "/a.mkv", Container: "mkv"}
 	if err := p.s.MediaFiles.Repo().CreateFile(unknown); err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +238,7 @@ func TestBestPassesOverACopyItCouldOnlyStreamWithoutALength(t *testing.T) {
 		t.Fatalf("the known copy: %+v %v", plan, err)
 	}
 	if f, err := p.s.Playback.Best([]*mediafile.File{unknown, known}, p.snap, playback.Selection{}); err != nil || f.ID != known.ID {
-		t.Fatalf("got %+v %v, want file %d", f, err, known.ID)
+		t.Fatalf("got %+v %v, want file %s", f, err, known.ID)
 	}
 }
 

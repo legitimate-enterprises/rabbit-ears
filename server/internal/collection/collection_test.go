@@ -14,15 +14,17 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/household"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/library"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 type fixture struct {
 	d     db.DBTX
 	r     *collection.Repo
 	items *item.Repo
-	lib   int64
-	home  int64
-	away  int64
+	lib   uid.ID
+	home  uid.ID
+	away  uid.ID
+	adult uid.ID
 	kidPG item.Audience
 }
 
@@ -30,17 +32,18 @@ func setup(t *testing.T) fixture {
 	t.Helper()
 	d := dbtest.OpenPreferLocal(t)
 	f := fixture{d: d, r: collection.New(d), items: item.New(d)}
-	for i, h := range []*int64{&f.home, &f.away} {
+	for i, h := range []*uid.ID{&f.home, &f.away} {
 		a := &account.Account{Kind: account.Adult, Email: string(rune('a'+i)) + "@example.test", Name: "A"}
-		must(t, account.New(d).Create(a))
+		must(t, account.New(d).Create(a, nil))
 		hh := &household.Household{Name: "H", AdultID: a.ID}
-		must(t, household.New(d).Create(hh))
-		*h = hh.ID
+		must(t, household.New(d).Create(hh, nil))
+		*h, f.adult = hh.ID, a.ID
 	}
 	l := &library.Library{Name: "Movies", Kind: library.Movies}
-	must(t, library.New(d).Create(l))
+	must(t, library.New(d).Create(l, nil))
 	f.lib = l.ID
-	f.kidPG = item.Audience{Kid: true, AccountID: 999, Movie: []string{"G", "PG"}}
+	kid := uid.N(999)
+	f.kidPG = item.Audience{Kid: true, AccountID: &kid, Movie: []string{"G", "PG"}}
 	return f
 }
 
@@ -51,7 +54,7 @@ func must(t *testing.T, err error) {
 	}
 }
 
-func (f fixture) movie(t *testing.T, title, date, rating string) int64 {
+func (f fixture) movie(t *testing.T, title, date, rating string) uid.ID {
 	t.Helper()
 	it := &item.Item{LibraryID: f.lib, Kind: item.Movie, ParsedTitle: title}
 	must(t, f.items.Create(it))
@@ -59,7 +62,7 @@ func (f fixture) movie(t *testing.T, title, date, rating string) int64 {
 	return it.ID
 }
 
-func ids(vs []*collection.View) (out []int64) {
+func ids(vs []*collection.View) (out []uid.ID) {
 	for _, v := range vs {
 		out = append(out, v.ID)
 	}
@@ -71,16 +74,16 @@ func TestTMDBCollectionAppearsAtTwoMoviesAndGoesWithTheLast(t *testing.T) {
 	one, two := f.movie(t, "Gale Runner", "2004-06-01", "PG"), f.movie(t, "Gale Runner Returns", "2001-02-03", "R")
 	c := &collection.Collection{TMDBID: ptr(77), Name: "Gale Runner Saga", Overview: "Wind.", PosterPath: "/p.jpg"}
 	must(t, f.r.PutTMDB(c))
-	must(t, f.r.SetTMDBMovie(one, c.ID))
+	must(t, f.r.SetTMDBMovie(one, &c.ID))
 	if got, _ := f.r.List(f.home, item.Audience{}, 10, 0); len(got) != 0 {
 		t.Fatalf("one movie is not a collection yet: %v", ids(got))
 	}
-	must(t, f.r.SetTMDBMovie(two, c.ID))
+	must(t, f.r.SetTMDBMovie(two, &c.ID))
 	got, err := f.r.List(f.away, item.Audience{}, 10, 0)
-	if err != nil || !slices.Equal(ids(got), []int64{c.ID}) || got[0].MovieCount != 2 || got[0].Source != collection.TMDB {
+	if err != nil || !slices.Equal(ids(got), []uid.ID{c.ID}) || got[0].MovieCount != 2 || got[0].Source != collection.TMDB {
 		t.Fatalf("server-wide at two: %+v %v", got, err)
 	}
-	if order, _ := f.r.Movies(c.ID, item.Audience{}, 10, 0); !slices.Equal(order, []int64{two, one}) {
+	if order, _ := f.r.Movies(c.ID, item.Audience{}, 10, 0); !slices.Equal(order, []uid.ID{two, one}) {
 		t.Fatalf("by release date: %v", order)
 	}
 	if v, err := f.r.Seen(f.home, c.ID, f.kidPG); err != nil || v.MovieCount != 1 {
@@ -98,11 +101,11 @@ func TestTMDBCollectionAppearsAtTwoMoviesAndGoesWithTheLast(t *testing.T) {
 	// A movie is in one TMDB collection: moving it leaves the old one.
 	other := &collection.Collection{TMDBID: ptr(78), Name: "Other Saga"}
 	must(t, f.r.PutTMDB(other))
-	must(t, f.r.SetTMDBMovie(two, other.ID))
-	if order, _ := f.r.Movies(c.ID, item.Audience{}, 10, 0); !slices.Equal(order, []int64{one}) {
+	must(t, f.r.SetTMDBMovie(two, &other.ID))
+	if order, _ := f.r.Movies(c.ID, item.Audience{}, 10, 0); !slices.Equal(order, []uid.ID{one}) {
 		t.Fatalf("%v", order)
 	}
-	must(t, f.r.SetTMDBMovie(one, 0))
+	must(t, f.r.SetTMDBMovie(one, nil))
 	if _, err := f.r.Get(c.ID); !errors.Is(err, db.ErrNotFound) {
 		t.Fatalf("an empty TMDB collection goes: %v", err)
 	}
@@ -120,32 +123,32 @@ func TestCustomCollectionsStayInTheirHousehold(t *testing.T) {
 	empty := &collection.Collection{HouseholdID: &f.home, Name: "Afternoon"}
 	theirs := &collection.Collection{HouseholdID: &f.away, Name: "Theirs"}
 	for _, x := range []*collection.Collection{c, empty, theirs} {
-		must(t, f.r.Create(x))
+		must(t, f.r.Create(x, nil))
 	}
-	for _, m := range []int64{r, undated, g} {
+	for _, m := range []uid.ID{r, undated, g} {
 		must(t, f.r.AddMovie(c.ID, m))
 	}
 	must(t, f.r.AddMovie(c.ID, g)) // idempotent
 	got, err := f.r.List(f.home, item.Audience{}, 10, 0)
-	if err != nil || !slices.Equal(ids(got), []int64{empty.ID, c.ID}) || got[1].MovieCount != 3 || got[1].Source != collection.Custom {
+	if err != nil || !slices.Equal(ids(got), []uid.ID{empty.ID, c.ID}) || got[1].MovieCount != 3 || got[1].Source != collection.Custom {
 		t.Fatalf("by name, empty ones too for adults: %+v %v", got, err)
 	}
 	if _, err := f.r.Seen(f.away, c.ID, item.Audience{}); !errors.Is(err, db.ErrNotFound) {
 		t.Fatalf("another household: %v", err)
 	}
-	if got, _ := f.r.List(f.home, f.kidPG, 10, 0); !slices.Equal(ids(got), []int64{c.ID}) || got[0].MovieCount != 2 {
+	if got, _ := f.r.List(f.home, f.kidPG, 10, 0); !slices.Equal(ids(got), []uid.ID{c.ID}) || got[0].MovieCount != 2 {
 		t.Fatalf("a kid sees no empty collection: %+v", got)
 	}
-	if order, _ := f.r.Movies(c.ID, item.Audience{}, 10, 0); !slices.Equal(order, []int64{g, undated, r}) {
+	if order, _ := f.r.Movies(c.ID, item.Audience{}, 10, 0); !slices.Equal(order, []uid.ID{g, undated, r}) {
 		t.Fatalf("dated first, then by title: %v", order)
 	}
-	if order, _ := f.r.Movies(c.ID, f.kidPG, 10, 0); !slices.Equal(order, []int64{g, undated}) {
+	if order, _ := f.r.Movies(c.ID, f.kidPG, 10, 0); !slices.Equal(order, []uid.ID{g, undated}) {
 		t.Fatalf("%v", order)
 	}
-	if order, _ := f.r.Movies(c.ID, item.Audience{}, 1, 1); !slices.Equal(order, []int64{undated}) {
+	if order, _ := f.r.Movies(c.ID, item.Audience{}, 1, 1); !slices.Equal(order, []uid.ID{undated}) {
 		t.Fatalf("paged: %v", order)
 	}
-	if of, _ := f.r.ForMovie(f.home, g, item.Audience{}); !slices.Equal(ids(of), []int64{c.ID}) {
+	if of, _ := f.r.ForMovie(f.home, g, item.Audience{}); !slices.Equal(ids(of), []uid.ID{c.ID}) {
 		t.Fatalf("%v", ids(of))
 	}
 	if of, _ := f.r.ForMovie(f.away, g, item.Audience{}); len(of) != 0 {
@@ -157,9 +160,12 @@ func TestCustomCollectionsStayInTheirHousehold(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.Name = "Kites"
-	must(t, f.r.Update(c))
+	must(t, f.r.Update(c, &f.adult))
+	if got, err := f.r.Get(c.ID); err != nil || got.CreatedBy != nil || *got.ModifiedBy != f.adult {
+		t.Fatalf("the renaming profile is the last author: %+v %v", got, err)
+	}
 	must(t, f.r.Delete(empty.ID))
-	if got, _ := f.r.List(f.home, item.Audience{}, 10, 0); !slices.Equal(ids(got), []int64{c.ID}) || got[0].Name != "Kites" || got[0].MovieCount != 2 {
+	if got, _ := f.r.List(f.home, item.Audience{}, 10, 0); !slices.Equal(ids(got), []uid.ID{c.ID}) || got[0].Name != "Kites" || got[0].MovieCount != 2 {
 		t.Fatalf("%+v", got)
 	}
 }
@@ -167,8 +173,8 @@ func TestCustomCollectionsStayInTheirHousehold(t *testing.T) {
 func TestAroundIsTheTenNearestOtherMoviesInOrder(t *testing.T) {
 	f := setup(t)
 	c := &collection.Collection{HouseholdID: &f.home, Name: "Long"}
-	must(t, f.r.Create(c))
-	var m []int64
+	must(t, f.r.Create(c, nil))
+	var m []uid.ID
 	for i := range 13 {
 		rating := "PG"
 		if i == 1 || i == 2 {
@@ -177,12 +183,12 @@ func TestAroundIsTheTenNearestOtherMoviesInOrder(t *testing.T) {
 		m = append(m, f.movie(t, "Part "+string(rune('A'+i)), strconv.Itoa(2000+i)+"-01-01", rating))
 		must(t, f.r.AddMovie(c.ID, m[i]))
 	}
-	join := slices.Concat[[]int64]
+	join := slices.Concat[[]uid.ID]
 	for _, tc := range []struct {
 		name  string
-		movie int64
+		movie uid.ID
 		a     item.Audience
-		want  []int64
+		want  []uid.ID
 	}{
 		{"first: all ten after it", m[0], item.Audience{}, m[1:11]},
 		{"middle: five each side", m[6], item.Audience{}, join(m[1:6], m[7:12])},
@@ -201,11 +207,11 @@ func TestAroundIsTheTenNearestOtherMoviesInOrder(t *testing.T) {
 
 // handOrdered makes a custom collection of Kite A to D, released in that
 // order, and returns it with their ids.
-func handOrdered(t *testing.T, f fixture) (*collection.Collection, []int64) {
+func handOrdered(t *testing.T, f fixture) (*collection.Collection, []uid.ID) {
 	t.Helper()
 	c := &collection.Collection{HouseholdID: &f.home, Name: "Kites"}
-	must(t, f.r.Create(c))
-	var m []int64
+	must(t, f.r.Create(c, nil))
+	var m []uid.ID
 	for i := range 4 {
 		m = append(m, f.movie(t, "Kite "+string(rune('A'+i)), strconv.Itoa(2000+i)+"-01-01", "PG"))
 		must(t, f.r.AddMovie(c.ID, m[i]))
@@ -213,7 +219,7 @@ func handOrdered(t *testing.T, f fixture) (*collection.Collection, []int64) {
 	return c, m
 }
 
-func movies(t *testing.T, f fixture, id int64) []int64 {
+func movies(t *testing.T, f fixture, id uid.ID) []uid.ID {
 	t.Helper()
 	got, err := f.r.Movies(id, item.Audience{}, 20, 0)
 	must(t, err)
@@ -229,14 +235,14 @@ func TestMoveMovieHandOrdersAndEveryConsumerFollows(t *testing.T) {
 		t.Fatal("release order until moved")
 	}
 	must(t, f.r.MoveMovie(c.ID, m[3], at(0)))
-	want := []int64{m[3], m[0], m[1], m[2]}
+	want := []uid.ID{m[3], m[0], m[1], m[2]}
 	if got := movies(t, f, c.ID); !slices.Equal(got, want) {
 		t.Fatalf("first move numbers every movie from release order, then moves: %v want %v", got, want)
 	}
 	if v, _ := f.r.Seen(f.home, c.ID, item.Audience{}); !v.CustomOrder {
 		t.Fatal("hand-ordered after a move")
 	}
-	if got, _ := f.r.Around(c.ID, m[0], item.Audience{}, 2); !slices.Equal(got, []int64{m[3], m[1]}) {
+	if got, _ := f.r.Around(c.ID, m[0], item.Audience{}, 2); !slices.Equal(got, []uid.ID{m[3], m[1]}) {
 		t.Fatalf("Around follows the hand order: %v", got)
 	}
 
@@ -245,26 +251,26 @@ func TestMoveMovieHandOrdersAndEveryConsumerFollows(t *testing.T) {
 		t.Fatalf("past the end moves it last: %v", got)
 	}
 	must(t, f.r.MoveMovie(c.ID, m[0], nil))
-	if got := movies(t, f, c.ID); !slices.Equal(got, []int64{m[1], m[2], m[3], m[0]}) {
+	if got := movies(t, f, c.ID); !slices.Equal(got, []uid.ID{m[1], m[2], m[3], m[0]}) {
 		t.Fatalf("no position moves it last: %v", got)
 	}
-	if err := f.r.MoveMovie(c.ID, 999999, at(0)); !errors.Is(err, db.ErrNotFound) {
+	if err := f.r.MoveMovie(c.ID, uid.N(999999), at(0)); !errors.Is(err, db.ErrNotFound) {
 		t.Fatalf("a movie not in it: %v", err)
 	}
 
 	early := f.movie(t, "Kite Z", "1990-01-01", "PG")
 	must(t, f.r.AddMovie(c.ID, early))
-	if got := movies(t, f, c.ID); !slices.Equal(got, []int64{m[1], m[2], m[3], m[0], early}) {
+	if got := movies(t, f, c.ID); !slices.Equal(got, []uid.ID{m[1], m[2], m[3], m[0], early}) {
 		t.Fatalf("a movie added to a hand-ordered collection goes last: %v", got)
 	}
 	must(t, f.r.AddMovie(c.ID, early))
 	must(t, f.r.RemoveMovie(c.ID, m[2]))
-	if got := movies(t, f, c.ID); !slices.Equal(got, []int64{m[1], m[3], m[0], early}) {
+	if got := movies(t, f, c.ID); !slices.Equal(got, []uid.ID{m[1], m[3], m[0], early}) {
 		t.Fatalf("removing keeps the rest in order: %v", got)
 	}
 
 	must(t, f.r.ResetOrder(c.ID))
-	if got := movies(t, f, c.ID); !slices.Equal(got, []int64{early, m[0], m[1], m[3]}) {
+	if got := movies(t, f, c.ID); !slices.Equal(got, []uid.ID{early, m[0], m[1], m[3]}) {
 		t.Fatalf("reset returns release order: %v", got)
 	}
 	if v, _ := f.r.Seen(f.home, c.ID, item.Audience{}); v.CustomOrder {
@@ -277,7 +283,7 @@ func TestAddingToAReleaseOrderedCollectionStaysPositionless(t *testing.T) {
 	c, m := handOrdered(t, f)
 	early := f.movie(t, "Kite Early", "1990-01-01", "PG")
 	must(t, f.r.AddMovie(c.ID, early))
-	if got := movies(t, f, c.ID); !slices.Equal(got, append([]int64{early}, m...)) {
+	if got := movies(t, f, c.ID); !slices.Equal(got, append([]uid.ID{early}, m...)) {
 		t.Fatalf("%v", got)
 	}
 	if v, _ := f.r.Seen(f.home, c.ID, item.Audience{}); v.CustomOrder {
@@ -292,16 +298,16 @@ func TestUpNextAndNeighborsFollowAHandOrder(t *testing.T) {
 	a, b, c := f.movie(t, "Gale A", "2001-01-01", "PG"), f.movie(t, "Gale B", "2002-01-01", "PG"), f.movie(t, "Gale C", "2003-01-01", "PG")
 	saga := &collection.Collection{TMDBID: ptr(5), Name: "Gale Saga"}
 	must(t, f.r.PutTMDB(saga))
-	for i, id := range []int64{c, a, b} {
-		must(t, f.r.SetTMDBMovie(id, saga.ID))
+	for i, id := range []uid.ID{c, a, b} {
+		must(t, f.r.SetTMDBMovie(id, &saga.ID))
 		_, err := f.d.Exec(`UPDATE collection_movie SET position = ? WHERE collection_id = ? AND item_id = ?`, i, saga.ID, id)
 		must(t, err)
 	}
-	if next, err := f.r.NextMovie(c, item.Audience{}); err != nil || next != a {
-		t.Fatalf("up next after the first of the hand order: %d %v", next, err)
+	if next, err := f.r.NextMovie(c, item.Audience{}); err != nil || next == nil || *next != a {
+		t.Fatalf("up next after the first of the hand order: %v %v", next, err)
 	}
-	if prev, next, err := f.r.MovieNeighbors(a, item.Audience{}); err != nil || prev != c || next != b {
-		t.Fatalf("neighbors in the hand order: %d %d %v", prev, next, err)
+	if prev, next, err := f.r.MovieNeighbors(a, item.Audience{}); err != nil || prev == nil || *prev != c || next == nil || *next != b {
+		t.Fatalf("neighbors in the hand order: %v %v %v", prev, next, err)
 	}
 }
 
@@ -312,7 +318,7 @@ func ptr(n int64) *int64 { return &n }
 func TestMovieOrderLooksUpEachMovie(t *testing.T) {
 	f := setup(t)
 	c := &collection.Collection{HouseholdID: &f.home, Name: "C"}
-	must(t, f.r.Create(c))
+	must(t, f.r.Create(c, nil))
 	must(t, f.r.AddMovie(c.ID, f.movie(t, "A", "2001-01-01", "G")))
 	p := &dbtest.Planner{DBTX: f.d}
 	if _, err := collection.New(p).Movies(c.ID, item.Audience{}, -1, 0); err != nil {

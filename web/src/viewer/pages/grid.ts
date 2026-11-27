@@ -1,5 +1,6 @@
 import { h } from "../../admin/dom";
 import { ok, paged } from "../../admin/api";
+import { tint } from "../../api/uid";
 import {
   inProgress,
   items,
@@ -130,14 +131,14 @@ export async function grid(
   ];
   let filter = filters.includes(query.get("filter")!) ? query.get("filter")! : "All";
   let sort = SORTS[kind].includes(query.get("sort")!) ? query.get("sort")! : "Recently added";
-  const asked = Number(query.get("genre"));
+  const asked = query.get("genre") ?? undefined;
   let genre = genres.some((g) => g.id === asked) ? asked : undefined;
   // With Hide on, the unfiltered lists leave kids' titles out; the Kids pill asks for them by kidsContent.
   const hiding = !!ctx.profile.hideKidsContent;
   const kidsOnly = () => hiding && filter === "Kids";
   let kids: Item[] | undefined;
-  const inGenre = new Map<string, Set<number>>();
-  const genreKey = (g: number) => `${g}${kidsOnly() ? "k" : ""}`;
+  const inGenre = new Map<string, Set<string>>();
+  const genreKey = (g: string) => `${g}${kidsOnly() ? "k" : ""}`;
   // Loads what the current picks need; the kids list stays out of the shared cache of unfiltered titles.
   const ready = async () => {
     if (kidsOnly() && !kids) {
@@ -213,7 +214,7 @@ export async function grid(
               h(
                 "div.art.p",
                 {
-                  style: `background:var(--c${i.id % 10})`,
+                  style: `background:var(--c${tint(i.id, 10)})`,
                   "data-art": artKey(i),
                   "data-ph": placeholderKind(i.kind),
                 },
@@ -255,7 +256,7 @@ export async function grid(
               "select.in",
               {
                 onchange: (e: Event) => {
-                  genre = Number((e.target as HTMLSelectElement).value) || undefined;
+                  genre = (e.target as HTMLSelectElement).value || undefined;
                   remember();
                   redraw();
                 },

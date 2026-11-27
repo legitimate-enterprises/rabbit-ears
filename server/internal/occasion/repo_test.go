@@ -11,6 +11,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/library"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/occasion"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 func must(t *testing.T, err error) {
@@ -21,33 +22,45 @@ func must(t *testing.T, err error) {
 }
 
 func TestCRUDAndSeeds(t *testing.T) {
-	r := occasion.New(dbtest.Open(t))
+	d := dbtest.Open(t)
+	r := occasion.New(d)
 	seeded, err := r.List(100, 0)
 	must(t, err)
 	want := []occasion.Occasion{{Name: "Christmas", Holiday: "christmas", DaysBefore: 30, DaysAfter: 5, Keywords: []int64{207317}},
 		{Name: "Halloween", Holiday: "halloween", DaysBefore: 30, DaysAfter: 1, Keywords: []int64{3335}}}
-	if len(seeded) != 2 {
+	christmas, halloween := uid.ID{6: 0x70, 8: 0x90, 15: 1}, uid.ID{6: 0x70, 8: 0x90, 15: 2}
+	if len(seeded) != 2 || seeded[0].ID != christmas || seeded[1].ID != halloween {
 		t.Fatalf("%+v", seeded)
 	}
 	for i, o := range seeded {
-		o.ID = 0
+		if !o.CreatedAt.Equal(db.FromMs(0)) || !o.ModifiedAt.Equal(db.FromMs(0)) {
+			t.Errorf("seeded %+v at %v %v", *o, o.CreatedAt, o.ModifiedAt)
+		}
+		o.ID, o.CreatedAt, o.ModifiedAt = uid.ID{}, want[i].CreatedAt, want[i].ModifiedAt
 		if !reflect.DeepEqual(*o, want[i]) {
 			t.Errorf("seeded %+v, want %+v", *o, want[i])
 		}
 	}
 
 	o := &occasion.Occasion{Name: "Groundhog Day", Month: 2, Day: 2, DaysBefore: 1, Keywords: []int64{9, 3}}
-	must(t, r.Create(o))
-	if got, err := r.Get(o.ID); err != nil || !reflect.DeepEqual(got, &occasion.Occasion{ID: o.ID, Name: "Groundhog Day", Month: 2, Day: 2,
-		DaysBefore: 1, Keywords: []int64{3, 9}}) {
+	by, editor := uid.N(7), uid.N(8)
+	_, err = d.Exec(`INSERT INTO account (id, kind, name, created_at, modified_at) VALUES (?, 'adult', 'A', 0, 0), (?, 'adult', 'B', 0, 0)`, by, editor)
+	must(t, err)
+	must(t, r.Create(o, &by))
+	if got, err := r.Get(o.ID); err != nil || o.ID.IsZero() || !reflect.DeepEqual(got, &occasion.Occasion{ID: o.ID, Name: "Groundhog Day", Month: 2, Day: 2,
+		DaysBefore: 1, Keywords: []int64{3, 9}, CreatedAt: o.CreatedAt, ModifiedAt: o.CreatedAt, CreatedBy: &by, ModifiedBy: &by}) {
 		t.Fatalf("%+v %v", got, err)
 	}
-	if err := r.Create(&occasion.Occasion{Name: "christmas", Month: 1, Day: 1}); !errors.Is(err, db.ErrConflict) {
+	if err := r.Create(&occasion.Occasion{Name: "christmas", Month: 1, Day: 1}, nil); !errors.Is(err, db.ErrConflict) {
 		t.Fatalf("names are unique ignoring case: %v", err)
 	}
+	if err := r.Create(&occasion.Occasion{ID: o.ID, Name: "Other", Month: 1, Day: 1}, nil); !errors.Is(err, db.ErrConflict) {
+		t.Fatalf("a taken id: %v", err)
+	}
 	o.Name, o.Holiday, o.Month, o.Day, o.Keywords = "Easter", "easter", 0, 0, nil
-	must(t, r.Update(o))
-	if got, err := r.Get(o.ID); err != nil || got.Holiday != "easter" || got.Month != 0 || len(got.Keywords) != 0 {
+	must(t, r.Update(o, &editor))
+	if got, err := r.Get(o.ID); err != nil || got.Holiday != "easter" || got.Month != 0 || len(got.Keywords) != 0 ||
+		*got.CreatedBy != by || *got.ModifiedBy != editor || got.ModifiedAt.Before(got.CreatedAt) {
 		t.Fatalf("keywords are replaced: %+v %v", got, err)
 	}
 	if page, _ := r.List(1, 1); len(page) != 1 || page[0].Name != "Easter" {
@@ -57,7 +70,7 @@ func TestCRUDAndSeeds(t *testing.T) {
 	if _, err := r.Get(o.ID); !errors.Is(err, db.ErrNotFound) {
 		t.Fatal(err)
 	}
-	if err := r.Update(o); !errors.Is(err, db.ErrNotFound) {
+	if err := r.Update(o, nil); !errors.Is(err, db.ErrNotFound) {
 		t.Fatal(err)
 	}
 }
@@ -65,8 +78,8 @@ func TestCRUDAndSeeds(t *testing.T) {
 type world struct {
 	items                 *item.Repo
 	r                     *occasion.Repo
-	g, rated, show, plain int64
-	episode               int64
+	g, rated, show, plain uid.ID
+	episode               uid.ID
 }
 
 // newWorld makes a G movie and an R movie carrying the keyword 7, a TV-Y
@@ -78,9 +91,9 @@ func newWorld(t *testing.T, source, mode string) world {
 	libs, w := library.New(d), world{items: item.New(d), r: occasion.New(d)}
 	mv := &library.Library{Name: "mv", Kind: library.Movies}
 	tv := &library.Library{Name: "tv", Kind: library.TV}
-	must(t, libs.Create(mv))
-	must(t, libs.Create(tv))
-	add := func(lib int64, parent *int64, kind, rating string, keywords ...int64) int64 {
+	must(t, libs.Create(mv, nil))
+	must(t, libs.Create(tv, nil))
+	add := func(lib uid.ID, parent *uid.ID, kind, rating string, keywords ...int64) uid.ID {
 		it := &item.Item{LibraryID: lib, ParentID: parent, Kind: kind, ParsedTitle: kind + rating}
 		must(t, w.items.Create(it))
 		must(t, w.items.SetMetadata(&item.Metadata{ItemID: it.ID, Status: item.Matched, ContentRating: rating}))
@@ -94,60 +107,60 @@ func newWorld(t *testing.T, source, mode string) world {
 	return w
 }
 
-func (w world) members(t *testing.T, occasionID int64, a item.Audience) []int64 {
+func (w world) members(t *testing.T, occasionID *uid.ID, a item.Audience) []uid.ID {
 	t.Helper()
 	rows, err := w.items.List(item.Filter{OccasionID: occasionID, Audience: a})
 	must(t, err)
-	var out []int64
+	var out []uid.ID
 	for _, it := range rows {
 		out = append(out, it.ID)
 	}
-	slices.Sort(out)
+	slices.SortFunc(out, uid.ID.Compare)
 	return out
 }
 
 func TestMembership(t *testing.T) {
 	w := newWorld(t, "remote", "only")
 	o := &occasion.Occasion{Name: "Sevens", Month: 7, Day: 7, Keywords: []int64{7}}
-	must(t, w.r.Create(o))
-	if got := w.members(t, o.ID, item.Audience{}); !reflect.DeepEqual(got, []int64{w.g, w.rated, w.show}) {
+	must(t, w.r.Create(o, nil))
+	if got := w.members(t, &o.ID, item.Audience{}); !reflect.DeepEqual(got, []uid.ID{w.g, w.rated, w.show}) {
 		t.Fatalf("movies and shows carrying a keyword, never episodes: %v", got)
 	}
 	must(t, w.r.AddMember(o.ID, w.plain))
 	must(t, w.r.RemoveMember(o.ID, w.rated))
-	if got := w.members(t, o.ID, item.Audience{}); !reflect.DeepEqual(got, []int64{w.g, w.plain, w.show}) {
+	if got := w.members(t, &o.ID, item.Audience{}); !reflect.DeepEqual(got, []uid.ID{w.g, w.plain, w.show}) {
 		t.Fatalf("added by hand, removed by hand: %v", got)
 	}
-	via, err := w.r.Keyworded(o.ID, []int64{w.g, w.show, w.plain})
+	via, err := w.r.Keyworded(o.ID, []uid.ID{w.g, w.show, w.plain})
 	must(t, err)
-	if !reflect.DeepEqual(via, map[int64]bool{w.g: true, w.show: true}) {
+	if !reflect.DeepEqual(via, map[uid.ID]bool{w.g: true, w.show: true}) {
 		t.Fatalf("which members a keyword brings: %v", via)
 	}
 	must(t, w.items.SetKeywords(w.rated, []int64{7, 9}))
-	if got := w.members(t, o.ID, item.Audience{}); slices.Contains(got, w.rated) {
+	if got := w.members(t, &o.ID, item.Audience{}); slices.Contains(got, w.rated) {
 		t.Fatalf("a removal outlives a metadata refresh: %v", got)
 	}
 	must(t, w.r.AddMember(o.ID, w.rated))
-	if got := w.members(t, o.ID, item.Audience{}); !slices.Contains(got, w.rated) {
+	if got := w.members(t, &o.ID, item.Audience{}); !slices.Contains(got, w.rated) {
 		t.Fatalf("adding a removed item back clears its removal: %v", got)
 	}
 	must(t, w.r.RemoveMember(o.ID, w.plain))
-	if got := w.members(t, o.ID, item.Audience{}); slices.Contains(got, w.plain) {
+	if got := w.members(t, &o.ID, item.Audience{}); slices.Contains(got, w.plain) {
 		t.Fatalf("a hand addition is removed: %v", got)
 	}
 
 	kid := item.Audience{Kid: true, Movie: []string{"G", "PG"}, TV: []string{"TV-Y"}}
-	if got := w.members(t, o.ID, kid); !reflect.DeepEqual(got, []int64{w.g, w.show}) {
+	if got := w.members(t, &o.ID, kid); !reflect.DeepEqual(got, []uid.ID{w.g, w.show}) {
 		t.Fatalf("a kid's ceilings apply: %v", got)
 	}
-	if got := w.members(t, o.ID, item.Audience{HideKids: true}); !reflect.DeepEqual(got, []int64{w.rated}) {
+	if got := w.members(t, &o.ID, item.Audience{HideKids: true}); !reflect.DeepEqual(got, []uid.ID{w.rated}) {
 		t.Fatalf("an adult hiding kids' content: %v", got)
 	}
-	if got := w.members(t, 0, item.Audience{}); len(got) != 6 {
+	if got := w.members(t, nil, item.Audience{}); len(got) != 6 {
 		t.Fatalf("no occasion filters nothing: %v", got)
 	}
 	must(t, w.items.Delete(w.g))
-	if got := w.members(t, o.ID, item.Audience{}); slices.Contains(got, w.g) {
+	if got := w.members(t, &o.ID, item.Audience{}); slices.Contains(got, w.g) {
 		t.Fatalf("%v", got)
 	}
 	must(t, w.r.Delete(o.ID))
@@ -156,9 +169,9 @@ func TestMembership(t *testing.T) {
 func TestLocalOnlyMetadataHasNoKeywordMembers(t *testing.T) {
 	w := newWorld(t, "local", "only")
 	o := &occasion.Occasion{Name: "Sevens", Month: 7, Day: 7, Keywords: []int64{7}}
-	must(t, w.r.Create(o))
+	must(t, w.r.Create(o, nil))
 	must(t, w.r.AddMember(o.ID, w.plain))
-	if got := w.members(t, o.ID, item.Audience{}); !reflect.DeepEqual(got, []int64{w.plain}) {
+	if got := w.members(t, &o.ID, item.Audience{}); !reflect.DeepEqual(got, []uid.ID{w.plain}) {
 		t.Fatalf("keywords are TMDB's, unused while metadata is local only: %v", got)
 	}
 }

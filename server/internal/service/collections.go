@@ -7,6 +7,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/collection"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 var (
@@ -39,12 +40,12 @@ func writable(c *collection.Collection) error {
 }
 
 // Rename sets a custom collection's name.
-func (s *CollectionService) Rename(c *collection.Collection, name string) error {
+func (s *CollectionService) Rename(c *collection.Collection, name string, by *uid.ID) error {
 	if err := writable(c); err != nil {
 		return err
 	}
 	c.Name = name
-	return s.repo.Update(c)
+	return s.repo.Update(c, by)
 }
 
 // Delete removes a custom collection.
@@ -67,7 +68,7 @@ func (s *CollectionService) AddMovie(c *collection.Collection, it *item.Item) er
 }
 
 // RemoveMovie takes a movie out of a custom collection.
-func (s *CollectionService) RemoveMovie(c *collection.Collection, movieID int64) error {
+func (s *CollectionService) RemoveMovie(c *collection.Collection, movieID uid.ID) error {
 	if err := writable(c); err != nil {
 		return err
 	}
@@ -76,7 +77,7 @@ func (s *CollectionService) RemoveMovie(c *collection.Collection, movieID int64)
 
 // MoveMovie moves a movie of a custom collection to position at, nil for
 // last; the first move hand-orders the collection.
-func (s *CollectionService) MoveMovie(c *collection.Collection, movieID int64, at *int) error {
+func (s *CollectionService) MoveMovie(c *collection.Collection, movieID uid.ID, at *int) error {
 	if err := writable(c); err != nil {
 		return err
 	}

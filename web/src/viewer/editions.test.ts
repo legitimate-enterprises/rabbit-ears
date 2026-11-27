@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setToken } from "../admin/api";
 import { boot } from "./app";
 import { at, calls, json, mockFetch, none, root, until } from "./testSupport";
+import { uid } from "../api/uid";
 
 vi.mock("hls.js", () => ({
   default: class {
@@ -16,7 +17,7 @@ const button = (r: ParentNode, label: string) =>
   [...r.querySelectorAll<HTMLElement>("button, a")].find((b) => b.textContent === label)!;
 const ts = "2026-01-01T00:00:00Z";
 const acct = (id: number, name: string, kind = "adult") => ({
-  id,
+  id: uid(id),
   kind,
   name,
   isAdmin: false,
@@ -25,84 +26,87 @@ const acct = (id: number, name: string, kind = "adult") => ({
   pending: false,
   filterMode: "ratings",
   createdAt: ts,
-  updatedAt: ts,
+  modifiedAt: ts,
 });
 const page = (items: unknown[]) => ({ items });
 const base = (watch: unknown[] = []) => ({
   "GET /health": { status: "ok", version: "1.0.0", setupRequired: false },
   "GET /me": {
-    device: { id: 1 },
+    device: { id: uid(1) },
     account: acct(1, "Heidi"),
-    activeProfileId: 1,
-    household: { id: 1, name: "Heidi", adultId: 1, createdAt: ts },
+    activeProfileId: uid(1),
+    household: { id: uid(1), name: "Heidi", adultId: uid(1), createdAt: ts },
     profiles: [acct(1, "Heidi"), acct(5, "Bea")],
   },
-  "GET /profiles/1/watch-state": page(watch),
-  "GET /profiles/1/show-progress": page([]),
+  [`GET /profiles/${uid(1)}/watch-state`]: page(watch),
+  [`GET /profiles/${uid(1)}/show-progress`]: page([]),
   ...Object.fromEntries(
-    watch.map((w) => [`GET /profiles/1/watch-state/${(w as { itemId: number }).itemId}`, w]),
+    watch.map((w) => [
+      `GET /profiles/${uid(1)}/watch-state/${(w as { itemId: string }).itemId}`,
+      w,
+    ]),
   ),
   "GET /watch-together": page([]),
   "GET /media-files": page([]),
 });
-const copy = (mediaFileId: number, quality: string) => ({ mediaFileId, quality });
+const copy = (mediaFileId: number, quality: string) => ({ mediaFileId: uid(mediaFileId), quality });
 const STANDARD = {
-  id: 401,
+  id: uid(401),
   name: "Standard",
   isDefault: true,
   runtimeMs: 7_800_000,
   copies: [copy(1, "4K"), copy(2, "1080p")],
 };
 const EXTENDED = {
-  id: 402,
+  id: uid(402),
   name: "Extended",
   isDefault: false,
   runtimeMs: 13_680_000,
   copies: [copy(3, "1080p")],
 };
 const movie = (editions: unknown[]) => ({
-  id: 30,
-  libraryId: 1,
+  id: uid(30),
+  libraryId: uid(1),
   kind: "movie",
   parsedTitle: "Lantern Coast",
   parsedYear: 2004,
   addedAt: ts,
-  updatedAt: ts,
+  modifiedAt: ts,
   editions,
 });
 const position = (editionId?: number) => ({
-  itemId: 30,
+  itemId: uid(30),
   positionMs: 600_000,
-  editionId,
+  editionId: editionId === undefined ? undefined : uid(editionId),
   watched: false,
   playCount: 0,
-  updatedAt: ts,
+  changedAt: ts,
 });
 const details = (editions: unknown[], watch: unknown[] = [], extra = {}) => ({
   ...base(watch),
-  "GET /items/30": movie(editions),
-  "GET /items/30/credits": { cast: [], crew: [] },
-  "GET /profiles/1/playlists": page([
+  [`GET /items/${uid(30)}`]: movie(editions),
+  [`GET /items/${uid(30)}/credits`]: { cast: [], crew: [] },
+  [`GET /profiles/${uid(1)}/playlists`]: page([
     {
-      id: 5,
-      profileId: 1,
+      id: uid(5),
+      profileId: uid(1),
       access: "owner",
       name: "Weekend",
       kind: "movies",
       itemCount: 0,
       durationMs: 0,
       createdAt: ts,
-      updatedAt: ts,
+      modifiedAt: ts,
     },
   ]),
-  "POST /profiles/1/playlists/5/entries": {},
+  [`POST /profiles/${uid(1)}/playlists/${uid(5)}/entries`]: {},
   ...extra,
 });
 const playLink = (r: HTMLElement) => r.querySelector<HTMLAnchorElement>("a.btn.p")!;
 const edition = (r: HTMLElement) =>
   [...r.querySelectorAll("label")].find((l) => l.textContent!.startsWith("Edition"));
 const choose = (s: HTMLSelectElement, value: number) => {
-  s.value = String(value);
+  s.value = uid(value);
   s.dispatchEvent(new Event("change"));
 };
 
@@ -117,26 +121,26 @@ beforeEach(async () => {
 
 describe("movie details with editions", () => {
   it("lists each edition with its runtime and qualities, the default first and chosen", async () => {
-    await at("#/movie/30");
+    await at(`#/movie/${uid(30)}`);
     const r = root();
     await boot(r, { fetch: mockFetch(details([STANDARD, EXTENDED])) });
     await until(() => edition(r));
     const s = edition(r)!.querySelector("select")!;
     expect(text(s.options)).toEqual(["Standard · 2h 10m · 4K, 1080p", "Extended · 3h 48m · 1080p"]);
-    expect(s.value).toBe("401");
+    expect(s.value).toBe(uid(401));
     expect(playLink(r).textContent).toBe("Play");
-    expect(playLink(r).getAttribute("href")).toBe("#/play/30?edition=401");
+    expect(playLink(r).getAttribute("href")).toBe(`#/play/${uid(30)}?edition=${uid(401)}`);
     choose(s, 402);
-    expect(playLink(r).getAttribute("href")).toBe("#/play/30?edition=402");
+    expect(playLink(r).getAttribute("href")).toBe(`#/play/${uid(30)}?edition=${uid(402)}`);
   });
 
   it("lists the audio and subtitles of the selected edition's file, and sends only its track ids", async () => {
     const file = (id: number, size: number, audio: string, subtitle: string) => ({
-      id,
-      itemId: 30,
+      id: uid(id),
+      itemId: uid(30),
       path: `/movies/Lantern Coast/${audio}.mkv`,
       sizeBytes: size,
-      modifiedAt: ts,
+      fileModifiedAt: ts,
       tracks: [
         { id: `${id}-v`, index: 0, kind: "video", codec: "h264", width: 1920, height: 1080 },
         { id: `${id}-a`, index: 1, kind: "audio", codec: "aac", language: audio, isDefault: true },
@@ -149,7 +153,7 @@ describe("movie details with editions", () => {
       configurable: true,
       value: { decodingInfo: async () => ({ supported: false }) },
     });
-    await at("#/movie/30");
+    await at(`#/movie/${uid(30)}`);
     const r = root();
     await boot(r, {
       fetch: mockFetch(
@@ -160,7 +164,7 @@ describe("movie details with editions", () => {
             file(2, 5e9, "English", "fre"),
             file(3, 5e8, "German", "dut"),
           ]),
-          "POST /items/30/playability": { verdict: "direct_play" },
+          [`POST /items/${uid(30)}/playability`]: { verdict: "direct_play" },
         }),
       ),
     });
@@ -175,19 +179,21 @@ describe("movie details with editions", () => {
     expect(subs()).toContain("German.mkv - 500 MB");
     audio().value = "3-a";
     audio().dispatchEvent(new Event("change"));
-    expect(playLink(r).getAttribute("href")).toBe("#/play/30?edition=402&audio=3-a");
+    expect(playLink(r).getAttribute("href")).toBe(
+      `#/play/${uid(30)}?edition=${uid(402)}&audio=3-a`,
+    );
     choose(edition(r)!.querySelector("select")!, 401);
     await until(() => text(audio().options)[0] === "English - AAC");
-    expect(playLink(r).getAttribute("href")).toBe("#/play/30?edition=401");
+    expect(playLink(r).getAttribute("href")).toBe(`#/play/${uid(30)}?edition=${uid(401)}`);
   });
 
   it("shows the 4K and HDR tags of the selected edition's file", async () => {
     const file = (id: number, height: number, hdrFormat?: string) => ({
-      id,
-      itemId: 30,
+      id: uid(id),
+      itemId: uid(30),
       path: `/movies/Lantern Coast/${id}.mkv`,
       sizeBytes: 1e9,
-      modifiedAt: ts,
+      fileModifiedAt: ts,
       tracks: [{ id: `${id}-v`, index: 0, kind: "video", codec: "hevc", height, hdrFormat }],
       chapters: [],
     });
@@ -196,13 +202,13 @@ describe("movie details with editions", () => {
       configurable: true,
       value: { decodingInfo: async () => ({ supported: false }) },
     });
-    await at("#/movie/30");
+    await at(`#/movie/${uid(30)}`);
     const r = root();
     await boot(r, {
       fetch: mockFetch(
         details([STANDARD, EXTENDED], [], {
           "GET /media-files": page([file(1, 2160, "hdr10"), file(3, 1080)]),
-          "POST /items/30/playability": { verdict: "direct_play" },
+          [`POST /items/${uid(30)}/playability`]: { verdict: "direct_play" },
         }),
       ),
     });
@@ -217,13 +223,13 @@ describe("movie details with editions", () => {
   });
 
   it("chooses the edition the saved position belongs to and offers Resume only for it", async () => {
-    await at("#/movie/30");
+    await at(`#/movie/${uid(30)}`);
     const r = root();
     await boot(r, { fetch: mockFetch(details([STANDARD, EXTENDED], [position(402)])) });
     await until(() => edition(r));
     const s = edition(r)!.querySelector("select")!;
-    expect(s.value).toBe("402");
-    expect(calls.map((c) => c.key)).not.toContain("GET /profiles/1/watch-state");
+    expect(s.value).toBe(uid(402));
+    expect(calls.map((c) => c.key)).not.toContain(`GET /profiles/${uid(1)}/watch-state`);
     expect(playLink(r).textContent).toBe("Resume");
     choose(s, 401);
     expect(playLink(r).textContent).toBe("Play");
@@ -232,25 +238,27 @@ describe("movie details with editions", () => {
   });
 
   it("shows no choice and sends no edition for a title with one edition", async () => {
-    await at("#/movie/30");
+    await at(`#/movie/${uid(30)}`);
     const r = root();
     await boot(r, { fetch: mockFetch(details([STANDARD], [position(401)])) });
     await until(() => playLink(r));
     expect(edition(r)).toBeUndefined();
     expect(playLink(r).textContent).toBe("Resume");
-    expect(playLink(r).getAttribute("href")).toBe("#/play/30");
+    expect(playLink(r).getAttribute("href")).toBe(`#/play/${uid(30)}`);
 
     button(r, "Add to playlist").click();
     await until(() => document.querySelector("[role=dialog] .choices button"));
     button(document.querySelector("[role=dialog]")!, "Weekend").click();
     await until(() => button(r, "Added to Weekend"));
-    expect(calls.find((c) => c.key === "POST /profiles/1/playlists/5/entries")!.body).toEqual({
-      itemId: 30,
+    expect(
+      calls.find((c) => c.key === `POST /profiles/${uid(1)}/playlists/${uid(5)}/entries`)!.body,
+    ).toEqual({
+      itemId: uid(30),
     });
   });
 
   it("adds the chosen edition to a playlist without asking", async () => {
-    await at("#/movie/30");
+    await at(`#/movie/${uid(30)}`);
     const r = root();
     await boot(r, { fetch: mockFetch(details([STANDARD, EXTENDED])) });
     await until(() => edition(r));
@@ -259,13 +267,15 @@ describe("movie details with editions", () => {
     await until(() => document.querySelector("[role=dialog] .choices button"));
     button(document.querySelector("[role=dialog]")!, "Weekend").click();
     await until(() => button(r, "Added to Weekend"));
-    const posts = calls.filter((c) => c.key === "POST /profiles/1/playlists/5/entries");
-    expect(posts.map((c) => c.body)).toEqual([{ itemId: 30, editionId: 402 }]);
+    const posts = calls.filter(
+      (c) => c.key === `POST /profiles/${uid(1)}/playlists/${uid(5)}/entries`,
+    );
+    expect(posts.map((c) => c.body)).toEqual([{ itemId: uid(30), editionId: uid(402) }]);
   });
 
   it("hides the choice while opening or inside a Watch together", async () => {
     const host = {
-      accountId: 1,
+      accountId: uid(1),
       name: "Heidi",
       role: "host",
       deviceName: "Web",
@@ -274,8 +284,8 @@ describe("movie details with editions", () => {
       joinedAt: ts,
     };
     const waiting = {
-      id: 3,
-      itemId: 30,
+      id: uid(3),
+      itemId: uid(30),
       status: "waiting",
       members: [host],
       joinBy: ts,
@@ -289,13 +299,13 @@ describe("movie details with editions", () => {
       effectiveAtMs: Date.now(),
       effectivePositionMs: 0,
     };
-    await at("#/movie/30");
+    await at(`#/movie/${uid(30)}`);
     const r = root();
     await boot(r, {
       fetch: mockFetch(
         details([STANDARD, EXTENDED], [position(402)], {
           "GET /watch-together": page([waiting]),
-          "GET /watch-together/3": waiting,
+          [`GET /watch-together/${uid(3)}`]: waiting,
         }),
       ),
     });
@@ -308,24 +318,24 @@ describe("movie details with editions", () => {
 
 describe("resuming from the watch state", () => {
   const ep = (id: number, n: number) => ({
-    id,
-    libraryId: 2,
+    id: uid(id),
+    libraryId: uid(2),
     kind: "episode",
-    parentId: 11,
+    parentId: uid(11),
     seasonNumber: 1,
     episodeNumber: n,
     parsedTitle: `Episode ${n}`,
     addedAt: ts,
-    updatedAt: ts,
+    modifiedAt: ts,
   });
   const show = { ...ep(10, 0), kind: "show", parentId: undefined, parsedTitle: "Harbor Lights" };
-  const season = { ...ep(11, 0), kind: "season", parentId: 10 };
+  const season = { ...ep(11, 0), kind: "season", parentId: uid(10) };
   const library = {
     "GET /items": (_: unknown, u: URL) => {
       const k = u.searchParams.get("kind");
       return page(
         k === "movie"
-          ? [movie([]), { ...movie([]), id: 31, parsedTitle: "Tidewater" }]
+          ? [movie([]), { ...movie([]), id: uid(31), parsedTitle: "Tidewater" }]
           : k === "show"
             ? [show]
             : k === "season"
@@ -335,15 +345,15 @@ describe("resuming from the watch state", () => {
                 : [],
       );
     },
-    "GET /items/10": show,
-    "GET /items/11": season,
-    "GET /items/21": ep(21, 1),
-    "GET /items/30": movie([]),
-    "GET /items/31": { ...movie([]), id: 31, parsedTitle: "Tidewater" },
+    [`GET /items/${uid(10)}`]: show,
+    [`GET /items/${uid(11)}`]: season,
+    [`GET /items/${uid(21)}`]: ep(21, 1),
+    [`GET /items/${uid(30)}`]: movie([]),
+    [`GET /items/${uid(31)}`]: { ...movie([]), id: uid(31), parsedTitle: "Tidewater" },
   };
   const at2 = (itemId: number, editionId: number | undefined, lastPlayedAt: string) => ({
     ...position(editionId),
-    itemId,
+    itemId: uid(itemId),
     lastPlayedAt,
   });
   const watch = [
@@ -360,23 +370,23 @@ describe("resuming from the watch state", () => {
         ...base(watch),
         ...library,
         "GET /youtube/videos": page([]),
-        "GET /items/10/credits": { cast: [], crew: [] },
+        [`GET /items/${uid(10)}/credits`]: { cast: [], crew: [] },
       }),
     });
     await until(() => r.querySelector(".hero"));
-    expect(r.querySelector(".hero-tile")!.getAttribute("data-art")).toBe("30/backdrop");
-    expect(button(r, "Resume").getAttribute("href")).toBe("#/play/30?edition=402");
+    expect(r.querySelector(".hero-tile")!.getAttribute("data-art")).toBe(`${uid(30)}/backdrop`);
+    expect(button(r, "Resume").getAttribute("href")).toBe(`#/play/${uid(30)}?edition=${uid(402)}`);
     const also = [...r.querySelectorAll(".also a")].map((a) => a.getAttribute("href"));
-    expect(also).toEqual(["#/play/31", "#/play/21?edition=501"]);
+    expect(also).toEqual([`#/play/${uid(31)}`, `#/play/${uid(21)}?edition=${uid(501)}`]);
 
     for (const [hash, label] of [
-      ["#/show/10", "Resume S1 E1"],
-      ["#/season/11", "Resume E1"],
-      ["#/episode/21", "Resume"],
+      [`#/show/${uid(10)}`, "Resume S1 E1"],
+      [`#/season/${uid(11)}`, "Resume E1"],
+      [`#/episode/${uid(21)}`, "Resume"],
     ]) {
       await at(hash);
       await until(() => button(r, label));
-      expect(button(r, label).getAttribute("href")).toBe("#/play/21?edition=501");
+      expect(button(r, label).getAttribute("href")).toBe(`#/play/${uid(21)}?edition=${uid(501)}`);
     }
   });
 
@@ -391,24 +401,24 @@ describe("resuming from the watch state", () => {
       }),
     });
     await until(() => r.querySelector(".hero"));
-    expect(r.querySelector(".hero-tile")!.getAttribute("data-art")).toBe("10/backdrop");
+    expect(r.querySelector(".hero-tile")!.getAttribute("data-art")).toBe(`${uid(10)}/backdrop`);
   });
 });
 
 describe("add to playlist where editions are not known", () => {
   it("asks which edition after a 400 on editionId and adds again with it", async () => {
     const ep = {
-      id: 21,
-      libraryId: 2,
+      id: uid(21),
+      libraryId: uid(2),
       kind: "episode",
-      parentId: 11,
+      parentId: uid(11),
       seasonNumber: 1,
       episodeNumber: 1,
       parsedTitle: "Pilot",
       addedAt: ts,
-      updatedAt: ts,
+      modifiedAt: ts,
     };
-    await at("#/episode/21");
+    await at(`#/episode/${uid(21)}`);
     const r = root();
     await boot(r, {
       fetch: mockFetch({
@@ -417,31 +427,36 @@ describe("add to playlist where editions are not known", () => {
           const k = u.searchParams.get("kind");
           return page(
             k === "show"
-              ? [{ ...ep, id: 10, kind: "show", parsedTitle: "Harbor Lights" }]
+              ? [{ ...ep, id: uid(10), kind: "show", parsedTitle: "Harbor Lights" }]
               : k === "season"
-                ? [{ ...ep, id: 11, kind: "season", parentId: 10 }]
+                ? [{ ...ep, id: uid(11), kind: "season", parentId: uid(10) }]
                 : k === "episode"
                   ? [ep]
                   : [],
           );
         },
-        "GET /items/21": { ...ep, editions: [STANDARD, EXTENDED] },
-        "GET /items/11": { ...ep, id: 11, kind: "season", parentId: 10 },
-        "GET /items/10": { ...ep, id: 10, kind: "show", parsedTitle: "Harbor Lights" },
-        "GET /profiles/1/playlists": page([
+        [`GET /items/${uid(21)}`]: { ...ep, editions: [STANDARD, EXTENDED] },
+        [`GET /items/${uid(11)}`]: { ...ep, id: uid(11), kind: "season", parentId: uid(10) },
+        [`GET /items/${uid(10)}`]: {
+          ...ep,
+          id: uid(10),
+          kind: "show",
+          parsedTitle: "Harbor Lights",
+        },
+        [`GET /profiles/${uid(1)}/playlists`]: page([
           {
-            id: 6,
-            profileId: 1,
+            id: uid(6),
+            profileId: uid(1),
             access: "owner",
             name: "Binge",
             kind: "tv",
             itemCount: 0,
             durationMs: 0,
             createdAt: ts,
-            updatedAt: ts,
+            modifiedAt: ts,
           },
         ]),
-        "POST /profiles/1/playlists/6/entries": (b: unknown) =>
+        [`POST /profiles/${uid(1)}/playlists/${uid(6)}/entries`]: (b: unknown) =>
           (b as { editionId?: number }).editionId
             ? {}
             : json(
@@ -461,8 +476,13 @@ describe("add to playlist where editions are not known", () => {
     await until(() => button(document.body, "Extended · 3h 48m · 1080p"));
     button(document.body, "Extended · 3h 48m · 1080p").click();
     await until(() => button(r, "Added to Binge"));
-    const posts = calls.filter((c) => c.key === "POST /profiles/1/playlists/6/entries");
-    expect(posts.map((c) => c.body)).toEqual([{ itemId: 21 }, { itemId: 21, editionId: 402 }]);
+    const posts = calls.filter(
+      (c) => c.key === `POST /profiles/${uid(1)}/playlists/${uid(6)}/entries`,
+    );
+    expect(posts.map((c) => c.body)).toEqual([
+      { itemId: uid(21) },
+      { itemId: uid(21), editionId: uid(402) },
+    ]);
     expect(document.querySelector("[role=dialog]")).toBeNull();
   });
 });
@@ -470,36 +490,39 @@ describe("add to playlist where editions are not known", () => {
 describe("playlist rows", () => {
   it("names the edition after the title only when the entry carries one", async () => {
     const entry = (id: number, editionName?: string) => ({
-      id,
-      playlistId: 5,
+      id: uid(id),
+      playlistId: uid(5),
       position: id - 1,
       kind: "movie",
-      itemId: 30,
-      editionId: 402,
+      itemId: uid(30),
+      editionId: uid(402),
       editionName,
       itemCount: 1,
       durationMs: 0,
       addedAt: ts,
       item: movie([]),
     });
-    await at("#/playlist/5");
+    await at(`#/playlist/${uid(5)}`);
     const r = root();
     await boot(r, {
       fetch: mockFetch({
         ...base(),
-        "GET /profiles/1/playlists/5": {
-          id: 5,
-          profileId: 1,
+        [`GET /profiles/${uid(1)}/playlists/${uid(5)}`]: {
+          id: uid(5),
+          profileId: uid(1),
           access: "owner",
           name: "Weekend",
           kind: "movies",
           itemCount: 2,
           durationMs: 0,
           createdAt: ts,
-          updatedAt: ts,
+          modifiedAt: ts,
         },
-        "GET /profiles/1/playlists/5/entries": page([entry(1, "Extended"), entry(2)]),
-        "GET /profiles/1/playlists/5/play-order": page([]),
+        [`GET /profiles/${uid(1)}/playlists/${uid(5)}/entries`]: page([
+          entry(1, "Extended"),
+          entry(2),
+        ]),
+        [`GET /profiles/${uid(1)}/playlists/${uid(5)}/play-order`]: page([]),
       }),
     });
     await until(() => r.querySelector(".tracks"));
@@ -512,7 +535,7 @@ describe("player", () => {
   const stream = () =>
     json(
       {
-        sessionId: 7,
+        sessionId: uid(7),
         entry: {
           position: 0,
           verdict: "direct_play",
@@ -521,7 +544,7 @@ describe("player", () => {
           subtitleAction: "none",
           bad: false,
         },
-        streamUrl: "/api/v1/streams/k/0/file",
+        streamUrl: "/api/v2/streams/k/0/file",
         streamKind: "file",
         positionMs: 0,
         negotiated: { verdict: "direct_play", width: 1920, height: 1080, bitrate: 8e6 },
@@ -532,11 +555,11 @@ describe("player", () => {
     );
   const routes = (extra = {}) => ({
     ...base(),
-    "GET /items/30": movie([STANDARD, EXTENDED]),
-    "GET /items/31": { ...movie([]), id: 31, parsedTitle: "Tidewater" },
+    [`GET /items/${uid(30)}`]: movie([STANDARD, EXTENDED]),
+    [`GET /items/${uid(31)}`]: { ...movie([]), id: uid(31), parsedTitle: "Tidewater" },
     "POST /playback/sessions": stream,
-    "PUT /playback/sessions/7/position": none,
-    "DELETE /playback/sessions/7": none,
+    [`PUT /playback/sessions/${uid(7)}/position`]: none,
+    [`DELETE /playback/sessions/${uid(7)}`]: none,
     ...extra,
   });
   beforeEach(() => {
@@ -555,52 +578,52 @@ describe("player", () => {
   const started = () => calls.find((c) => c.key === "POST /playback/sessions")!.body;
 
   it("starts the edition chosen on details", async () => {
-    await at("#/play/30?edition=402");
+    await at(`#/play/${uid(30)}?edition=${uid(402)}`);
     const r = root();
     await boot(r, { fetch: mockFetch(routes()) });
     await until(() => r.querySelector(".player video"));
-    expect(started()).toMatchObject({ itemId: 30, editionId: 402 });
+    expect(started()).toMatchObject({ itemId: uid(30), editionId: uid(402) });
   });
 
   it("starts a play-order row with its edition and names it, and the next row's", async () => {
-    await at("#/play/30?playlist=9&n=0");
+    await at(`#/play/${uid(30)}?playlist=${uid(9)}&n=0`);
     const r = root();
     await boot(r, {
       fetch: mockFetch(
         routes({
-          "GET /profiles/1/playlists/9/play-order": page([
+          [`GET /profiles/${uid(1)}/playlists/${uid(9)}/play-order`]: page([
             {
-              entryId: 1,
-              itemId: 30,
+              entryId: uid(1),
+              itemId: uid(30),
               kind: "movie",
-              editionId: 402,
+              editionId: uid(402),
               editionName: "Extended",
               item: movie([]),
             },
             {
-              entryId: 2,
-              itemId: 31,
+              entryId: uid(2),
+              itemId: uid(31),
               kind: "movie",
-              editionId: 403,
+              editionId: uid(403),
               editionName: "Director's Cut",
-              item: { ...movie([]), id: 31, parsedTitle: "Tidewater" },
+              item: { ...movie([]), id: uid(31), parsedTitle: "Tidewater" },
             },
           ]),
-          "GET /profiles/1/up-next/30": {
-            itemId: 31,
+          [`GET /profiles/${uid(1)}/up-next/${uid(30)}`]: {
+            itemId: uid(31),
             kind: "movie",
             title: "Tidewater · Director's Cut",
-            editionId: 403,
+            editionId: uid(403),
             index: 1,
           },
         }),
       ),
     });
     await until(() => r.querySelector(".player video"));
-    expect(started()).toMatchObject({ itemId: 30, editionId: 402, playlistId: 9 });
+    expect(started()).toMatchObject({ itemId: uid(30), editionId: uid(402), playlistId: uid(9) });
     expect(r.querySelector(".ph b.t")!.textContent).toBe("Lantern Coast · Extended");
-    expect(calls.find((c) => c.key === "GET /profiles/1/up-next/30")!.query).toBe(
-      "?playlistId=9&index=0",
+    expect(calls.find((c) => c.key === `GET /profiles/${uid(1)}/up-next/${uid(30)}`)!.query).toBe(
+      `?playlistId=${uid(9)}&index=0`,
     );
     r.querySelector("video")!.dispatchEvent(new Event("ended"));
     expect(r.querySelector(".upnext")!.textContent).toContain(
@@ -609,15 +632,15 @@ describe("player", () => {
   });
 
   it("sends no edition in a Watch together", async () => {
-    await at("#/play/30?edition=402");
+    await at(`#/play/${uid(30)}?edition=${uid(402)}`);
     const r = root();
     const joined = {
-      id: 3,
-      itemId: 30,
+      id: uid(3),
+      itemId: uid(30),
       status: "joined",
       members: [
-        { accountId: 5, name: "Bea", role: "host", present: true, joinedAt: ts },
-        { accountId: 1, name: "Heidi", role: "guest", present: true, joinedAt: ts },
+        { accountId: uid(5), name: "Bea", role: "host", present: true, joinedAt: ts },
+        { accountId: uid(1), name: "Heidi", role: "guest", present: true, joinedAt: ts },
       ],
       joinBy: ts,
       joinMsLeft: 0,
@@ -632,7 +655,10 @@ describe("player", () => {
     };
     await boot(r, {
       fetch: mockFetch(
-        routes({ "GET /watch-together": page([joined]), "GET /watch-together/3": joined }),
+        routes({
+          "GET /watch-together": page([joined]),
+          [`GET /watch-together/${uid(3)}`]: joined,
+        }),
       ),
     });
     await until(() => r.querySelector(".player video"));
@@ -640,7 +666,7 @@ describe("player", () => {
   });
 
   it("says so when the edition has nothing to play", async () => {
-    await at("#/play/30?edition=402");
+    await at(`#/play/${uid(30)}?edition=${uid(402)}`);
     const r = root();
     await boot(r, {
       fetch: mockFetch(

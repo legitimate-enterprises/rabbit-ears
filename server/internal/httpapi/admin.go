@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/api"
@@ -17,6 +16,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/service"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/session"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/task"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // audit logs an admin action with who took it.
@@ -29,7 +29,7 @@ func audit(ctx context.Context, msg string) {
 // mode left out is kept, and a kid's ceilings are defaulted as the profile
 // route does.
 func accountFrom(in *api.AccountInput, a *account.Account) error {
-	if a.ID != 0 && string(in.Kind) != a.Kind {
+	if !a.ID.IsZero() && string(in.Kind) != a.Kind {
 		return invalid("kind", "kind is fixed at creation")
 	}
 	adult := in.Kind == api.Adult
@@ -57,7 +57,7 @@ func (s *Server) withHouseholds(a *account.Account) (api.Account, error) {
 	out := toAccount(a)
 	hs, err := s.svc.Accounts.Repo().Households(a)
 	if hs == nil {
-		hs = []int64{}
+		hs = []uid.ID{}
 	}
 	out.HouseholdIds = &hs
 	return out, err
@@ -91,7 +91,10 @@ func (s *Server) CreateAccount(ctx context.Context, r api.CreateAccountRequestOb
 	if err := accountFrom(r.Body, &a); err != nil {
 		return nil, err
 	}
-	if err := s.svc.Accounts.Repo().Create(&a); err != nil {
+	if r.Body.Id != nil {
+		a.ID = *r.Body.Id
+	}
+	if err := s.svc.Accounts.Repo().Create(&a, actor(ctx)); err != nil {
 		return nil, err
 	}
 	audit(ctx, "Added adult "+a.Name)
@@ -112,6 +115,9 @@ func (s *Server) GetAccount(_ context.Context, r api.GetAccountRequestObject) (a
 // ReplaceAccount edits, promotes, revokes or restores an account; revoking
 // also signs out every device of the account or acting as it.
 func (s *Server) ReplaceAccount(ctx context.Context, r api.ReplaceAccountRequestObject) (api.ReplaceAccountResponseObject, error) {
+	if err := sameID(r.Body.Id, r.AccountId); err != nil {
+		return nil, err
+	}
 	a, err := s.svc.Accounts.Repo().Get(r.AccountId)
 	if err != nil {
 		return nil, err
@@ -135,13 +141,13 @@ func (s *Server) ReplaceAccount(ctx context.Context, r api.ReplaceAccountRequest
 		a.RevokedAt = nil
 	}
 	if revoking {
-		if err := s.signedOut(s.svc.Accounts.Revoke(a)); err != nil {
+		if err := s.signedOut(s.svc.Accounts.Revoke(a, actor(ctx))); err != nil {
 			return nil, err
 		}
 		if err := s.svc.Together.LeaveAccount(a.ID); err != nil {
 			return nil, err
 		}
-	} else if err := s.svc.Accounts.Update(a); err != nil {
+	} else if err := s.svc.Accounts.Update(a, actor(ctx)); err != nil {
 		return nil, err
 	}
 	if err := s.profileChanged(a); err != nil {
@@ -162,7 +168,7 @@ func (s *Server) DeleteAccount(ctx context.Context, r api.DeleteAccountRequestOb
 	if err != nil {
 		return nil, err
 	}
-	if err := s.deleteAccount(a); err != nil {
+	if err := s.deleteAccount(a, actor(ctx)); err != nil {
 		return nil, err
 	}
 	audit(ctx, "Deleted account "+a.Name)
@@ -171,7 +177,7 @@ func (s *Server) DeleteAccount(ctx context.Context, r api.DeleteAccountRequestOb
 
 // deleteAccount deletes a and every account that cascades from it, unless
 // the last active admin is among them.
-func (s *Server) deleteAccount(a *account.Account) error {
+func (s *Server) deleteAccount(a *account.Account, by *uid.ID) error {
 	gone, err := s.svc.Accounts.Repo().DeletedWith(a.ID)
 	if err != nil {
 		return err
@@ -179,7 +185,7 @@ func (s *Server) deleteAccount(a *account.Account) error {
 	if err := s.notLastAdmin(gone...); err != nil {
 		return err
 	}
-	return s.removed(gone, func() (*service.SignedOut, error) { return s.svc.Accounts.Delete(a.ID) })
+	return s.removed(gone, func() (*service.SignedOut, error) { return s.svc.Accounts.Delete(a.ID, by) })
 }
 
 // removed runs del, which deletes the accounts in gone, and finishes what
@@ -188,7 +194,7 @@ func (s *Server) deleteAccount(a *account.Account) error {
 // and go, their Gravatar copies go, and the stations they took are
 // announced.
 func (s *Server) removed(gone []*account.Account, del func() (*service.SignedOut, error)) error {
-	ids := make([]int64, len(gone))
+	ids := make([]uid.ID, len(gone))
 	for i, a := range gone {
 		ids[i] = a.ID
 	}
@@ -259,7 +265,7 @@ func (s *Server) ListHouseholds(_ context.Context, r api.ListHouseholdsRequestOb
 }
 
 // CreateHousehold gives an adult without one a household.
-func (s *Server) CreateHousehold(_ context.Context, r api.CreateHouseholdRequestObject) (api.CreateHouseholdResponseObject, error) {
+func (s *Server) CreateHousehold(ctx context.Context, r api.CreateHouseholdRequestObject) (api.CreateHouseholdResponseObject, error) {
 	a, err := s.svc.Accounts.Repo().Get(r.Body.AdultId)
 	if errors.Is(err, db.ErrNotFound) || (err == nil && a.Kind != account.Adult) {
 		return nil, invalid("adultId", "no such adult")
@@ -270,7 +276,7 @@ func (s *Server) CreateHousehold(_ context.Context, r api.CreateHouseholdRequest
 	if a.HouseholdID != nil {
 		return nil, fail(http.StatusConflict, api.ErrorCodeConflict, "the adult already belongs to a household")
 	}
-	h, err := s.svc.Households.CreateFor(r.Body.Name, a)
+	h, err := s.svc.Households.CreateFor(r.Body.Name, a, r.Body.Id, actor(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -287,7 +293,10 @@ func (s *Server) GetHousehold(_ context.Context, r api.GetHouseholdRequestObject
 }
 
 // ReplaceHousehold renames a household.
-func (s *Server) ReplaceHousehold(_ context.Context, r api.ReplaceHouseholdRequestObject) (api.ReplaceHouseholdResponseObject, error) {
+func (s *Server) ReplaceHousehold(ctx context.Context, r api.ReplaceHouseholdRequestObject) (api.ReplaceHouseholdResponseObject, error) {
+	if err := sameID(r.Body.Id, r.HouseholdId); err != nil {
+		return nil, err
+	}
 	h, err := s.svc.Households.Repo().Get(r.HouseholdId)
 	if err != nil {
 		return nil, err
@@ -296,7 +305,7 @@ func (s *Server) ReplaceHousehold(_ context.Context, r api.ReplaceHouseholdReque
 		return nil, invalid("adultId", "a household's adult is fixed")
 	}
 	h.Name = r.Body.Name
-	if err := s.svc.Households.Repo().Update(h); err != nil {
+	if err := s.svc.Households.Repo().Update(h, actor(ctx)); err != nil {
 		return nil, err
 	}
 	return api.ReplaceHousehold200JSONResponse(toHousehold(h)), nil
@@ -304,7 +313,7 @@ func (s *Server) ReplaceHousehold(_ context.Context, r api.ReplaceHouseholdReque
 
 // DeleteHousehold removes a household with its other members and devices;
 // the owner stays.
-func (s *Server) DeleteHousehold(_ context.Context, r api.DeleteHouseholdRequestObject) (api.DeleteHouseholdResponseObject, error) {
+func (s *Server) DeleteHousehold(ctx context.Context, r api.DeleteHouseholdRequestObject) (api.DeleteHouseholdResponseObject, error) {
 	h, err := s.svc.Households.Repo().Get(r.HouseholdId)
 	if err != nil {
 		return nil, err
@@ -316,7 +325,7 @@ func (s *Server) DeleteHousehold(_ context.Context, r api.DeleteHouseholdRequest
 	if err := s.notLastAdmin(gone...); err != nil {
 		return nil, err
 	}
-	return api.DeleteHousehold204Response{}, s.signedOut(s.svc.Households.Delete(r.HouseholdId))
+	return api.DeleteHousehold204Response{}, s.signedOut(s.svc.Households.Delete(r.HouseholdId, actor(ctx)))
 }
 
 // PutHouseholdMember puts a profile into a household besides its others.
@@ -329,7 +338,7 @@ func (s *Server) PutHouseholdMember(ctx context.Context, r api.PutHouseholdMembe
 		return nil, err
 	}
 	s.householdChanged(r.HouseholdId)
-	audit(ctx, "Put "+a.Name+" into household "+strconv.FormatInt(r.HouseholdId, 10))
+	audit(ctx, "Put "+a.Name+" into household "+r.HouseholdId.String())
 	return api.PutHouseholdMember204Response{}, nil
 }
 
@@ -339,11 +348,11 @@ func (s *Server) DeleteHouseholdMember(ctx context.Context, r api.DeleteHousehol
 	if err != nil {
 		return nil, err
 	}
-	if err := s.signedOut(s.svc.Households.Leave(a, r.HouseholdId)); err != nil {
+	if err := s.signedOut(s.svc.Households.Leave(a, r.HouseholdId, actor(ctx))); err != nil {
 		return nil, err
 	}
 	s.householdChanged(r.HouseholdId)
-	audit(ctx, "Took "+a.Name+" out of household "+strconv.FormatInt(r.HouseholdId, 10))
+	audit(ctx, "Took "+a.Name+" out of household "+r.HouseholdId.String())
 	return api.DeleteHouseholdMember204Response{}, nil
 }
 
@@ -394,7 +403,7 @@ func (s *Server) ReplaceDevice(ctx context.Context, r api.ReplaceDeviceRequestOb
 		if err := s.svc.Playback.EndDevice(d.ID); err != nil {
 			return nil, err
 		}
-		if err := s.svc.Together.LeaveDevice(d.ID, 0); err != nil {
+		if err := s.svc.Together.LeaveDevice(d.ID, nil); err != nil {
 			return nil, err
 		}
 	}
@@ -412,7 +421,7 @@ func (s *Server) DeleteDevice(ctx context.Context, r api.DeleteDeviceRequestObje
 	if err := s.svc.Devices.Repo().Delete(r.DeviceId); err != nil {
 		return nil, err
 	}
-	audit(ctx, "Deleted device "+strconv.FormatInt(r.DeviceId, 10))
+	audit(ctx, "Deleted device "+r.DeviceId.String())
 	return api.DeleteDevice204Response{}, nil
 }
 
@@ -428,12 +437,12 @@ func (s *Server) ListJoinCodes(_ context.Context, r api.ListJoinCodesRequestObje
 }
 
 // CreateJoinCode issues a code for an adult who has not signed in yet.
-func (s *Server) CreateJoinCode(_ context.Context, r api.CreateJoinCodeRequestObject) (api.CreateJoinCodeResponseObject, error) {
+func (s *Server) CreateJoinCode(ctx context.Context, r api.CreateJoinCodeRequestObject) (api.CreateJoinCodeResponseObject, error) {
 	a, err := s.svc.Accounts.Repo().Get(r.Body.AccountId)
 	if err != nil {
 		return nil, err
 	}
-	j, err := s.svc.Auth.IssueJoinCode(a, int(or(r.Body.ExpiresInDays, api.JoinCodeInputExpiresInDaysN7)))
+	j, err := s.svc.Auth.IssueJoinCode(a, int(or(r.Body.ExpiresInDays, api.JoinCodeInputExpiresInDaysN7)), r.Body.Id, actor(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -450,7 +459,7 @@ func (s *Server) GetJoinCode(_ context.Context, r api.GetJoinCodeRequestObject) 
 }
 
 // RevokeJoinCode stamps a code revoked; revoking twice is harmless.
-func (s *Server) RevokeJoinCode(_ context.Context, r api.RevokeJoinCodeRequestObject) (api.RevokeJoinCodeResponseObject, error) {
+func (s *Server) RevokeJoinCode(ctx context.Context, r api.RevokeJoinCodeRequestObject) (api.RevokeJoinCodeResponseObject, error) {
 	j, err := s.svc.JoinCodes.Repo().Get(r.JoinCodeId)
 	if err != nil {
 		return nil, err
@@ -458,7 +467,7 @@ func (s *Server) RevokeJoinCode(_ context.Context, r api.RevokeJoinCodeRequestOb
 	if j.RevokedAt == nil {
 		now := time.Now().UTC()
 		j.RevokedAt = &now
-		if err := s.svc.JoinCodes.Repo().Update(j); err != nil {
+		if err := s.svc.JoinCodes.Repo().Update(j, actor(ctx)); err != nil {
 			return nil, err
 		}
 	}
@@ -541,7 +550,7 @@ func (s *Server) ListTaskRuns(_ context.Context, r api.ListTaskRunsRequestObject
 		return nil, err
 	}
 	limit, offset := paging(r.Params.Limit, r.Params.Offset)
-	all, err := s.svc.Tasks.Repo().History(r.TaskId, offset+limit+1)
+	all, err := s.svc.Tasks.Repo().History(&r.TaskId, offset+limit+1)
 	if err != nil {
 		return nil, err
 	}
@@ -616,7 +625,7 @@ func (s *Server) SetAccountPassword(ctx context.Context, r api.SetAccountPasswor
 	if err != nil {
 		return nil, err
 	}
-	if err := s.signedOut(s.svc.Auth.SetPassword(a, r.Body.Password, caller(ctx).device.ID)); err != nil {
+	if err := s.signedOut(s.svc.Auth.SetPassword(a, r.Body.Password, &caller(ctx).device.ID, actor(ctx))); err != nil {
 		return nil, err
 	}
 	audit(ctx, "Set a new password for "+a.Name)

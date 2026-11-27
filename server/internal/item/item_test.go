@@ -13,19 +13,22 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/library"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/person"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 func intp(n int) *int { return &n }
 
-func setup(t *testing.T) (*item.Repo, int64, int64) {
+func idp(id uid.ID) *uid.ID { return &id }
+
+func setup(t *testing.T) (*item.Repo, uid.ID, uid.ID) {
 	d := dbtest.OpenPreferLocal(t)
 	lr := library.New(d)
 	tv := &library.Library{Name: "tv", Kind: library.TV}
 	mv := &library.Library{Name: "mv", Kind: library.Movies}
-	if err := lr.Create(tv); err != nil {
+	if err := lr.Create(tv, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := lr.Create(mv); err != nil {
+	if err := lr.Create(mv, nil); err != nil {
 		t.Fatal(err)
 	}
 	return item.New(d), tv.ID, mv.ID
@@ -90,7 +93,7 @@ func TestTreeConstraintsAndQueries(t *testing.T) {
 	if err := r.Create(&item.Item{LibraryID: tv, Kind: item.Show, Path: "/tv/Lost", ParsedTitle: "again"}); !errors.Is(err, db.ErrConflict) {
 		t.Fatalf("duplicate path: %v", err)
 	}
-	if err := r.Create(&item.Item{LibraryID: 99, Kind: item.Movie, ParsedTitle: "x"}); !errors.Is(err, db.ErrReference) {
+	if err := r.Create(&item.Item{LibraryID: uid.N(99), Kind: item.Movie, ParsedTitle: "x"}); !errors.Is(err, db.ErrReference) {
 		t.Fatalf("bad library: %v", err)
 	}
 
@@ -104,21 +107,21 @@ func TestTreeConstraintsAndQueries(t *testing.T) {
 	if len(eps) != 3 || eps[0].ParsedTitle != "Special" || eps[1].ParsedTitle != "One" || eps[2].ParsedTitle != "Two" {
 		t.Fatalf("episode order: %+v", eps)
 	}
-	kids, _ := r.List(item.Filter{ParentID: s1.ID})
+	kids, _ := r.List(item.Filter{ParentID: &s1.ID})
 	if len(kids) != 2 || kids[0].ParsedTitle != "One" {
 		t.Fatalf("%+v", kids)
 	}
-	if n, _ := r.Count(item.Filter{LibraryID: tv, Kind: item.Episode}); n != 3 {
+	if n, _ := r.Count(item.Filter{LibraryID: &tv, Kind: item.Episode}); n != 3 {
 		t.Fatal(n)
 	}
-	if page, _ := r.List(item.Filter{LibraryID: tv, Kind: item.Episode, Limit: 1, Offset: 2}); len(page) != 1 {
+	if page, _ := r.List(item.Filter{LibraryID: &tv, Kind: item.Episode, Limit: 1, Offset: 2}); len(page) != 1 {
 		t.Fatal(len(page))
 	}
 
 	if err := r.Delete(show.ID); err != nil {
 		t.Fatal(err)
 	}
-	if n, _ := r.Count(item.Filter{LibraryID: tv}); n != 0 {
+	if n, _ := r.Count(item.Filter{LibraryID: &tv}); n != 0 {
 		t.Fatalf("children should cascade, %d left", n)
 	}
 }
@@ -155,7 +158,7 @@ func TestMetadata(t *testing.T) {
 	if m, _ := r.Metadata(a.ID); m.Title != "Renamed" || m.ProviderID != nil {
 		t.Fatalf("upsert: %+v", m)
 	}
-	if all, err := r.MetadataFor([]int64{a.ID, b.ID, 999}); err != nil || len(all) != 2 || all[a.ID].Title != "Renamed" || all[b.ID].RetryAt == nil {
+	if all, err := r.MetadataFor([]uid.ID{a.ID, b.ID, uid.N(999)}); err != nil || len(all) != 2 || all[a.ID].Title != "Renamed" || all[b.ID].RetryAt == nil {
 		t.Fatalf("batched: %v %v", all, err)
 	}
 	if none, err := r.MetadataFor(nil); err != nil || len(none) != 0 {
@@ -171,7 +174,7 @@ func TestMetadata(t *testing.T) {
 	if w, _ := r.WithoutMetadata(mv, 10); len(w) != 0 {
 		t.Fatal(len(w))
 	}
-	if err := r.SetMetadata(&item.Metadata{ItemID: 999}); !errors.Is(err, db.ErrReference) {
+	if err := r.SetMetadata(&item.Metadata{ItemID: uid.N(999)}); !errors.Is(err, db.ErrReference) {
 		t.Fatal(err)
 	}
 	if err := r.DeleteMetadata(a.ID); err != nil {
@@ -216,7 +219,7 @@ func TestSearchGenreAndPersonFilters(t *testing.T) {
 	libs, r, genres, people := library.New(d), item.New(d), genre.New(d), person.New(d)
 	tv, mv := &library.Library{Name: "tv", Kind: library.TV}, &library.Library{Name: "mv", Kind: library.Movies}
 	for _, l := range []*library.Library{tv, mv} {
-		if err := libs.Create(l); err != nil {
+		if err := libs.Create(l, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -232,7 +235,7 @@ func TestSearchGenreAndPersonFilters(t *testing.T) {
 	s1 := mustCreate(t, r, &item.Item{LibraryID: tv.ID, ParentID: &bluey.ID, Kind: item.Season, ParsedTitle: "Bluey", SeasonNumber: intp(1)})
 	ep := meta(mustCreate(t, r, &item.Item{LibraryID: tv.ID, ParentID: &s1.ID, Kind: item.Episode, ParsedTitle: "Bluey", EpisodeNumber: intp(1)}), "The Magic Xylophone", "")
 
-	search := func(f item.Filter) []int64 {
+	search := func(f item.Filter) []uid.ID {
 		t.Helper()
 		its, err := r.List(f)
 		if err != nil {
@@ -242,13 +245,13 @@ func TestSearchGenreAndPersonFilters(t *testing.T) {
 		if err != nil || n != len(its) {
 			t.Fatalf("count %d for %d listed: %v", n, len(its), err)
 		}
-		out := []int64{}
+		out := []uid.ID{}
 		for _, it := range its {
 			out = append(out, it.ID)
 		}
 		return out
 	}
-	same := func(got []int64, want ...int64) bool { return slices.Equal(got, want) }
+	same := func(got []uid.ID, want ...uid.ID) bool { return slices.Equal(got, want) }
 	if got := search(item.Filter{Q: "THE MA"}); !same(got, ep.ID, matrix.ID) {
 		t.Errorf("provider titles of movies and episodes match, ignoring case: %v", got)
 	}
@@ -270,10 +273,10 @@ func TestSearchGenreAndPersonFilters(t *testing.T) {
 		t.Fatal(err)
 	}
 	crime, _ := genres.ForItem(heat.ID)
-	if got := search(item.Filter{GenreID: crime[0].ID}); !same(got, heat.ID, matrix.ID) {
+	if got := search(item.Filter{GenreID: &crime[0].ID}); !same(got, heat.ID, matrix.ID) {
 		t.Errorf("genre: %v", got)
 	}
-	if got := search(item.Filter{GenreID: crime[0].ID, Q: "heat"}); !same(got, heat.ID) {
+	if got := search(item.Filter{GenreID: &crime[0].ID, Q: "heat"}); !same(got, heat.ID) {
 		t.Errorf("genre and q: %v", got)
 	}
 	keanu := &person.Person{Name: "Keanu Reeves"}
@@ -283,10 +286,10 @@ func TestSearchGenreAndPersonFilters(t *testing.T) {
 	if err := people.SetCredits(matrix.ID, []person.Credit{{PersonID: keanu.ID, Kind: person.Cast}}); err != nil {
 		t.Fatal(err)
 	}
-	if got := search(item.Filter{PersonID: keanu.ID}); !same(got, matrix.ID) {
+	if got := search(item.Filter{PersonID: &keanu.ID}); !same(got, matrix.ID) {
 		t.Errorf("person: %v", got)
 	}
-	if got := search(item.Filter{PersonID: keanu.ID, Audience: kid}); len(got) != 0 {
+	if got := search(item.Filter{PersonID: &keanu.ID, Audience: kid}); len(got) != 0 {
 		t.Errorf("person filter respects the kid: %v", got)
 	}
 }
@@ -321,7 +324,7 @@ func TestNewestOfAKindWalksTheIndex(t *testing.T) {
 	d := dbtest.Open(t)
 	p := &dbtest.Planner{DBTX: d}
 	r := item.New(p)
-	for _, a := range []item.Audience{{}, {Kid: true, AccountID: 1, Movie: []string{"G"}}, {Kid: true, AccountID: 1, AllowList: true}, {HideKids: true}} {
+	for _, a := range []item.Audience{{}, {Kid: true, AccountID: idp(uid.N(1)), Movie: []string{"G"}}, {Kid: true, AccountID: idp(uid.N(1)), AllowList: true}, {HideKids: true}} {
 		p.Plans = nil
 		if _, err := r.List(item.Filter{Kind: item.Movie, Catalog: true, Newest: true, Audience: a, Limit: 14}); err != nil {
 			t.Fatal(err)

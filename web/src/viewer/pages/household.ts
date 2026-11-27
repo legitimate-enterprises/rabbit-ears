@@ -142,7 +142,7 @@ export async function household(ctx: Ctx): Promise<HTMLElement[]> {
     const adults = await paged((offset) =>
       ok(ctx.api.GET("/household/linked-adults", { params: { query: { limit: 200, offset } } })),
     );
-    let to = 0;
+    let to: string | undefined;
     const d = ask(
       `Share ${p.name}`,
       `Offer ${p.name} to an adult in another household. Once they accept, ${p.name} appears in Who's watching there with the same watch history, playlists and limits, and the adults there can change ${p.name}'s settings as you can.`,
@@ -167,7 +167,9 @@ export async function household(ctx: Ctx): Promise<HTMLElement[]> {
         h("p.sub", "Only adults the server's admin has connected you with appear here."),
       ],
       async () => {
-        await ok(ctx.api.POST("/household/offers", { body: { profileId: p.id, toProfileId: to } }));
+        await ok(
+          ctx.api.POST("/household/offers", { body: { profileId: p.id, toProfileId: to! } }),
+        );
         ctx.reload();
       },
     );

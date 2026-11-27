@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/api"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 func TestHealthIsPublic(t *testing.T) {
@@ -38,7 +39,7 @@ func TestSpecSecurityIsEnforced(t *testing.T) {
 			if p == "{code}" {
 				return "AAAA-AAAA"
 			}
-			return "999"
+			return uid.N(999).String()
 		})
 		for method, op := range item.Operations() {
 			sec := doc.Security

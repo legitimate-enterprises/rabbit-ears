@@ -13,7 +13,7 @@ import (
 func TestNextRowOnAPlayOrderLongerThanABindLimit(t *testing.T) {
 	a := newAiring(t)
 	l := &library.Library{Name: "Music", Kind: library.Music}
-	a.must(a.s.Libraries.Repo().Create(l))
+	a.must(a.s.Libraries.Repo().Create(l, nil))
 	artist := &item.Item{LibraryID: l.ID, Kind: item.Artist, ParsedTitle: "Artist"}
 	a.must(a.s.Items.Repo().Create(artist))
 	album := &item.Item{LibraryID: l.ID, ParentID: &artist.ID, Kind: item.Album, ParsedTitle: "Album"}
@@ -24,14 +24,14 @@ func TestNextRowOnAPlayOrderLongerThanABindLimit(t *testing.T) {
 			ParsedTitle: fmt.Sprintf("Song %05d", i), TrackNumber: &n}))
 	}
 	p := &playlist.Playlist{AccountID: a.owner.ID, Name: "Everything", Kind: playlist.Music}
-	a.must(a.s.Playlists.Repo().Create(p))
-	a.must(a.s.Playlists.Repo().AddEntry(&playlist.Entry{PlaylistID: p.ID, ItemID: artist.ID}, nil))
+	a.must(a.s.Playlists.Repo().Create(p, nil))
+	a.must(a.s.Playlists.Repo().AddEntry(&playlist.Entry{PlaylistID: p.ID, ItemID: &artist.ID}, nil, nil))
 	rows, err := a.s.Playlists.Repo().PlayOrder(p.ID, item.Audience{}, -1, 0)
 	a.must(err)
 	zero := 0
 	row, at, ok, err := a.s.UpNext.NextRow(p.ID, rows[0].ItemID, &zero, item.Audience{})
 	a.must(err)
 	if !ok || at != 1 || row.ItemID != rows[1].ItemID {
-		t.Fatalf("next = %d at %d ok %v, want %d at 1", row.ItemID, at, ok, rows[1].ItemID)
+		t.Fatalf("next = %s at %d ok %v, want %s at 1", row.ItemID, at, ok, rows[1].ItemID)
 	}
 }

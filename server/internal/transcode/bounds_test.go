@@ -14,6 +14,7 @@ import (
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/mediafile"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/session"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // gopClip is 80 s of H.264 with a keyframe every 4.3 s, off the segment grid.
@@ -97,7 +98,7 @@ func TestCopiedSegmentsMatchAcrossRuns(t *testing.T) {
 	job := Job{Input: clip, Entry: &session.PlanEntry{VideoAction: "copy", AudioAction: "convert", AudioChannels: 2}, Bounds: b,
 		Video: &mediafile.Track{StreamIndex: 0, Kind: mediafile.Video, Codec: "h264"}, Audio: &mediafile.Track{StreamIndex: 1, Kind: mediafile.Audio, Codec: "aac"}}
 	for run, from := range []int{0, 2, 1} {
-		st := Stream{SessionID: int64(run + 1), Key: "0-0", Job: job}
+		st := Stream{SessionID: uid.N(run + 1), Key: "0-0", Job: job}
 		init, err := m.Init(ctx, st, from)
 		must(t, err)
 		for n := from; n < from+3; n++ {
@@ -147,7 +148,7 @@ func TestCopiedBFrameSegmentsSpanTheirBounds(t *testing.T) {
 			Video: &mediafile.Track{StreamIndex: 0, Kind: mediafile.Video, Codec: "h264"}, Audio: &mediafile.Track{StreamIndex: 1, Kind: mediafile.Audio, Codec: "aac"}}
 		starts := map[int]float64{}
 		for _, from := range []int{0, 2, 1} {
-			st := Stream{SessionID: int64(from), Key: fmt.Sprintf("%v", ts), Job: job}
+			st := Stream{SessionID: uid.N(from), Key: fmt.Sprintf("%v", ts), Job: job}
 			init := ""
 			if !ts {
 				init, err = m.Init(ctx, st, from)
@@ -223,7 +224,7 @@ func TestRestartKeepsEncodedSegments(t *testing.T) {
 	ctx := context.Background()
 	b, err := m.Bounds(ctx, clip, 80_000)
 	must(t, err)
-	st := Stream{SessionID: 1, Key: "0-0", Job: Job{Input: clip, Entry: &session.PlanEntry{VideoAction: "copy", AudioAction: "copy"}, Bounds: b,
+	st := Stream{SessionID: uid.N(1), Key: "0-0", Job: Job{Input: clip, Entry: &session.PlanEntry{VideoAction: "copy", AudioAction: "copy"}, Bounds: b,
 		Video: &mediafile.Track{StreamIndex: 0, Kind: mediafile.Video, Codec: "h264"}}}
 	init, err := m.Init(ctx, st, 0)
 	must(t, err)

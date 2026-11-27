@@ -15,15 +15,16 @@ const ENCODER: Record<Schemas["Session"]["encoder"], string> = {
 
 /** What a page's polls have already resolved, so a poll asks only about what is new. */
 const known = () => ({
-  titles: new Map<number, string>(),
-  files: new Map<number, number>(),
-  who: new Map<number, string>(),
-  dev: new Map<number, string>(),
+  titles: new Map<string, string>(),
+  files: new Map<string, string | undefined>(),
+  who: new Map<string, string>(),
+  dev: new Map<string, string>(),
 });
 type Known = ReturnType<typeof known>;
 
 // /items finds movies, shows, seasons and episodes only; a song or a YouTube video has its own endpoint.
-export async function playingTitle(api: Ctx["api"], id: number, seen?: Known["titles"]) {
+export async function playingTitle(api: Ctx["api"], id?: string, seen?: Known["titles"]) {
+  if (id === undefined) return undefined;
   const hit = seen?.get(id);
   if (hit) return hit;
   const lookups = [
@@ -114,7 +115,7 @@ async function conversionRows(api: Ctx["api"], k: Known) {
   return Promise.all(
     conversions.items.map(async (c) => {
       let itemId = k.files.get(c.mediaFileId);
-      if (itemId === undefined) {
+      if (!k.files.has(c.mediaFileId)) {
         const f = await ok(
           api.GET("/media-files/{mediaFileId}", {
             params: { path: { mediaFileId: c.mediaFileId } },
@@ -122,7 +123,9 @@ async function conversionRows(api: Ctx["api"], k: Known) {
         );
         k.files.set(c.mediaFileId, (itemId = f.itemId));
       }
-      const name = (await playingTitle(api, itemId, k.titles)) ?? `Item ${itemId}`;
+      const name =
+        (await playingTitle(api, itemId, k.titles)) ??
+        (itemId === undefined ? "Untitled" : `Item ${itemId}`);
       const detail = ["Download", target(c), ...(c.status === "queued" ? ["Queued"] : [])];
       return h("div", h("div", name, " ", sub(`· ${detail.join(" · ")}`)), bar(c.progress));
     }),
@@ -174,7 +177,7 @@ export async function dashboard(ctx: Ctx): Promise<HTMLElement[]> {
     ok(api.GET("/tasks", { params: { query: { limit: 200 } } })),
     scanTasks(api),
   ]);
-  const scanBtn = (id: number) => {
+  const scanBtn = (id: string) => {
     const t = scans.get(id);
     return h(
       "button.ib",

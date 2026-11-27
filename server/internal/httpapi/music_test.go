@@ -12,21 +12,22 @@ import (
 	"time"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/api"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/library"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/playlist"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/probe"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/scan"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // scannedMusic scans a copy of the music fixtures into a new Music library
 // the way the nightly task does, without a metadata provider.
-func (e *env) scannedMusic() int64 {
+func (e *env) scannedMusic() uid.ID {
 	e.t.Helper()
 	src := fixturePath(e.t, "music")
 	lib := e.library("music")
 	root := e.t.TempDir()
 	must(e.t, os.CopyFS(root, os.DirFS(src)))
-	_, err := e.svc.Libraries.Repo().AddFolder(lib, root)
-	must(e.t, err)
+	must(e.t, e.svc.Libraries.Repo().AddFolder(&library.Folder{LibraryID: lib, Path: root}, nil))
 	l, err := e.svc.Libraries.Repo().Get(lib)
 	must(e.t, err)
 	sc := scan.New(scan.Config{Libraries: e.svc.Libraries.Repo(), Items: e.svc.Items.Repo(), Files: e.svc.MediaFiles.Repo(),
@@ -144,10 +145,10 @@ func TestMusicBrowse(t *testing.T) {
 
 	// Album art is the FLAC's embedded cover; a song and an artist show
 	// their album's.
-	for _, id := range []int64{m.album.Id, m.songs[1].Id, m.band.Id, m.loose.Id} {
+	for _, id := range []uid.ID{m.album.Id, m.songs[1].Id, m.band.Id, m.loose.Id} {
 		res, body := e.raw("GET", "/items/"+itoa(id)+"/artwork/poster", e.plain.token)
 		if res.StatusCode != 200 || res.Header.Get("Content-Type") != "image/jpeg" || len(body) < 100 {
-			t.Fatalf("art of %d: %d %q", id, res.StatusCode, res.Header.Get("Content-Type"))
+			t.Fatalf("art of %s: %d %q", id, res.StatusCode, res.Header.Get("Content-Type"))
 		}
 	}
 	e.expect(404, "GET", "/items/"+itoa(m.guest.Id)+"/artwork/poster", e.plain.token, nil, nil)
@@ -288,10 +289,10 @@ func TestRecentlyPlayedAndPopular(t *testing.T) {
 		t.Fatalf("%+v", recent)
 	}
 	mix := &playlist.Playlist{AccountID: e.plain.account.ID, Name: "Mix", Kind: playlist.Music}
-	must(t, e.svc.Playlists.Repo().Create(mix))
-	must(t, e.svc.Playlists.Repo().AddEntry(&playlist.Entry{PlaylistID: mix.ID, ItemID: m.songs[2].Id}, nil))
+	must(t, e.svc.Playlists.Repo().Create(mix, nil))
+	must(t, e.svc.Playlists.Repo().AddEntry(&playlist.Entry{PlaylistID: mix.ID, ItemID: &m.songs[2].Id}, nil, nil))
 	theirs := &playlist.Playlist{AccountID: e.admin.account.ID, Name: "Theirs", Kind: playlist.Music}
-	must(t, e.svc.Playlists.Repo().Create(theirs))
+	must(t, e.svc.Playlists.Repo().Create(theirs, nil))
 
 	snap := songSnapshot(true, false)
 	e.start(m.songs[1].Id, snap)
@@ -349,7 +350,7 @@ func TestRecentlyPlayedKeepsPlaylistsPrivate(t *testing.T) {
 	e := newEnv(t)
 	claire := e.householdAdult(e.plain, "Claire", "claire@example.test")
 	mix := &playlist.Playlist{AccountID: claire.Me.Account.Id, Name: "Claire's mix", Kind: playlist.Music}
-	must(t, e.svc.Playlists.Repo().Create(mix))
+	must(t, e.svc.Playlists.Repo().Create(mix, nil))
 	must(t, e.svc.Playlists.Repo().MarkPlayed(mix.ID, time.Now().UTC()))
 	p := "/profiles/" + itoa(claire.Me.Account.Id) + "/music/recently-played"
 	var recent api.MusicRecentPage

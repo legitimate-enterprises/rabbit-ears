@@ -128,7 +128,7 @@ export function firstRun(root: HTMLElement, d: Deps) {
     const path = input("text", { required: true, placeholder: "/Volumes/Media/Movies" });
     const err = errorLine();
     // Made before its folder was refused; the next try adds only the folder.
-    let libraryId: number | undefined;
+    let libraryId: string | undefined;
     kind.addEventListener("change", () => (name.value = kind.value === "tv" ? "TV" : "Movies"));
     const form = h(
       "form.card",

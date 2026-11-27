@@ -31,6 +31,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/seekpreview"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/serverinfo"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/tmdb"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/watchstate"
 )
 
@@ -129,10 +130,10 @@ func newEnv(t *testing.T, kind, key string) *env {
 	e := &env{t: t, root: t.TempDir(), items: item.New(d), files: mediafile.New(d), clock: &clock, tmdbUp: up, d: d, probes: new(int32)}
 	libs := library.New(d)
 	e.lib = &library.Library{Name: "L", Kind: kind, ScanHour: 3, WatchFiles: true}
-	if err := libs.Create(e.lib); err != nil {
+	if err := libs.Create(e.lib, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := libs.AddFolder(e.lib.ID, e.root); err != nil {
+	if err := libs.AddFolder(&library.Folder{LibraryID: e.lib.ID, Path: e.root}, nil); err != nil {
 		t.Fatal(err)
 	}
 	client := tmdb.New(tmdb.Config{Key: key, BaseURL: srv.URL, ImageBaseURL: srv.URL + "/img", CacheDir: t.TempDir()})
@@ -160,7 +161,7 @@ func (e *env) mustScan() {
 
 func (e *env) list(kind string) []*item.Item {
 	e.t.Helper()
-	its, err := e.items.List(item.Filter{LibraryID: e.lib.ID, Kind: kind, Limit: 1000})
+	its, err := e.items.List(item.Filter{LibraryID: &e.lib.ID, Kind: kind, Limit: 1000})
 	if err != nil {
 		e.t.Fatal(err)
 	}
@@ -199,7 +200,7 @@ func TestScanMovie(t *testing.T) {
 	e.wantGenresAndCredits(ms[0].ID, 2, 3, 3)
 }
 
-func (e *env) wantGenresAndCredits(itemID int64, genres, cast, crew int) {
+func (e *env) wantGenresAndCredits(itemID uid.ID, genres, cast, crew int) {
 	e.t.Helper()
 	gs, err := e.s.Genres.ForItem(itemID)
 	if err != nil || len(gs) != genres {
@@ -246,13 +247,13 @@ func TestRefreshStoresKeywords(t *testing.T) {
 		t.Fatal(err)
 	}
 	o := &occasion.Occasion{Name: "Dystopia Day", Month: 5, Day: 1, Keywords: []int64{4565}}
-	if err := occasion.New(e.d).Create(o); err != nil {
+	if err := occasion.New(e.d).Create(o, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := e.s.RetryDue(context.Background(), 10); err != nil {
 		t.Fatal(err)
 	}
-	if ms, err := e.items.List(item.Filter{OccasionID: o.ID}); err != nil || len(ms) != 1 || ms[0].ID != it.ID {
+	if ms, err := e.items.List(item.Filter{OccasionID: &o.ID}); err != nil || len(ms) != 1 || ms[0].ID != it.ID {
 		t.Fatalf("members %+v %v", ms, err)
 	}
 }
@@ -522,11 +523,11 @@ func TestUnmountedVolumeMarksFilesAndDeletesNothing(t *testing.T) {
 			e.mustScan()
 			m := e.onlyMovie()
 			who := &account.Account{Kind: account.Adult, Email: "a@example.test", Name: "A"}
-			must(t, account.New(e.d).Create(who))
+			must(t, account.New(e.d).Create(who, nil))
 			states := watchstate.New(e.d)
 			must(t, states.Save(&watchstate.State{AccountID: who.ID, ItemID: m.ID, PositionMs: 5000}))
 			f, _ := e.files.FileByPath(a)
-			thumbs := filepath.Join(e.s.ThumbDir, strconv.FormatInt(f.ID, 10))
+			thumbs := filepath.Join(e.s.ThumbDir, f.ID.String())
 			if _, err := os.Stat(thumbs); err != nil {
 				t.Fatal(err)
 			}
@@ -621,8 +622,7 @@ func TestUnmountedVolumeKeepsItsReviews(t *testing.T) {
 func TestUnmountedShowIsNotTakenForRenamed(t *testing.T) {
 	e := newEnv(t, library.TV, "")
 	other := t.TempDir()
-	_, err := e.s.Libraries.AddFolder(e.lib.ID, other)
-	must(t, err)
+	must(t, e.s.Libraries.AddFolder(&library.Folder{LibraryID: e.lib.ID, Path: other}, nil))
 	fixtureCopy(t, "h264-high41.mp4", filepath.Join(e.root, "Lamp Street", "Lamp Street - S01E01.mp4"))
 	e.mustScan()
 	show := e.list(item.Show)[0]
@@ -731,8 +731,8 @@ func TestScanOfARootStoredWithATrailingSlash(t *testing.T) {
 // state, and a name that now holds more episodes gains the others.
 func TestRescanKeepsItemsScannedUnderTheOldParse(t *testing.T) {
 	who := &account.Account{Kind: account.Adult, Email: "a@example.test", Name: "A"}
-	watch := func(e *env, ids ...int64) *watchstate.Repo {
-		must(t, account.New(e.d).Create(who))
+	watch := func(e *env, ids ...uid.ID) *watchstate.Repo {
+		must(t, account.New(e.d).Create(who, nil))
 		states := watchstate.New(e.d)
 		for _, id := range ids {
 			must(t, states.Save(&watchstate.State{AccountID: who.ID, ItemID: id, PositionMs: 5000}))
@@ -761,7 +761,7 @@ func TestRescanKeepsItemsScannedUnderTheOldParse(t *testing.T) {
 			year  *int
 		}
 		before := map[string]read{"(500) Days of Summer": {"Days of Summer", y(2009)}, "Blade Runner 2049": {"Blade Runner", y(2049)}, "REC": {"2007", nil}}
-		var ids []int64
+		var ids []uid.ID
 		for _, m := range e.list(item.Movie) {
 			ids = append(ids, m.ID)
 			asScanned(e, m, before[m.ParsedTitle].title, before[m.ParsedTitle].year)
@@ -773,15 +773,15 @@ func TestRescanKeepsItemsScannedUnderTheOldParse(t *testing.T) {
 		e.mustScan()
 		for _, id := range ids {
 			if _, err := states.Get(who.ID, id); err != nil {
-				t.Errorf("movie %d lost its watch state: %v", id, err)
+				t.Errorf("movie %s lost its watch state: %v", id, err)
 			}
 		}
-		var after []int64
+		var after []uid.ID
 		for _, m := range e.list(item.Movie) {
 			after = append(after, m.ID)
 		}
-		slices.Sort(ids)
-		slices.Sort(after)
+		slices.SortFunc(ids, uid.ID.Compare)
+		slices.SortFunc(after, uid.ID.Compare)
 		if !slices.Equal(after, ids) {
 			t.Errorf("movies after rescan %v, want %v", after, ids)
 		}
@@ -795,7 +795,7 @@ func TestRescanKeepsItemsScannedUnderTheOldParse(t *testing.T) {
 		touch(t, filepath.Join(e.root, "Band", "(500) Days (2009)", "01 Song.mp3"))
 		touch(t, filepath.Join(e.root, "Band", "[REC] (2007)", "01 Song.mp3"))
 		e.mustScan()
-		albums := map[int64]string{}
+		albums := map[uid.ID]string{}
 		for _, a := range e.list(item.Album) {
 			if a.ParsedTitle == "(500) Days" {
 				asScanned(e, a, "Days", y(2009))
@@ -811,7 +811,7 @@ func TestRescanKeepsItemsScannedUnderTheOldParse(t *testing.T) {
 		}
 		for _, a := range now {
 			if albums[a.ID] == "" || a.ParsedTitle != albums[a.ID] {
-				t.Errorf("album %d is %q, want the one it had", a.ID, a.ParsedTitle)
+				t.Errorf("album %s is %q, want the one it had", a.ID, a.ParsedTitle)
 			}
 		}
 	})
@@ -845,7 +845,7 @@ func TestRescanKeepsItemsScannedUnderTheOldParse(t *testing.T) {
 		}
 		// Scanned before, the file held episode 1 alone.
 		must(t, e.items.Delete(second.ID))
-		var ids []int64
+		var ids []uid.ID
 		for _, ep := range e.list(item.Episode) {
 			ids = append(ids, ep.ID)
 		}
@@ -853,7 +853,7 @@ func TestRescanKeepsItemsScannedUnderTheOldParse(t *testing.T) {
 		e.mustScan()
 		for _, id := range ids {
 			if _, err := states.Get(who.ID, id); err != nil {
-				t.Errorf("episode %d lost its watch state: %v", id, err)
+				t.Errorf("episode %s lost its watch state: %v", id, err)
 			}
 		}
 		if got := len(e.list(item.Episode)); got != 3 {

@@ -1,9 +1,12 @@
 package item
 
-import "github.com/legitimate-enterprises/rabbit-ears/server/internal/db"
+import (
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
+)
 
 // SetKeywords replaces a movie's or show's TMDB keyword ids.
-func (r *Repo) SetKeywords(itemID int64, ids []int64) error {
+func (r *Repo) SetKeywords(itemID uid.ID, ids []int64) error {
 	return db.InTx(r.d, func(tx db.DBTX) error {
 		if _, err := tx.Exec(`DELETE FROM item_keyword WHERE item_id = ?`, itemID); err != nil {
 			return db.Wrap(err)

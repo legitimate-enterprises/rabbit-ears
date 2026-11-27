@@ -17,7 +17,11 @@ import (
 )
 
 //go:embed migrations/*.sql
-var migrationFS embed.FS
+var embedded embed.FS
+
+// migrationFS holds the migrations under migrations/; tests swap in a set
+// of their own.
+var migrationFS fs.FS = embedded
 
 type migration struct {
 	version int
@@ -42,7 +46,7 @@ func loadMigrations() ([]migration, error) {
 		if !ok || convErr != nil {
 			return nil, fmt.Errorf("migration %q: name must start with a number and underscore", e.Name())
 		}
-		body, err := migrationFS.ReadFile("migrations/" + e.Name())
+		body, err := fs.ReadFile(migrationFS, "migrations/"+e.Name())
 		if err != nil {
 			return nil, err
 		}

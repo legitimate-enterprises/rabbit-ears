@@ -7,6 +7,7 @@ import (
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/api"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 func (e *env) search(token, q string) api.SearchResult {
@@ -16,7 +17,7 @@ func (e *env) search(token, q string) api.SearchResult {
 	return out
 }
 
-func found(items []api.Item) []int64 { return itemIDs(api.ItemPage{Items: items}) }
+func found(items []api.Item) []uid.ID { return itemIDs(api.ItemPage{Items: items}) }
 
 func TestUniversalSearch(t *testing.T) {
 	e := newEnv(t)
@@ -31,7 +32,7 @@ func TestUniversalSearch(t *testing.T) {
 	e.expect(201, "POST", "/people", e.admin.token, map[string]any{"name": "Gordon Lightfoot"}, &foot)
 
 	got := e.search(e.plain.token, "light")
-	if !slices.Equal(found(got.Movies), []int64{years, twilight}) || !slices.Equal(found(got.Shows), []int64{show}) || !slices.Equal(found(got.Episodes), []int64{ep}) {
+	if !slices.Equal(found(got.Movies), []uid.ID{years, twilight}) || !slices.Equal(found(got.Shows), []uid.ID{show}) || !slices.Equal(found(got.Episodes), []uid.ID{ep}) {
 		t.Fatalf("titles, a prefix first: %+v %+v %+v", got.Movies, got.Shows, got.Episodes)
 	}
 	if len(got.People) != 1 || got.People[0].Id != foot.Id || len(got.Albums) != 1 || got.Albums[0].Id != m.album.Id ||
@@ -52,7 +53,7 @@ func TestUniversalSearch(t *testing.T) {
 	}
 	var capped api.SearchResult
 	e.expect(200, "GET", "/search?q=light&limit=1", e.plain.token, nil, &capped)
-	if !slices.Equal(found(capped.Movies), []int64{years}) {
+	if !slices.Equal(found(capped.Movies), []uid.ID{years}) {
 		t.Fatalf("%+v", capped.Movies)
 	}
 	e.expect(400, "GET", "/search?q=", e.plain.token, nil, nil)
@@ -63,7 +64,7 @@ func TestUniversalSearch(t *testing.T) {
 	k := e.kid(e.plain, "Kid")
 	kidToken := e.kidDevice(e.plain, k.Id)
 	got = e.search(kidToken, "light")
-	if !slices.Equal(found(got.Movies), []int64{years}) || len(got.Shows)+len(got.Episodes)+len(got.People) != 0 || len(got.Albums) != 1 {
+	if !slices.Equal(found(got.Movies), []uid.ID{years}) || len(got.Shows)+len(got.Episodes)+len(got.People) != 0 || len(got.Albums) != 1 {
 		t.Fatalf("%+v", got)
 	}
 	got = e.search(kidToken, "bench")

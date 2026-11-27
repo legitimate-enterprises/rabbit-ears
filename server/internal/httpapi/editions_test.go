@@ -11,17 +11,18 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/api"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/mediafile"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/probe"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // copyOf adds a probed fixture to movie m as the scanner would, in the
 // edition its tag names ("" for the untagged one), and returns its file id.
-func (e *env) copyOf(m int64, name, tag string) int64 {
+func (e *env) copyOf(m uid.ID, name, tag string) uid.ID {
 	e.t.Helper()
 	src := fixturePath(e.t, name)
 	r, err := probe.Run(context.Background(), src)
 	must(e.t, err)
 	now := time.Now().UTC()
-	f := &mediafile.File{Path: e.onDisk("/films/" + tag + "/" + name), SizeBytes: 1, ModifiedAt: now, Container: r.Container, DurationMs: r.DurationMs,
+	f := &mediafile.File{Path: e.onDisk("/films/" + tag + "/" + name), SizeBytes: 1, FileModifiedAt: now, Container: r.Container, DurationMs: r.DurationMs,
 		Bitrate: r.Bitrate, ProbedAt: &now}
 	must(e.t, e.svc.MediaFiles.Repo().CreateFile(f))
 	must(e.t, e.svc.MediaFiles.Repo().ReplaceTracks(f.ID, r.Tracks))
@@ -30,7 +31,7 @@ func (e *env) copyOf(m int64, name, tag string) int64 {
 	return f.ID
 }
 
-func (e *env) startEdition(item, edition int64, snap map[string]any) api.PlaybackStream {
+func (e *env) startEdition(item, edition uid.ID, snap map[string]any) api.PlaybackStream {
 	e.t.Helper()
 	var st api.PlaybackStream
 	e.expect(201, "POST", "/playback/sessions", e.plain.token, map[string]any{"profileId": e.plain.account.ID, "itemId": item,
@@ -38,7 +39,7 @@ func (e *env) startEdition(item, edition int64, snap map[string]any) api.Playbac
 	return st
 }
 
-func (e *env) sessionFile(id int64) int64 {
+func (e *env) sessionFile(id uid.ID) uid.ID {
 	e.t.Helper()
 	s, err := e.svc.Sessions.Repo().Get(id)
 	must(e.t, err)
@@ -67,11 +68,11 @@ func TestEditionsInDetailsPlaybackAndResume(t *testing.T) {
 
 	st := e.start(m, sdrWeb())
 	if st.Entry.Verdict != api.DirectPlay || e.sessionFile(st.SessionId) != mp4 {
-		t.Fatalf("default edition played %d at %s", e.sessionFile(st.SessionId), st.Entry.Verdict)
+		t.Fatalf("default edition played %s at %s", e.sessionFile(st.SessionId), st.Entry.Verdict)
 	}
 	st = e.startEdition(m, ext.Id, sdrWeb())
 	if e.sessionFile(st.SessionId) != cut {
-		t.Fatalf("extended played file %d", e.sessionFile(st.SessionId))
+		t.Fatalf("extended played file %s", e.sessionFile(st.SessionId))
 	}
 	e.expect(204, "PUT", "/playback/sessions/"+itoa(st.SessionId)+"/position", e.plain.token, map[string]any{"positionMs": 3000}, nil)
 	var ws api.WatchState
@@ -153,7 +154,7 @@ func TestPlaybackTrustsTheDiskOverTheMark(t *testing.T) {
 	files := e.svc.MediaFiles.Repo()
 	mkv, err := files.FileByPath(path)
 	must(t, err)
-	missing := func(id int64) bool {
+	missing := func(id uid.ID) bool {
 		t.Helper()
 		f, err := files.File(id)
 		must(t, err)
@@ -183,13 +184,13 @@ func TestPlaybackTrustsTheDiskOverTheMark(t *testing.T) {
 
 	mp4 := e.copyOf(m, "h264-high41.mp4", "")
 	if st := e.start(m, sdrWeb()); e.sessionFile(st.SessionId) != mp4 {
-		t.Fatalf("with both on disk the direct play copy plays, not file %d", e.sessionFile(st.SessionId))
+		t.Fatalf("with both on disk the direct play copy plays, not file %s", e.sessionFile(st.SessionId))
 	}
 	f, err := files.File(mp4)
 	must(t, err)
 	must(t, os.Remove(f.Path))
 	if st := e.start(m, sdrWeb()); e.sessionFile(st.SessionId) != mkv.ID || !missing(mp4) || missing(mkv.ID) {
-		t.Fatalf("played file %d; mp4 marked %v, mkv marked %v", e.sessionFile(st.SessionId), missing(mp4), missing(mkv.ID))
+		t.Fatalf("played file %s; mp4 marked %v, mkv marked %v", e.sessionFile(st.SessionId), missing(mp4), missing(mkv.ID))
 	}
 }
 
@@ -200,7 +201,7 @@ func TestUnavailableTitles(t *testing.T) {
 	e := newEnv(t)
 	files := e.svc.MediaFiles.Repo()
 	at := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
-	gone := func(itemID int64) int64 {
+	gone := func(itemID uid.ID) uid.ID {
 		t.Helper()
 		fs, err := files.FilesForItem(itemID)
 		must(t, err)
@@ -226,7 +227,7 @@ func TestUnavailableTitles(t *testing.T) {
 	e.expect(200, "GET", "/items?kind=movie", tok, nil, &page)
 	for _, v := range page.Items {
 		if yes(v.Unavailable) != (v.Id == m) {
-			t.Fatalf("listed movie %d unavailable %v; %d is present", v.Id, v.Unavailable, here)
+			t.Fatalf("listed movie %s unavailable %v; %s is present", v.Id, v.Unavailable, here)
 		}
 	}
 	var mf api.MediaFile

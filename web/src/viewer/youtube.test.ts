@@ -5,6 +5,7 @@ import { setToken } from "../admin/api";
 import { boot } from "./app";
 import { inProgress } from "./data";
 import { at, calls, json, mockFetch, none, root, until } from "./testSupport";
+import { uid } from "../api/uid";
 
 vi.mock("hls.js", () => ({
   default: class {
@@ -14,7 +15,7 @@ vi.mock("hls.js", () => ({
 
 const ts = "2026-01-01T00:00:00Z";
 const acct = (id: number, name: string, kind = "adult") => ({
-  id,
+  id: uid(id),
   kind,
   name,
   isAdmin: false,
@@ -23,19 +24,19 @@ const acct = (id: number, name: string, kind = "adult") => ({
   pending: false,
   filterMode: "ratings",
   createdAt: ts,
-  updatedAt: ts,
+  modifiedAt: ts,
 });
 const me = (active: number) => ({
-  device: { id: 1 },
+  device: { id: uid(1) },
   account: acct(1, "Heidi"),
-  activeProfileId: active,
-  household: { id: 1, name: "Heidi", adultId: 1, createdAt: ts },
+  activeProfileId: uid(active),
+  household: { id: uid(1), name: "Heidi", adultId: uid(1), createdAt: ts },
   profiles: [acct(1, "Heidi"), acct(2, "Jax", "kid")],
 });
 const page = (items: unknown[]) => ({ items });
 const channel = (id: number, title: string, extra = {}) => ({
-  id,
-  libraryId: 5,
+  id: uid(id),
+  libraryId: uid(5),
   title,
   videoCount: 214,
   unwatchedCount: 12,
@@ -44,9 +45,9 @@ const channel = (id: number, title: string, extra = {}) => ({
   ...extra,
 });
 const video = (id: number, title: string, extra = {}) => ({
-  id,
-  libraryId: 5,
-  channelId: 40,
+  id: uid(id),
+  libraryId: uid(5),
+  channelId: uid(40),
   channelTitle: "Workbench Weekly",
   title,
   durationMs: 42 * 60000,
@@ -59,10 +60,10 @@ const video = (id: number, title: string, extra = {}) => ({
 const base = (active = 1) => ({
   "GET /health": { status: "ok", version: "1.0.0", setupRequired: false },
   "GET /me": me(active),
-  "GET /profiles/1/watch-state": page([]),
-  "GET /profiles/2/watch-state": page([]),
-  "GET /profiles/1/show-progress": page([]),
-  "GET /profiles/2/show-progress": page([]),
+  [`GET /profiles/${uid(1)}/watch-state`]: page([]),
+  [`GET /profiles/${uid(2)}/watch-state`]: page([]),
+  [`GET /profiles/${uid(1)}/show-progress`]: page([]),
+  [`GET /profiles/${uid(2)}/show-progress`]: page([]),
   "GET /genres": page([]),
   "GET /items": page([]),
   "GET /youtube/channels": page([channel(40, "Workbench Weekly"), channel(41, "Clockwork Corner")]),
@@ -88,33 +89,33 @@ describe("YouTube section", () => {
     await until(() => r.querySelector(".grid.vids a"));
     expect(r.querySelector(".titlerow")!.textContent).toBe("YouTube2 channels");
     const tile = r.querySelector(".grid.vids a")!;
-    expect(tile.getAttribute("href")).toBe("#/video/60");
+    expect(tile.getAttribute("href")).toBe(`#/video/${uid(60)}`);
     expect(tile.textContent).toBe("The dishwasher videoWorkbench Weekly · 42m · today");
     expect(tile.querySelector(".dot")).toBeTruthy();
-    expect(tile.querySelector("[data-art]")!.getAttribute("data-art")).toBe("60/poster");
+    expect(tile.querySelector("[data-art]")!.getAttribute("data-art")).toBe(`${uid(60)}/poster`);
     const q = calls.find((c) => c.key === "GET /youtube/videos")!.query;
     expect(q).toContain("sort=newest");
     expect(r.querySelector("nav a[aria-current=page]")!.textContent).toBe("YouTube");
   });
 
   it("filters on the server by Unwatched, Channel and Sort, kept in the address", async () => {
-    await at("#/youtube?unwatched=1&channel=41&sort=length");
+    await at(`#/youtube?unwatched=1&channel=${uid(41)}&sort=length`);
     const r = root();
     await boot(r, { fetch: mockFetch(base()) });
     await until(() => r.querySelector(".grid.vids a"));
     const q = new URLSearchParams(calls.find((c) => c.key === "GET /youtube/videos")!.query);
     expect(q.get("unwatched")).toBe("true");
-    expect(q.get("channelId")).toBe("41");
+    expect(q.get("channelId")).toBe(uid(41));
     expect(q.get("sort")).toBe("length");
     expect([...r.querySelectorAll(".vt a")].map((a) => a.getAttribute("href"))).toEqual([
-      "#/youtube?unwatched=1&channel=41&sort=length",
-      "#/youtube?view=channels&unwatched=1&channel=41&sort=length",
+      `#/youtube?unwatched=1&channel=${uid(41)}&sort=length`,
+      `#/youtube?view=channels&unwatched=1&channel=${uid(41)}&sort=length`,
     ]);
     expect(r.querySelector(".vt [aria-current=page]")!.textContent).toBe("Videos");
     const chips = [...r.querySelectorAll(".chip")];
     expect(chips.map((c) => c.getAttribute("aria-pressed"))).toEqual(["true"]);
     chips[0].dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(location.hash).toBe("#/youtube?channel=41&sort=length");
+    expect(location.hash).toBe(`#/youtube?channel=${uid(41)}&sort=length`);
   });
 
   it("picks a channel by id, so channels of one title, or titled Any, are all reachable", async () => {
@@ -138,10 +139,10 @@ describe("YouTube section", () => {
       pick.value = v;
       pick.dispatchEvent(new Event("change"));
     };
-    choose("42");
-    expect(location.hash).toBe("#/youtube?channel=42");
-    choose("40");
-    expect(location.hash).toBe("#/youtube?channel=40");
+    choose(uid(42));
+    expect(location.hash).toBe(`#/youtube?channel=${uid(42)}`);
+    choose(uid(40));
+    expect(location.hash).toBe(`#/youtube?channel=${uid(40)}`);
     choose("");
     expect(location.hash).toBe("#/youtube");
   });
@@ -220,13 +221,13 @@ describe("YouTube section", () => {
 describe("Channel", () => {
   const routes = () => ({
     ...base(),
-    "GET /youtube/channels/40": channel(40, "Workbench Weekly", {
+    [`GET /youtube/channels/${uid(40)}`]: channel(40, "Workbench Weekly", {
       overview: "Deep dives on everyday technology.",
     }),
   });
 
   it("shows counts and videos, and plays the newest", async () => {
-    await at("#/channel/40");
+    await at(`#/channel/${uid(40)}`);
     const r = root();
     await boot(r, { fetch: mockFetch(routes()) });
     await until(() => r.querySelector(".grid.vids a"));
@@ -235,30 +236,32 @@ describe("Channel", () => {
     expect(r.querySelector("[aria-label=Playlists]")).toBeNull();
     expect(r.querySelector(".grid.vids a")!.textContent).toBe("The dishwasher video42m · today");
     [...r.querySelectorAll("button")].find((b) => b.textContent === "Play newest")!.click();
-    await until(() => location.hash === "#/play/60");
+    await until(() => location.hash === `#/play/${uid(60)}`);
     const newest = calls.filter((c) => c.key === "GET /youtube/videos").pop()!.query;
     expect(newest).toContain("limit=1");
   });
 
   it("marks every video watched, or unwatched once none are left", async () => {
-    await at("#/channel/40");
+    await at(`#/channel/${uid(40)}`);
     const r = root();
     await boot(r, {
       fetch: mockFetch({
         ...routes(),
-        "PUT /profiles/1/youtube/channels/40/watch-state": none,
+        [`PUT /profiles/${uid(1)}/youtube/channels/${uid(40)}/watch-state`]: none,
       }),
     });
     await until(() => r.querySelector(".grid.vids a"));
     [...r.querySelectorAll("button")].find((b) => b.textContent === "Mark all watched")!.click();
     await until(() =>
-      calls.some((c) => c.key === "PUT /profiles/1/youtube/channels/40/watch-state"),
+      calls.some(
+        (c) => c.key === `PUT /profiles/${uid(1)}/youtube/channels/${uid(40)}/watch-state`,
+      ),
     );
     expect(calls.find((c) => c.key.startsWith("PUT /profiles"))!.body).toEqual({ watched: true });
   });
 
   it("lets an adult mark it for kids and allow it for kids on a list; a kid gets neither", async () => {
-    await at("#/channel/40");
+    await at(`#/channel/${uid(40)}`);
     const r = root();
     const withIvy = {
       ...me(1),
@@ -268,18 +271,18 @@ describe("Channel", () => {
       fetch: mockFetch({
         ...routes(),
         "GET /me": withIvy,
-        "GET /items/40/allowed-for": { profileIds: [] },
-        "PUT /youtube/channels/40/for-kids": (b: unknown) =>
+        [`GET /items/${uid(40)}/allowed-for`]: { profileIds: [] },
+        [`PUT /youtube/channels/${uid(40)}/for-kids`]: (b: unknown) =>
           channel(40, "Workbench Weekly", b as object),
-        "PUT /profiles/5/allowed-items/40": none,
+        [`PUT /profiles/${uid(5)}/allowed-items/${uid(40)}`]: none,
       }),
     });
     await until(() => r.querySelector("[role=switch]"));
     const sw = r.querySelector<HTMLInputElement>("[role=switch][aria-label='For kids']")!;
     expect(sw.checked).toBe(false);
     sw.click();
-    await until(() => calls.some((c) => c.key === "PUT /youtube/channels/40/for-kids"));
-    expect(calls.find((c) => c.key === "PUT /youtube/channels/40/for-kids")!.body).toEqual({
+    await until(() => calls.some((c) => c.key === `PUT /youtube/channels/${uid(40)}/for-kids`));
+    expect(calls.find((c) => c.key === `PUT /youtube/channels/${uid(40)}/for-kids`)!.body).toEqual({
       forKids: true,
     });
     const ivy = [...r.querySelectorAll<HTMLElement>("[role=menuitemcheckbox]")].find(
@@ -287,7 +290,9 @@ describe("Channel", () => {
     )!;
     expect(ivy.getAttribute("aria-checked")).toBe("false");
     ivy.click();
-    await until(() => calls.some((c) => c.key === "PUT /profiles/5/allowed-items/40"));
+    await until(() =>
+      calls.some((c) => c.key === `PUT /profiles/${uid(5)}/allowed-items/${uid(40)}`),
+    );
 
     document.body.replaceChildren();
     const kid = root();
@@ -298,13 +303,13 @@ describe("Channel", () => {
   });
 
   it("puts For kids back and says why when the server refuses it", async () => {
-    await at("#/channel/40");
+    await at(`#/channel/${uid(40)}`);
     const r = root();
     await boot(r, {
       fetch: mockFetch({
         ...routes(),
-        "GET /items/40/allowed-for": { profileIds: [] },
-        "PUT /youtube/channels/40/for-kids": () =>
+        [`GET /items/${uid(40)}/allowed-for`]: { profileIds: [] },
+        [`PUT /youtube/channels/${uid(40)}/for-kids`]: () =>
           json({ code: "internal", message: "database is locked" }, 500),
       }),
     });
@@ -317,12 +322,14 @@ describe("Channel", () => {
   });
 
   it("offers Mark all unwatched when nothing is unwatched", async () => {
-    await at("#/channel/40");
+    await at(`#/channel/${uid(40)}`);
     const r = root();
     await boot(r, {
       fetch: mockFetch({
         ...routes(),
-        "GET /youtube/channels/40": channel(40, "Workbench Weekly", { unwatchedCount: 0 }),
+        [`GET /youtube/channels/${uid(40)}`]: channel(40, "Workbench Weekly", {
+          unwatchedCount: 0,
+        }),
       }),
     });
     await until(() => r.querySelector(".grid.vids a"));
@@ -347,12 +354,12 @@ describe("Video details", () => {
   });
 
   it("shows the video, its file facts and more from the channel", async () => {
-    await at("#/video/60");
+    await at(`#/video/${uid(60)}`);
     const r = root();
     await boot(r, {
       fetch: mockFetch({
         ...base(),
-        "GET /youtube/videos/60": video(60, "The dishwasher video", {
+        [`GET /youtube/videos/${uid(60)}`]: video(60, "The dishwasher video", {
           overview: "Your dishwasher is better than you think.",
           height: 1080,
           sourceUrl: "https://www.youtube.com/watch?v=abc",
@@ -363,24 +370,24 @@ describe("Video details", () => {
         ]),
         "GET /media-files": page([
           {
-            id: 1,
-            itemId: 60,
+            id: uid(1),
+            itemId: uid(60),
             path: "/y/a.mkv",
             sizeBytes: 1e9,
             container: "matroska",
             bitrate: 4e6,
             tracks: [
-              { id: 1, kind: "video", index: 0, codec: "av1", width: 1920, height: 1080 },
-              { id: 2, kind: "subtitle", index: 1, codec: "srt", language: "eng" },
+              { id: uid(1), kind: "video", index: 0, codec: "av1", width: 1920, height: 1080 },
+              { id: uid(2), kind: "subtitle", index: 1, codec: "srt", language: "eng" },
             ],
-            chapters: [{ id: 1, position: 0, startMs: 0, endMs: 1, title: "a" }],
+            chapters: [{ id: uid(1), position: 0, startMs: 0, endMs: 1, title: "a" }],
           },
         ]),
-        "POST /items/60/playability": { verdict: "direct_play", negotiated: {} },
+        [`POST /items/${uid(60)}/playability`]: { verdict: "direct_play", negotiated: {} },
       }),
     });
     await until(() => r.querySelector("[aria-label^='More from'] a"));
-    expect(r.querySelector(".back")!.getAttribute("href")).toBe("#/channel/40");
+    expect(r.querySelector(".back")!.getAttribute("href")).toBe(`#/channel/${uid(40)}`);
     expect(r.querySelector("h1")!.textContent).toBe("The dishwasher video");
     expect(r.querySelector(".meta .tag")!.textContent).toBe("1080p");
     expect(r.querySelector(".synopsis")!.textContent).toContain("better than you think");
@@ -398,12 +405,12 @@ describe("Video details", () => {
   });
 
   it("links the source only when its address is http or https", async () => {
-    await at("#/video/60");
+    await at(`#/video/${uid(60)}`);
     const r = root();
     await boot(r, {
       fetch: mockFetch({
         ...base(),
-        "GET /youtube/videos/60": video(60, "The dishwasher video", {
+        [`GET /youtube/videos/${uid(60)}`]: video(60, "The dishwasher video", {
           sourceUrl: "javascript:alert(1)",
         }),
         "GET /media-files": page([]),
@@ -415,20 +422,28 @@ describe("Video details", () => {
   });
 
   it("resumes a started video and marks it watched through the item's watch state", async () => {
-    await at("#/video/60");
+    await at(`#/video/${uid(60)}`);
     const r = root();
     await boot(r, {
       fetch: mockFetch({
         ...base(),
-        "GET /youtube/videos/60": video(60, "The dishwasher video", { positionMs: 600000 }),
+        [`GET /youtube/videos/${uid(60)}`]: video(60, "The dishwasher video", {
+          positionMs: 600000,
+        }),
         "GET /media-files": page([]),
-        "PUT /profiles/1/watch-state/60": { itemId: 60, positionMs: 0, watched: true },
+        [`PUT /profiles/${uid(1)}/watch-state/${uid(60)}`]: {
+          itemId: uid(60),
+          positionMs: 0,
+          watched: true,
+        },
       }),
     });
     await until(() => r.querySelector(".actions"));
     expect(r.querySelector(".actions .btn.p")!.textContent).toBe("Resume");
     [...r.querySelectorAll("button")].find((b) => b.textContent === "Mark watched")!.click();
-    await until(() => calls.some((c) => c.key === "PUT /profiles/1/watch-state/60"));
+    await until(() =>
+      calls.some((c) => c.key === `PUT /profiles/${uid(1)}/watch-state/${uid(60)}`),
+    );
   });
 });
 
@@ -444,12 +459,13 @@ describe("Home and kids", () => {
             u.searchParams.get("kind") === "movie"
               ? [
                   {
-                    id: 1,
-                    libraryId: 1,
+                    id: uid(1),
+                    libraryId: uid(1),
                     kind: "movie",
                     parsedTitle: "A",
                     addedAt: ts,
-                    updatedAt: ts,
+                    createdAt: ts,
+                    modifiedAt: ts,
                   },
                 ]
               : [],
@@ -466,14 +482,22 @@ describe("Home and kids", () => {
 
   it("counts a watched item played partway as in progress", () => {
     expect(
-      inProgress({ itemId: 1, watched: true, positionMs: 60000, playCount: 1, updatedAt: ts }),
+      inProgress({ itemId: uid(1), watched: true, positionMs: 60000, playCount: 1, changedAt: ts }),
     ).toBe(true);
     expect(
-      inProgress({ itemId: 1, watched: true, positionMs: 0, playCount: 1, updatedAt: ts }),
+      inProgress({ itemId: uid(1), watched: true, positionMs: 0, playCount: 1, changedAt: ts }),
     ).toBe(false);
   });
 
-  const a = { id: 1, libraryId: 1, kind: "movie", parsedTitle: "A", addedAt: ts, updatedAt: ts };
+  const a = {
+    id: uid(1),
+    libraryId: uid(1),
+    kind: "movie",
+    parsedTitle: "A",
+    addedAt: ts,
+    createdAt: ts,
+    modifiedAt: ts,
+  };
   const oneMovie = (_: unknown, u: URL) => page(u.searchParams.get("kind") === "movie" ? [a] : []);
 
   it("continues videos and movies together, latest played first", async () => {
@@ -482,8 +506,13 @@ describe("Home and kids", () => {
     await boot(r, {
       fetch: mockFetch({
         ...base(),
-        "GET /profiles/1/watch-state": page([
-          { itemId: 1, watched: true, positionMs: 600000, lastPlayedAt: "2026-02-01T00:00:00Z" },
+        [`GET /profiles/${uid(1)}/watch-state`]: page([
+          {
+            itemId: uid(1),
+            watched: true,
+            positionMs: 600000,
+            lastPlayedAt: "2026-02-01T00:00:00Z",
+          },
         ]),
         "GET /youtube/videos": (_: unknown, u: URL) =>
           u.searchParams.get("inProgress") === "true"
@@ -495,7 +524,7 @@ describe("Home and kids", () => {
               ])
             : page([]),
         "GET /items": oneMovie,
-        "GET /items/1": a,
+        [`GET /items/${uid(1)}`]: a,
       }),
     });
     const hero = "[aria-label='Pick up where you left off']";
@@ -505,7 +534,7 @@ describe("Home and kids", () => {
     );
     expect(q.get("sort")).toBe("played");
     expect(r.querySelector(`${hero} h1`)!.textContent).toBe("The clock video");
-    expect(r.querySelector(`${hero} .btn.p`)!.getAttribute("href")).toBe("#/play/61");
+    expect(r.querySelector(`${hero} .btn.p`)!.getAttribute("href")).toBe(`#/play/${uid(61)}`);
     expect(r.querySelector(`${hero} .also b`)!.textContent).toBe("A");
   });
 
@@ -533,10 +562,10 @@ describe("Home and kids", () => {
       fetch: mockFetch({
         ...base(),
         "GET /items": oneMovie,
-        "GET /items/1": a,
+        [`GET /items/${uid(1)}`]: a,
         "GET /youtube/videos": page([]),
-        "GET /profiles/1/watch-state": page([
-          { itemId: 1, watched: false, positionMs: 600000, lastPlayedAt: ts },
+        [`GET /profiles/${uid(1)}/watch-state`]: page([
+          { itemId: uid(1), watched: false, positionMs: 600000, lastPlayedAt: ts },
         ]),
       }),
     });
@@ -558,12 +587,13 @@ describe("Home and kids", () => {
             u.searchParams.get("kind") === "movie"
               ? [
                   {
-                    id: 1,
-                    libraryId: 1,
+                    id: uid(1),
+                    libraryId: uid(1),
                     kind: "movie",
                     parsedTitle: "A",
                     addedAt: ts,
-                    updatedAt: ts,
+                    createdAt: ts,
+                    modifiedAt: ts,
                   },
                 ]
               : [],

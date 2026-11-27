@@ -22,6 +22,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/logstore"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/mediafile"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/parse"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 var audioExt = map[string]bool{".flac": true, ".mp3": true, ".m4a": true, ".aac": true, ".ogg": true, ".oga": true, ".opus": true,
@@ -170,7 +171,7 @@ func (s *Scanner) syncSong(ctx context.Context, lib *library.Library, c candidat
 	if err != nil && !errors.Is(err, db.ErrNotFound) {
 		return err
 	}
-	if f != nil && f.ProbedAt != nil && f.SizeBytes == c.size && f.ModifiedAt.Equal(c.mod) {
+	if f != nil && f.ProbedAt != nil && f.SizeBytes == c.size && f.FileModifiedAt.Equal(c.mod) {
 		if err := s.backfill(ctx, f); err != nil {
 			return err
 		}
@@ -201,9 +202,9 @@ func (s *Scanner) syncSong(ctx context.Context, lib *library.Library, c candidat
 		return err
 	}
 	// A file replaced in place may hold another picture than its album shows.
-	replaced := f != nil && (f.SizeBytes != c.size || !f.ModifiedAt.Equal(c.mod))
+	replaced := f != nil && (f.SizeBytes != c.size || !f.FileModifiedAt.Equal(c.mod))
 	if f == nil {
-		f = &mediafile.File{ItemID: song.ID, Path: c.path}
+		f = &mediafile.File{ItemID: &song.ID, Path: c.path}
 		if err := s.Files.CreateFile(f); err != nil {
 			return err
 		}
@@ -211,7 +212,7 @@ func (s *Scanner) syncSong(ctx context.Context, lib *library.Library, c candidat
 		sum.Updated[item.Song]++
 	}
 	now := s.Now().UTC()
-	f.ItemID, f.SizeBytes, f.ModifiedAt = song.ID, c.size, c.mod
+	f.ItemID, f.SizeBytes, f.FileModifiedAt = &song.ID, c.size, c.mod
 	f.Container, f.DurationMs, f.Bitrate, f.ProbedAt = res.Container, res.DurationMs, res.Bitrate, &now
 	f.Fingerprint = s.fingerprint(ctx, c.path)
 	if err := s.Files.UpdateFile(f); err != nil {
@@ -223,7 +224,7 @@ func (s *Scanner) syncSong(ctx context.Context, lib *library.Library, c candidat
 	if err := s.Files.ReplaceTracks(f.ID, res.Tracks); err != nil {
 		return err
 	}
-	for _, id := range []int64{album.ID, *album.ParentID} {
+	for _, id := range []uid.ID{album.ID, *album.ParentID} {
 		if err := s.addGenres(id, info.Genres); err != nil {
 			return err
 		}
@@ -248,7 +249,7 @@ func (s *Scanner) resolveSong(lib *library.Library, c candidate, in songInfo, su
 	if err != nil {
 		return nil, nil, err
 	}
-	var performer *int64
+	var performer *uid.ID
 	if !strings.EqualFold(in.Artist, in.AlbumArtist) {
 		p, err := s.musicItem(lib, nil, item.Artist, in.Artist, nil, sum)
 		if err != nil {
@@ -267,7 +268,7 @@ func (s *Scanner) resolveSong(lib *library.Library, c candidate, in songInfo, su
 	was := *song
 	song.ParsedTitle, song.SortTitle, song.DiscNumber, song.TrackNumber = in.Title, item.SortName(in.Title), in.Disc, in.Track
 	song.ParsedYear, song.ArtistID, song.Explicit = in.Year, performer, &in.Explicit
-	if song.ID == 0 {
+	if song.ID.IsZero() {
 		err := s.Items.Create(song)
 		sum.created = append(sum.created, song.ID)
 		return song, album, err
@@ -305,7 +306,7 @@ func (s *Scanner) renameAbove(lib *library.Library, path string, in songInfo, su
 	if err != nil {
 		return err
 	}
-	albums, err := s.Items.List(item.Filter{ParentID: artist.ID, Kind: item.Album, Limit: 100000})
+	albums, err := s.Items.List(item.Filter{ParentID: &artist.ID, Kind: item.Album, Limit: 100000})
 	if err != nil {
 		return err
 	}
@@ -323,7 +324,7 @@ func (s *Scanner) renameMoved(it *item.Item, name string, year *int, albums []*i
 		return err
 	}
 	for _, al := range albums {
-		songs, err := s.Items.List(item.Filter{ParentID: al.ID, Kind: item.Song, Limit: 100000})
+		songs, err := s.Items.List(item.Filter{ParentID: &al.ID, Kind: item.Song, Limit: 100000})
 		if err != nil {
 			return err
 		}
@@ -340,7 +341,7 @@ func (s *Scanner) renameMoved(it *item.Item, name string, year *int, albums []*i
 
 // musicItem finds an artist or album by name under parent, or creates it.
 // An album takes the first year a song gives it.
-func (s *Scanner) musicItem(lib *library.Library, parent *int64, kind, name string, year *int, sum *Summary) (*item.Item, error) {
+func (s *Scanner) musicItem(lib *library.Library, parent *uid.ID, kind, name string, year *int, sum *Summary) (*item.Item, error) {
 	it, err := s.Items.Named(lib.ID, parent, kind, name)
 	switch {
 	case errors.Is(err, db.ErrNotFound):
@@ -357,7 +358,7 @@ func (s *Scanner) musicItem(lib *library.Library, parent *int64, kind, name stri
 }
 
 // addGenres adds tag genres to an item's, keeping those it has.
-func (s *Scanner) addGenres(itemID int64, names []string) error {
+func (s *Scanner) addGenres(itemID uid.ID, names []string) error {
 	if len(names) == 0 {
 		return nil
 	}
@@ -412,7 +413,7 @@ func (s *Scanner) albumArt(ctx context.Context, album *item.Item, songPath strin
 		}
 	}
 	dir := filepath.Join(s.ThumbDir, "music")
-	tmp := filepath.Join(dir, ".cover-"+strconv.FormatInt(album.ID, 10)+".jpg")
+	tmp := filepath.Join(dir, ".cover-"+album.ID.String()+".jpg")
 	defer func() { _ = os.Remove(tmp) }()
 	if src == "" && embedded {
 		cctx, cancel := context.WithTimeout(ctx, runLimit)

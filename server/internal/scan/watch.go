@@ -13,6 +13,7 @@ import (
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/library"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/logstore"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // Watcher turns filesystem events under watched libraries into one trigger
@@ -20,7 +21,7 @@ import (
 // copy in progress causes a single scan after it finishes.
 type Watcher struct {
 	libs     *library.Repo
-	trigger  func(libraryID int64)
+	trigger  func(libraryID uid.ID)
 	debounce time.Duration
 
 	mu      sync.Mutex
@@ -29,7 +30,7 @@ type Watcher struct {
 	budget  int            // watches the roots may hold together, an entry each
 	skipped map[string]skip
 	away    map[string]bool // roots Sync found absent and has not seen since
-	timers  map[int64]*time.Timer
+	timers  map[uid.ID]*time.Timer
 }
 
 // skip is a root left unwatched, of entries counted at at.
@@ -43,13 +44,13 @@ type skip struct {
 const recount = time.Hour
 
 // NewWatcher returns a Watcher calling trigger for changed libraries.
-func NewWatcher(libs *library.Repo, trigger func(libraryID int64), debounce time.Duration) (*Watcher, error) {
+func NewWatcher(libs *library.Repo, trigger func(libraryID uid.ID), debounce time.Duration) (*Watcher, error) {
 	fsw, err := fsnotify.NewWatcher()
 	if err != nil {
 		return nil, err
 	}
 	return &Watcher{fsw: fsw, libs: libs, trigger: trigger, debounce: debounce, roots: map[string]int{}, budget: watchBudget(),
-		skipped: map[string]skip{}, away: map[string]bool{}, timers: map[int64]*time.Timer{}}, nil
+		skipped: map[string]skip{}, away: map[string]bool{}, timers: map[uid.ID]*time.Timer{}}, nil
 }
 
 // Sync watches every folder of every library that has file watching on,

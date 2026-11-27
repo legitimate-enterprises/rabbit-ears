@@ -12,6 +12,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/session"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // Conversion states, in order.
@@ -28,8 +29,8 @@ const (
 // for a song), SubtitleTrackID for a subtitle burned in. Its encoder is the
 // worker's choice and not kept.
 type Conversion struct {
-	ID               int64
-	MediaFileID      int64
+	ID               uid.ID
+	MediaFileID      uid.ID
 	SourceModifiedAt time.Time
 	Entry            *session.PlanEntry
 	Container        string // mp4, or m4a for a song
@@ -38,6 +39,7 @@ type Conversion struct {
 	SizeBytes        *int64 // set once ready
 	Error            string
 	CreatedAt        time.Time
+	ModifiedAt       time.Time
 	StartedAt        *time.Time
 	FinishedAt       *time.Time
 }
@@ -45,15 +47,18 @@ type Conversion struct {
 // Download is a device's claim, for one of its profiles, on one title's
 // file: ConversionID's file, or with none the source file itself.
 type Download struct {
-	ID           int64
-	DeviceID     int64
-	AccountID    int64
-	ItemID       int64
-	EditionID    *int64
-	MediaFileID  int64
-	ConversionID *int64
+	ID           uid.ID
+	DeviceID     uid.ID
+	AccountID    uid.ID
+	ItemID       uid.ID
+	EditionID    *uid.ID
+	MediaFileID  uid.ID
+	ConversionID *uid.ID
 	Quality      string // what was asked for
 	CreatedAt    time.Time
+	ModifiedAt   time.Time
+	CreatedBy    *uid.ID
+	ModifiedBy   *uid.ID
 }
 
 // Repo persists conversions and downloads.
@@ -63,49 +68,64 @@ type Repo struct{ d db.DBTX }
 func New(d db.DBTX) *Repo { return &Repo{d} }
 
 const ccols = `id, media_file_id, source_modified_at, verdict, video_action, video_codec, tone_map, height, bitrate, audio_track_id, audio_action,
-	audio_channels, burn_track_id, container, status, predicted_bytes, size_bytes, error, created_at, started_at, finished_at`
+	audio_channels, burn_track_id, container, status, predicted_bytes, size_bytes, error, created_at, modified_at, started_at, finished_at`
 
 func scanConversion(s db.Scanner) (*Conversion, error) {
 	c := Conversion{Entry: &session.PlanEntry{SubtitleAction: session.SubtitleNone, SingleRung: true}}
 	e := c.Entry
-	var source, created int64
-	var audio, burn int64
+	var source, created, modified int64
+	var audio, burn []byte
 	var size, started, finished sql.NullInt64
 	var msg sql.NullString
 	if err := s.Scan(&c.ID, &c.MediaFileID, &source, &e.Verdict, &e.VideoAction, &e.VideoCodec, &e.ToneMap, &e.TopHeight, &e.TopBitrate, &audio,
-		&e.AudioAction, &e.AudioChannels, &burn, &c.Container, &c.Status, &c.PredictedBytes, &size, &msg, &created, &started, &finished); err != nil {
+		&e.AudioAction, &e.AudioChannels, &burn, &c.Container, &c.Status, &c.PredictedBytes, &size, &msg, &created, &modified, &started,
+		&finished); err != nil {
 		return nil, db.Wrap(err)
 	}
-	if audio != 0 {
-		e.AudioTrackID = &audio
+	var err error
+	if e.AudioTrackID, err = trackOf(audio); err != nil {
+		return nil, err
 	}
-	if burn != 0 {
-		e.SubtitleAction, e.SubtitleTrackID = session.SubtitleBurn, &burn
+	if e.SubtitleTrackID, err = trackOf(burn); err != nil {
+		return nil, err
+	}
+	if e.SubtitleTrackID != nil {
+		e.SubtitleAction = session.SubtitleBurn
 	}
 	if size.Valid {
 		c.SizeBytes = &size.Int64
 	}
-	c.Error, c.SourceModifiedAt, c.CreatedAt = msg.String, db.FromMs(source), db.FromMs(created)
+	c.Error, c.SourceModifiedAt, c.CreatedAt, c.ModifiedAt = msg.String, db.FromMs(source), db.FromMs(created), db.FromMs(modified)
 	c.StartedAt, c.FinishedAt = db.FromNullMs(started), db.FromNullMs(finished)
 	return &c, nil
 }
 
-func idOr0(p *int64) int64 {
+// trackArg and trackOf map a track id of the conversion key to its column,
+// where x” is none: NULLs would never collide in the key's UNIQUE index.
+func trackArg(p *uid.ID) any {
 	if p == nil {
-		return 0
+		return []byte{}
 	}
 	return *p
+}
+
+func trackOf(b []byte) (*uid.ID, error) {
+	if len(b) == 0 {
+		return nil, nil
+	}
+	var id uid.ID
+	return &id, id.Scan(b)
 }
 
 // key is the conversion's unique columns, bound as ?1 to ?12.
 func (c *Conversion) key() []any {
 	e := c.Entry
-	burn := int64(0)
+	var burn *uid.ID
 	if e.SubtitleAction == session.SubtitleBurn {
-		burn = idOr0(e.SubtitleTrackID)
+		burn = e.SubtitleTrackID
 	}
 	return []any{c.MediaFileID, db.Ms(c.SourceModifiedAt), e.Verdict, e.VideoAction, e.VideoCodec, e.ToneMap, e.TopHeight, e.TopBitrate,
-		idOr0(e.AudioTrackID), e.AudioAction, e.AudioChannels, burn}
+		trackArg(e.AudioTrackID), e.AudioAction, e.AudioChannels, trackArg(burn)}
 }
 
 const byKey = `media_file_id = ?1 AND source_modified_at = ?2 AND verdict = ?3 AND video_action = ?4 AND video_codec = ?5 AND tone_map = ?6
@@ -115,8 +135,8 @@ const byKey = `media_file_id = ?1 AND source_modified_at = ?2 AND verdict = ?3 A
 // failed one again, or inserts c queued; c is then the stored conversion.
 func (r *Repo) Request(c *Conversion) error {
 	return db.InTx(r.d, func(d db.DBTX) error {
-		_, err := d.Exec(`UPDATE conversion SET status = 'queued', error = NULL, started_at = NULL, finished_at = NULL
-			WHERE status = 'failed' AND `+byKey, c.key()...)
+		_, err := d.Exec(`UPDATE conversion SET status = 'queued', error = NULL, started_at = NULL, finished_at = NULL, modified_at = ?13
+			WHERE status = 'failed' AND `+byKey, append(c.key(), db.Ms(time.Now()))...)
 		if err != nil {
 			return db.Wrap(err)
 		}
@@ -128,21 +148,21 @@ func (r *Repo) Request(c *Conversion) error {
 		if !errors.Is(err, db.ErrNotFound) {
 			return err
 		}
-		c.Status, c.CreatedAt = Queued, time.Now().UTC()
-		res, err := d.Exec(`INSERT INTO conversion (media_file_id, source_modified_at, verdict, video_action, video_codec, tone_map, height, bitrate,
-			audio_track_id, audio_action, audio_channels, burn_track_id, container, status, predicted_bytes, created_at)
-			VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,'queued',?14,?15)`,
-			append(c.key(), c.Container, c.PredictedBytes, db.Ms(c.CreatedAt))...)
-		if err != nil {
-			return db.Wrap(err)
+		if c.ID.IsZero() {
+			c.ID = uid.New()
 		}
-		c.ID, _ = res.LastInsertId()
-		return nil
+		c.Status, c.CreatedAt = Queued, time.Now().UTC().Truncate(time.Millisecond)
+		c.ModifiedAt = c.CreatedAt
+		_, err = d.Exec(`INSERT INTO conversion (media_file_id, source_modified_at, verdict, video_action, video_codec, tone_map, height, bitrate,
+			audio_track_id, audio_action, audio_channels, burn_track_id, container, status, predicted_bytes, created_at, modified_at, id)
+			VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,'queued',?14,?15,?15,?16)`,
+			append(c.key(), c.Container, c.PredictedBytes, db.Ms(c.CreatedAt), c.ID)...)
+		return db.Wrap(err)
 	})
 }
 
 // Conversion returns one conversion or db.ErrNotFound.
-func (r *Repo) Conversion(id int64) (*Conversion, error) {
+func (r *Repo) Conversion(id uid.ID) (*Conversion, error) {
 	return scanConversion(r.d.QueryRow(`SELECT `+ccols+` FROM conversion WHERE id = ?`, id))
 }
 
@@ -164,62 +184,70 @@ func (r *Repo) FailedConversions() ([]*Conversion, error) {
 	return db.Collect(rows, err, scanConversion)
 }
 
-// Turn is a device's first claim, ClaimID, on a queued conversion.
-type Turn struct{ DeviceID, ClaimID, ConversionID int64 }
+// Turn is a device's first claim, ClaimID made at ClaimedAt, on a queued
+// conversion.
+type Turn struct {
+	DeviceID, ClaimID, ConversionID uid.ID
+	ClaimedAt                       time.Time
+}
 
 // Turns lists, for each device claiming a queued conversion, the one it
 // claimed first.
 func (r *Repo) Turns() ([]Turn, error) {
-	// SQLite takes a bare column from the row MIN chose.
-	rows, err := r.d.Query(`SELECT d.device_id, MIN(d.id), d.conversion_id FROM download d JOIN conversion c ON c.id = d.conversion_id
-		WHERE c.status = 'queued' GROUP BY d.device_id`)
+	rows, err := r.d.Query(`SELECT device_id, id, conversion_id, created_at FROM (SELECT d.device_id, d.id, d.conversion_id, d.created_at,
+			ROW_NUMBER() OVER (PARTITION BY d.device_id ORDER BY d.created_at, d.id) AS k
+		FROM download d JOIN conversion c ON c.id = d.conversion_id WHERE c.status = 'queued') WHERE k = 1`)
 	return db.Collect(rows, err, func(s db.Scanner) (Turn, error) {
 		var t Turn
-		return t, db.Wrap(s.Scan(&t.DeviceID, &t.ClaimID, &t.ConversionID))
+		var at int64
+		err := s.Scan(&t.DeviceID, &t.ClaimID, &t.ConversionID, &at)
+		t.ClaimedAt = db.FromMs(at)
+		return t, db.Wrap(err)
 	})
 }
 
 // Claimants lists the devices claiming a conversion.
-func (r *Repo) Claimants(conversionID int64) ([]int64, error) {
+func (r *Repo) Claimants(conversionID uid.ID) ([]uid.ID, error) {
 	rows, err := r.d.Query(`SELECT DISTINCT device_id FROM download WHERE conversion_id = ?`, conversionID)
-	return db.Collect(rows, err, func(s db.Scanner) (int64, error) {
-		var id int64
+	return db.Collect(rows, err, func(s db.Scanner) (uid.ID, error) {
+		var id uid.ID
 		return id, db.Wrap(s.Scan(&id))
 	})
 }
 
 // Start marks a queued conversion converting.
-func (r *Repo) Start(id int64, at time.Time) error {
-	return db.ExecOne(r.d, `UPDATE conversion SET status = 'converting', started_at = ? WHERE id = ? AND status = 'queued'`, db.Ms(at), id)
+func (r *Repo) Start(id uid.ID, at time.Time) error {
+	return db.ExecOne(r.d, `UPDATE conversion SET status = 'converting', started_at = ?1, modified_at = ?1 WHERE id = ?2 AND status = 'queued'`,
+		db.Ms(at), id)
 }
 
 // Finish marks a converting conversion ready at sizeBytes.
-func (r *Repo) Finish(id, sizeBytes int64, at time.Time) error {
-	return db.ExecOne(r.d, `UPDATE conversion SET status = 'ready', size_bytes = ?, finished_at = ? WHERE id = ? AND status = 'converting'`,
-		sizeBytes, db.Ms(at), id)
+func (r *Repo) Finish(id uid.ID, sizeBytes int64, at time.Time) error {
+	return db.ExecOne(r.d, `UPDATE conversion SET status = 'ready', size_bytes = ?1, finished_at = ?2, modified_at = ?2
+		WHERE id = ?3 AND status = 'converting'`, sizeBytes, db.Ms(at), id)
 }
 
 // Fail marks a conversion failed with why.
-func (r *Repo) Fail(id int64, why string, at time.Time) error {
-	return db.ExecOne(r.d, `UPDATE conversion SET status = 'failed', error = ?, finished_at = ? WHERE id = ?`, why, db.Ms(at), id)
+func (r *Repo) Fail(id uid.ID, why string, at time.Time) error {
+	return db.ExecOne(r.d, `UPDATE conversion SET status = 'failed', error = ?1, finished_at = ?2, modified_at = ?2 WHERE id = ?3`, why, db.Ms(at), id)
 }
 
 // Requeue queues again every conversion left converting, as a restart
 // leaves them.
 func (r *Repo) Requeue() error {
-	_, err := r.d.Exec(`UPDATE conversion SET status = 'queued', started_at = NULL WHERE status = 'converting'`)
+	_, err := r.d.Exec(`UPDATE conversion SET status = 'queued', started_at = NULL, modified_at = ? WHERE status = 'converting'`, db.Ms(time.Now()))
 	return db.Wrap(err)
 }
 
 // DeleteConversion removes a conversion with the downloads that claim it.
-func (r *Repo) DeleteConversion(id int64) error {
+func (r *Repo) DeleteConversion(id uid.ID) error {
 	return db.ExecOne(r.d, `DELETE FROM conversion WHERE id = ?`, id)
 }
 
 // DeleteUnclaimed removes a conversion unless a download claims it, and
 // reports whether it went; the claim is checked in the same statement, so
 // one made after the caller looked keeps it.
-func (r *Repo) DeleteUnclaimed(id int64) (bool, error) {
+func (r *Repo) DeleteUnclaimed(id uid.ID) (bool, error) {
 	res, err := r.d.Exec(`DELETE FROM conversion WHERE id = ? AND NOT EXISTS (SELECT 1 FROM download WHERE conversion_id = conversion.id)`, id)
 	if err != nil {
 		return false, db.Wrap(err)
@@ -236,64 +264,60 @@ func (r *Repo) Unneeded() ([]*Conversion, error) {
 
 // ClaimedBy is the conversions claimed by the downloads of these accounts
 // or of their devices.
-func (r *Repo) ClaimedBy(accountIDs []int64) ([]int64, error) {
+func (r *Repo) ClaimedBy(accountIDs []uid.ID) ([]uid.ID, error) {
 	if len(accountIDs) == 0 {
 		return nil, nil
 	}
 	in, args := db.In(accountIDs)
 	rows, err := r.d.Query(`SELECT DISTINCT d.conversion_id FROM download d JOIN device v ON v.id = d.device_id
 		WHERE d.conversion_id IS NOT NULL AND (d.account_id IN `+in+` OR v.account_id IN `+in+`)`, append(args, args...)...)
-	return db.Collect(rows, err, func(s db.Scanner) (int64, error) {
-		var id int64
+	return db.Collect(rows, err, func(s db.Scanner) (uid.ID, error) {
+		var id uid.ID
 		return id, db.Wrap(s.Scan(&id))
 	})
 }
 
 // Count is how many downloads claim a conversion.
-func (r *Repo) Count(conversionID int64) (int, error) {
+func (r *Repo) Count(conversionID uid.ID) (int, error) {
 	var n int
 	err := r.d.QueryRow(`SELECT COUNT(*) FROM download WHERE conversion_id = ?`, conversionID).Scan(&n)
 	return n, db.Wrap(err)
 }
 
-const dcols = `id, device_id, account_id, item_id, edition_id, media_file_id, conversion_id, quality, created_at`
+const dcols = `id, device_id, account_id, item_id, edition_id, media_file_id, conversion_id, quality, created_at, modified_at, created_by, modified_by`
 
 func scanDownload(s db.Scanner) (*Download, error) {
 	var v Download
-	var ed, conv sql.NullInt64
-	var created int64
-	if err := s.Scan(&v.ID, &v.DeviceID, &v.AccountID, &v.ItemID, &ed, &v.MediaFileID, &conv, &v.Quality, &created); err != nil {
+	var created, modified int64
+	if err := s.Scan(&v.ID, &v.DeviceID, &v.AccountID, &v.ItemID, &v.EditionID, &v.MediaFileID, &v.ConversionID, &v.Quality, &created, &modified,
+		&v.CreatedBy, &v.ModifiedBy); err != nil {
 		return nil, db.Wrap(err)
 	}
-	if ed.Valid {
-		v.EditionID = &ed.Int64
-	}
-	if conv.Valid {
-		v.ConversionID = &conv.Int64
-	}
-	v.CreatedAt = db.FromMs(created)
+	v.CreatedAt, v.ModifiedAt = db.FromMs(created), db.FromMs(modified)
 	return &v, nil
 }
 
-// Create inserts v, stamping CreatedAt now unless set, and fills ID.
-func (r *Repo) Create(v *Download) error {
+// Create inserts v, by the acting profile by, stamping CreatedAt now unless
+// set, and fills ID (unless set) and the audit fields.
+func (r *Repo) Create(v *Download, by *uid.ID) error {
+	if v.ID.IsZero() {
+		v.ID = uid.New()
+	}
 	if v.CreatedAt.IsZero() {
 		v.CreatedAt = time.Now().UTC()
 	}
-	res, err := r.d.Exec(`INSERT INTO download (device_id, account_id, item_id, edition_id, media_file_id, conversion_id, quality, created_at)
-		VALUES (?,?,?,?,?,?,?,?)`, v.DeviceID, v.AccountID, v.ItemID, db.NullID(v.EditionID), v.MediaFileID, db.NullID(v.ConversionID), v.Quality, db.Ms(v.CreatedAt))
-	if err != nil {
-		return db.Wrap(err)
-	}
-	v.ID, _ = res.LastInsertId()
-	return nil
+	v.CreatedAt = v.CreatedAt.Truncate(time.Millisecond)
+	v.ModifiedAt, v.CreatedBy, v.ModifiedBy = v.CreatedAt, by, by
+	_, err := r.d.Exec(`INSERT INTO download (`+dcols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, v.ID, v.DeviceID, v.AccountID, v.ItemID, v.EditionID,
+		v.MediaFileID, v.ConversionID, v.Quality, db.Ms(v.CreatedAt), db.Ms(v.CreatedAt), by, by)
+	return db.Wrap(err)
 }
 
 // Claim stores v, on the conversion c describes, requested as Request does,
 // when c is set; one transaction, so no removal of unclaimed conversions
 // runs between the request and the claim. It returns the download already
 // claiming what v would, as Find does, or v.
-func (r *Repo) Claim(v *Download, c *Conversion) (*Download, error) {
+func (r *Repo) Claim(v *Download, c *Conversion, by *uid.ID) (*Download, error) {
 	out := v
 	err := db.InTx(r.d, func(d db.DBTX) error {
 		tx := New(d)
@@ -311,7 +335,7 @@ func (r *Repo) Claim(v *Download, c *Conversion) (*Download, error) {
 		if !errors.Is(err, db.ErrNotFound) {
 			return err
 		}
-		return tx.Create(v)
+		return tx.Create(v, by)
 	})
 	return out, err
 }
@@ -321,12 +345,12 @@ func (r *Repo) Claim(v *Download, c *Conversion) (*Download, error) {
 // db.ErrNotFound.
 func (r *Repo) Find(v *Download) (*Download, error) {
 	return scanDownload(r.d.QueryRow(`SELECT `+dcols+` FROM download WHERE device_id = ? AND account_id = ? AND item_id = ? AND edition_id IS ?
-		AND media_file_id = ? AND conversion_id IS ? ORDER BY id LIMIT 1`, v.DeviceID, v.AccountID, v.ItemID, db.NullID(v.EditionID), v.MediaFileID,
-		db.NullID(v.ConversionID)))
+		AND media_file_id = ? AND conversion_id IS ? ORDER BY created_at, id LIMIT 1`, v.DeviceID, v.AccountID, v.ItemID, v.EditionID, v.MediaFileID,
+		v.ConversionID))
 }
 
 // Get returns one download or db.ErrNotFound.
-func (r *Repo) Get(id int64) (*Download, error) {
+func (r *Repo) Get(id uid.ID) (*Download, error) {
 	return scanDownload(r.d.QueryRow(`SELECT `+dcols+` FROM download WHERE id = ?`, id))
 }
 
@@ -337,19 +361,19 @@ var visibleDownloads = `SELECT ` + dcols + ` FROM download WHERE device_id = ?1 
 
 // Of returns a download of the device for the profile whose title the
 // audience may see; any other is db.ErrNotFound.
-func (r *Repo) Of(id, deviceID, accountID int64, a item.Audience) (*Download, error) {
+func (r *Repo) Of(id, deviceID, accountID uid.ID, a item.Audience) (*Download, error) {
 	return scanDownload(r.d.QueryRow(visibleDownloads+` AND id = ?3`, append([]any{deviceID, accountID, id, nil, nil}, a.Args()...)...))
 }
 
 // List pages, oldest first, the downloads of the device for the profile
 // whose titles the audience may see.
-func (r *Repo) List(deviceID, accountID int64, a item.Audience, limit, offset int) ([]*Download, error) {
-	rows, err := r.d.Query(visibleDownloads+` ORDER BY id LIMIT ?3 OFFSET ?4`, append([]any{deviceID, accountID, limit, offset, nil}, a.Args()...)...)
+func (r *Repo) List(deviceID, accountID uid.ID, a item.Audience, limit, offset int) ([]*Download, error) {
+	rows, err := r.d.Query(visibleDownloads+` ORDER BY created_at, id LIMIT ?3 OFFSET ?4`, append([]any{deviceID, accountID, limit, offset, nil}, a.Args()...)...)
 	return db.Collect(rows, err, scanDownload)
 }
 
 // Delete removes one download.
-func (r *Repo) Delete(id int64) error {
+func (r *Repo) Delete(id uid.ID) error {
 	return db.ExecOne(r.d, `DELETE FROM download WHERE id = ?`, id)
 }
 

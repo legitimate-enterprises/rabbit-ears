@@ -16,6 +16,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/logstore"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/sso"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // Why a single sign-on failed, as the callback tells the sign-in page.
@@ -68,7 +69,7 @@ type SSOService struct {
 }
 
 type ssoPending struct {
-	providerID                             int64
+	providerID                             uid.ID
 	verifier, nonce, returnTo, redirectURI string
 	expires                                time.Time
 }
@@ -76,7 +77,7 @@ type ssoPending struct {
 // ssoCode is a one-time code with the binding the browser that finished the
 // flow must present: the flow's state, which only that browser's cookie holds.
 type ssoCode struct {
-	accountID int64
+	accountID uid.ID
 	binding   string
 	expires   time.Time
 }
@@ -140,7 +141,7 @@ func (s *SSOService) dropSoonest() {
 // Start begins a sign-in at an enabled provider and returns the provider
 // URL to send the browser to, and the state the browser must bring back.
 // Failures are *SSOError.
-func (s *SSOService) Start(ctx context.Context, providerID int64, returnTo, redirectURI string) (to, state string, err error) {
+func (s *SSOService) Start(ctx context.Context, providerID uid.ID, returnTo, redirectURI string) (to, state string, err error) {
 	p, err := s.repo.Get(providerID)
 	if errors.Is(err, db.ErrNotFound) || err == nil && !p.Enabled {
 		return "", "", ssoFailed("", SSOProviderError, errors.New("no such enabled provider"))

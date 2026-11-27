@@ -2,14 +2,38 @@ package replica_test
 
 import (
 	"database/sql"
+	"database/sql/driver"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
 
+	"modernc.org/sqlite"
+
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db/dbtest"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/replica"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
+
+// The fixtures' SQL names fixture id n as uid(n), the bytes of uid.N(n), on
+// every connection the tests open.
+func init() {
+	err := sqlite.RegisterDeterministicScalarFunction("uid", 1, func(_ *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
+		n, ok := args[0].(int64)
+		if !ok {
+			return nil, fmt.Errorf("uid(%v)", args[0])
+		}
+		id := uid.N(int(n))
+		return id[:], nil
+	})
+	if err != nil {
+		panic(err)
+	}
+}
+
+// u is fixture id n as the wire carries it.
+func u(n int) string { return uid.N(n).String() }
 
 func strs(t *testing.T, d db.DBTX, q string, args ...any) []string {
 	t.Helper()
@@ -142,10 +166,10 @@ func TestNothingSecretIsProjected(t *testing.T) {
 // TMDB image path whole, any other by its file name.
 func TestImagePathsAreFileNames(t *testing.T) {
 	d := dbtest.Open(t)
-	mustExec(t, d, `INSERT INTO library (id, name, kind, created_at, updated_at) VALUES (1, 'L', 'movies', 0, 0)`)
-	mustExec(t, d, `INSERT INTO item (id, library_id, kind, parsed_title, added_at, updated_at) VALUES (1, 1, 'movie', 'M', 0, 0)`)
+	mustExec(t, d, `INSERT INTO library (id, name, kind, created_at, modified_at) VALUES (uid(1), 'L', 'movies', 0, 0)`)
+	mustExec(t, d, `INSERT INTO item (id, library_id, kind, parsed_title, added_at, created_at, modified_at) VALUES (uid(1), uid(1), 'movie', 'M', 0, 0, 0)`)
 	mustExec(t, d, `INSERT INTO item_metadata (item_id, source, provider, poster_path, backdrop_path)
-		VALUES (1, 'remote', 'tmdb', '/abc.jpg', NULL), (1, 'local', 'tmdb', '/Volumes/Films/M (2001)/poster.jpg', 'thumbnails/local/7.jpg')`)
+		VALUES (uid(1), 'remote', 'tmdb', '/abc.jpg', NULL), (uid(1), 'local', 'tmdb', '/Volumes/Films/M (2001)/poster.jpg', 'thumbnails/local/7.jpg')`)
 	var tb replica.Table
 	for _, x := range replica.V1.Tables {
 		if x.Name == "item_metadata" {
@@ -193,14 +217,14 @@ func TestScopesCompile(t *testing.T) {
 		if tb.Scope != "" {
 			q += ` AND (` + tb.Scope + `)`
 		}
-		if _, err := d.Exec(q, 1); err != nil {
+		if _, err := d.Exec(q, uid.N(1)); err != nil {
 			t.Errorf("%s: %v", tb.Name, err)
 		}
 		q = `SELECT k1, k2, k3 FROM sync_tombstone WHERE tbl = ?2 AND ?1 IS NOT NULL`
 		if tb.TombScope != "" {
 			q += ` AND (` + tb.TombScope + `)`
 		}
-		if _, err := d.Exec(q, 1, tb.Source); err != nil {
+		if _, err := d.Exec(q, uid.N(1), tb.Source); err != nil {
 			t.Errorf("%s tombstones: %v", tb.Name, err)
 		}
 	}

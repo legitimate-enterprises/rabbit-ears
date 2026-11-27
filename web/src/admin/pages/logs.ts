@@ -78,7 +78,7 @@ export async function logs(ctx: Ctx): Promise<HTMLElement[]> {
 
   let entries: Entry[] = [];
   let next: number | undefined;
-  const open = new Set<number>();
+  const open = new Set<string>();
   const body = h("div");
   const caption = h("span.sub");
   const older = h("button.ib", { onclick: () => void fetchPage(true) }, "Load older");

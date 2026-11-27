@@ -24,7 +24,10 @@ export interface ApiOptions {
   fetch?: (req: Request) => Promise<Response>;
 }
 
-export function createApi({ token, baseUrl = "/api/v1", fetch }: ApiOptions = {}) {
+/** The path every REST route, stream and artwork URL lives under. */
+export const API_BASE = "/api/v2";
+
+export function createApi({ token, baseUrl = API_BASE, fetch }: ApiOptions = {}) {
   return createClient<paths>({
     baseUrl,
     fetch,

@@ -20,7 +20,7 @@ const PLAYLIST = {
 } as const;
 
 /** A show or season id marks every episode the profile may see. */
-export const markWatched = (ctx: Ctx, itemIds: number[], watched: boolean) =>
+export const markWatched = (ctx: Ctx, itemIds: string[], watched: boolean) =>
   ok(
     ctx.api.PUT("/profiles/{profileId}/watch-state/batch", {
       params: { path: { profileId: ctx.profile.id } },
@@ -34,11 +34,11 @@ export const markWatched = (ctx: Ctx, itemIds: number[], watched: boolean) =>
  */
 export function selection(ctx: Ctx, kind: SelectKind, root: HTMLElement) {
   const adult = ctx.profile.kind === "adult";
-  const picked = new Set<number>();
-  let anchor: number | undefined;
+  const picked = new Set<string>();
+  let anchor: string | undefined;
   let on = false;
   const tiles = () => [...root.querySelectorAll<HTMLElement>("[data-id]")];
-  const idOf = (el: Element) => Number((el as HTMLElement).dataset.id);
+  const idOf = (el: Element) => (el as HTMLElement).dataset.id!;
   const count = h("span.grow", { role: "status" });
   const ids = () =>
     tiles()
@@ -130,7 +130,7 @@ export function selection(ctx: Ctx, kind: SelectKind, root: HTMLElement) {
     "Select",
   );
 
-  const act = (label: string, run: (itemIds: number[]) => Promise<unknown>) =>
+  const act = (label: string, run: (itemIds: string[]) => Promise<unknown>) =>
     h(
       "button.btn.s.act",
       {
@@ -143,8 +143,8 @@ export function selection(ctx: Ctx, kind: SelectKind, root: HTMLElement) {
       },
       label,
     );
-  const watched = (watched: boolean) => (itemIds: number[]) => markWatched(ctx, itemIds, watched);
-  const kids = (kidsContent: boolean) => (itemIds: number[]) =>
+  const watched = (watched: boolean) => (itemIds: string[]) => markWatched(ctx, itemIds, watched);
+  const kids = (kidsContent: boolean) => (itemIds: string[]) =>
     ok(ctx.api.PUT("/items/kids-content/batch", { body: { itemIds, kidsContent } }));
   const list = kind in PLAYLIST ? PLAYLIST[kind as keyof typeof PLAYLIST] : undefined;
   const adds = list

@@ -2,11 +2,12 @@ import { expect, type APIRequestContext, type Page } from "@playwright/test";
 import { copyFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { API_BASE } from "../src/api/client";
 
 export const fixtures = resolve(import.meta.dirname, "../../fixtures");
 export const email = "ada@example.com";
 export const password = "correct horse battery";
-const api = "/api/v1";
+export const api = API_BASE;
 
 // Audio still decodes and plays, at 1% so a run is not heard across the room.
 export const quiet = () => {
@@ -20,7 +21,7 @@ export const quiet = () => {
 type Headers = { Authorization: string };
 
 /** Makes a library's scan task due now, once, if it has never run. */
-async function scanSoon(request: APIRequestContext, headers: Headers, libraryId: number) {
+async function scanSoon(request: APIRequestContext, headers: Headers, libraryId: string) {
   const tasks = (await (await request.get(`${api}/tasks`, { headers })).json()).items;
   const scan = tasks.find((t: { kind: string }) => t.kind === `scan:${libraryId}`);
   if (scan && !scan.lastRun)
@@ -139,7 +140,7 @@ export async function seedEditions(request: APIRequestContext, headers: Headers)
     ).json();
     await request.post(`${api}/libraries/${lib.id}/folders`, { headers, data: { path: root } });
   }
-  let movie: { id: number; editions: { id: number; name: string }[] } | undefined;
+  let movie: { id: string; editions: { id: string; name: string }[] } | undefined;
   await expect(async () => {
     await scanSoon(request, headers, lib.id);
     const items = (await (await request.get(`${api}/items?kind=movie`, { headers })).json()).items;

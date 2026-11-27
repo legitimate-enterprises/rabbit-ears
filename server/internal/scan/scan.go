@@ -33,6 +33,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/serverinfo"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/thumbs"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/tmdb"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/youtube"
 )
 
@@ -352,7 +353,7 @@ func (s *Scanner) matcher(lib *library.Library) func(context.Context, *library.L
 // movie's TMDB id into that movie, so a copy in another folder or under
 // another name joins the movie everything already points at. sum, if set,
 // counts each as a file added to the older.
-func (s *Scanner) foldMovies(libraryID int64, sum *Summary) error {
+func (s *Scanner) foldMovies(libraryID uid.ID, sum *Summary) error {
 	pairs, err := s.Items.MovieDuplicates(libraryID)
 	if err != nil {
 		return err
@@ -430,7 +431,7 @@ func (s *Scanner) syncFile(ctx context.Context, lib *library.Library, c candidat
 	f, err := s.Files.FileByPath(c.path)
 	switch {
 	case errors.Is(err, db.ErrNotFound):
-		f = &mediafile.File{Path: c.path, SizeBytes: c.size, ModifiedAt: c.mod}
+		f = &mediafile.File{Path: c.path, SizeBytes: c.size, FileModifiedAt: c.mod}
 		if err := s.Files.CreateFile(f); err != nil {
 			return err
 		}
@@ -439,8 +440,8 @@ func (s *Scanner) syncFile(ctx context.Context, lib *library.Library, c candidat
 		}
 	case err != nil:
 		return err
-	case f.SizeBytes != c.size || !f.ModifiedAt.Equal(c.mod):
-		f.SizeBytes, f.ModifiedAt, f.ProbedAt = c.size, c.mod, nil
+	case f.SizeBytes != c.size || !f.FileModifiedAt.Equal(c.mod):
+		f.SizeBytes, f.FileModifiedAt, f.ProbedAt = c.size, c.mod, nil
 		if err := s.Files.UpdateFile(f); err != nil {
 			return err
 		}
@@ -471,12 +472,12 @@ func (s *Scanner) syncFile(ctx context.Context, lib *library.Library, c candidat
 // the {edition-Name} tag picks the edition and untagged runtimes tell cuts
 // apart; every other item has one edition. A file already in exactly these
 // items and not just probed stays where it is.
-func (s *Scanner) place(lib *library.Library, f *mediafile.File, itemIDs []int64, fresh bool, sum *Summary) error {
+func (s *Scanner) place(lib *library.Library, f *mediafile.File, itemIDs []uid.ID, fresh bool, sum *Summary) error {
 	linked, err := s.Editions.ItemIDs(f.ID)
 	if err != nil {
 		return err
 	}
-	want := slices.Sorted(slices.Values(itemIDs))
+	want := slices.SortedFunc(slices.Values(itemIDs), uid.ID.Compare)
 	if !fresh && slices.Equal(linked, want) {
 		return nil
 	}
@@ -547,7 +548,7 @@ func (s *Scanner) chapterThumbs(ctx context.Context, f *mediafile.File) {
 		return
 	}
 	for _, ch := range chs {
-		out := filepath.Join(s.ThumbDir, strconv.FormatInt(f.ID, 10), strconv.Itoa(ch.Position)+".jpg")
+		out := filepath.Join(s.ThumbDir, f.ID.String(), strconv.Itoa(ch.Position)+".jpg")
 		tctx, cancel := context.WithTimeout(ctx, runLimit)
 		err := s.Thumb(tctx, f.Path, ch.Position, ch.StartMs, ch.EndMs, out)
 		cancel()
@@ -563,16 +564,12 @@ func (s *Scanner) chapterThumbs(ctx context.Context, f *mediafile.File) {
 
 // resolve finds or creates the items a file belongs to; none means the
 // name gave nothing to attach it to.
-func (s *Scanner) resolve(lib *library.Library, c candidate, sum *Summary) ([]int64, error) {
+func (s *Scanner) resolve(lib *library.Library, c candidate, sum *Summary) ([]uid.ID, error) {
 	switch lib.Kind {
 	case library.Movies:
 		return s.resolveMovie(lib, c, sum)
 	case library.YouTube:
-		id, err := s.resolveVideo(lib, c, sum)
-		if id == 0 {
-			return nil, err
-		}
-		return []int64{id}, err
+		return s.resolveVideo(lib, c, sum)
 	}
 	return s.resolveEpisode(lib, c, sum)
 }
@@ -584,7 +581,7 @@ func (s *Scanner) reviewLoose(lib *library.Library, sum *Summary) error {
 	if s.Reviews == nil {
 		return nil
 	}
-	var keep []int64
+	var keep []uid.ID
 	for _, p := range sum.loose {
 		rv := &review.Review{LibraryID: lib.ID, Path: p, Reason: review.Unrecognized, RaisedAt: s.Now().UTC()}
 		if err := s.Reviews.Raise(rv); err != nil {
@@ -628,7 +625,7 @@ func ownName(path string) bool {
 
 // stayed reports whether any of a movie's files is on disk where it was
 // before this scan.
-func (s *Scanner) stayed(itemID int64, sum *Summary) (bool, error) {
+func (s *Scanner) stayed(itemID uid.ID, sum *Summary) (bool, error) {
 	files, err := s.Files.FilesForItem(itemID)
 	return slices.ContainsFunc(files, func(f *mediafile.File) bool { return !sum.moved[f.Path] && fileExists(f.Path) }), err
 }
@@ -640,7 +637,7 @@ func (s *Scanner) stayed(itemID int64, sum *Summary) (bool, error) {
 // own name states another; otherwise the library's movie of the same
 // title and year, ignoring case, unless the two state different ids, else
 // a new movie. Without a year the title alone is not enough.
-func (s *Scanner) resolveMovie(lib *library.Library, c candidate, sum *Summary) ([]int64, error) {
+func (s *Scanner) resolveMovie(lib *library.Library, c candidate, sum *Summary) ([]uid.ID, error) {
 	name, dir := filepath.Base(c.path), filepath.Dir(c.path)
 	id := parse.ReadIdentity(name)
 	folder := dir != c.root && !ownName(c.path)
@@ -651,28 +648,28 @@ func (s *Scanner) resolveMovie(lib *library.Library, c candidate, sum *Summary) 
 		}
 	}
 	title, year := parse.Title(name)
-	if f, err := s.Files.FileByPath(c.path); err == nil && f.ItemID != 0 {
+	if f, err := s.Files.FileByPath(c.path); err == nil && f.ItemID != nil {
 		if !sum.moved[c.path] || title == "" {
-			return []int64{f.ItemID}, nil
+			return []uid.ID{*f.ItemID}, nil
 		}
-		it, err := s.Items.Get(f.ItemID)
+		it, err := s.Items.Get(*f.ItemID)
 		if err != nil {
 			return nil, err
 		}
 		if strings.EqualFold(it.ParsedTitle, title) && sameYear(it.ParsedYear, year) {
-			return []int64{it.ID}, nil
+			return []uid.ID{it.ID}, nil
 		}
 		if left, err := s.stayed(it.ID, sum); err != nil {
 			return nil, err
 		} else if !left {
 			it.ParsedTitle, it.ParsedYear = title, year
-			return []int64{it.ID}, s.Items.Update(it)
+			return []uid.ID{it.ID}, s.Items.Update(it)
 		}
 	} else if folder {
 		switch it, err := s.Items.MovieInFolder(lib.ID, dir); {
 		case err == nil:
 			if other, err := s.statesAnother(it, id); err != nil || !other {
-				return []int64{it.ID}, err
+				return []uid.ID{it.ID}, err
 			}
 			title, year = parse.Title(filepath.Base(c.path))
 		case !errors.Is(err, db.ErrNotFound):
@@ -689,7 +686,7 @@ func (s *Scanner) resolveMovie(lib *library.Library, c candidate, sum *Summary) 
 			return nil, err
 		default:
 			if other, err := s.statesAnother(it, id); err != nil || !other {
-				return []int64{it.ID}, err
+				return []uid.ID{it.ID}, err
 			}
 		}
 	}
@@ -699,7 +696,7 @@ func (s *Scanner) resolveMovie(lib *library.Library, c candidate, sum *Summary) 
 	}
 	sum.Added[item.Movie]++
 	sum.created = append(sum.created, it.ID)
-	return []int64{it.ID}, nil
+	return []uid.ID{it.ID}, nil
 }
 
 // renamedShow is the library's one show of this title whose folder is
@@ -747,7 +744,7 @@ func (s *Scanner) splitShow(lib *library.Library, dir string) (*item.Item, error
 	return nil, db.ErrNotFound
 }
 
-func (s *Scanner) resolveEpisode(lib *library.Library, c candidate, sum *Summary) ([]int64, error) {
+func (s *Scanner) resolveEpisode(lib *library.Library, c candidate, sum *Summary) ([]uid.ID, error) {
 	rel, err := filepath.Rel(c.root, c.path)
 	if err != nil {
 		return nil, err
@@ -814,7 +811,7 @@ func (s *Scanner) resolveEpisode(lib *library.Library, c candidate, sum *Summary
 	if err != nil {
 		return nil, err
 	}
-	var ids []int64
+	var ids []uid.ID
 	for _, en := range ens {
 		ep, err := s.Items.Episode(season.ID, en)
 		if errors.Is(err, db.ErrNotFound) {
@@ -885,8 +882,9 @@ func (s *Scanner) spare(f *mediafile.File, seen map[string]bool) (bool, error) {
 	return true, nil
 }
 
-func (s *Scanner) pruneEmpty(id int64, sum *Summary) error {
-	for id != 0 {
+func (s *Scanner) pruneEmpty(id uid.ID, sum *Summary) error {
+	for next := &id; next != nil; {
+		id := *next
 		it, err := s.Items.Get(id)
 		if errors.Is(err, db.ErrNotFound) {
 			return nil
@@ -900,7 +898,7 @@ func (s *Scanner) pruneEmpty(id int64, sum *Summary) error {
 			if err != nil {
 				return err
 			}
-		} else if n, err = s.Items.Count(item.Filter{ParentID: id}); err != nil {
+		} else if n, err = s.Items.Count(item.Filter{ParentID: &id}); err != nil {
 			return err
 		}
 		if it.Kind == item.Artist && n == 0 {
@@ -918,17 +916,14 @@ func (s *Scanner) pruneEmpty(id int64, sum *Summary) error {
 		if err := s.pruneArtists(it, sum); err != nil {
 			return err
 		}
-		id = 0
-		if it.ParentID != nil {
-			id = *it.ParentID
-		}
+		next = it.ParentID
 	}
 	return nil
 }
 
 // dropPreviews removes a changed file's seek previews and their frames, so
 // the Seek previews task makes them again.
-func (s *Scanner) dropPreviews(fileID int64) error {
+func (s *Scanner) dropPreviews(fileID uid.ID) error {
 	p, err := s.Previews.ByMediaFile(fileID)
 	if errors.Is(err, db.ErrNotFound) {
 		return nil
@@ -941,7 +936,7 @@ func (s *Scanner) dropPreviews(fileID int64) error {
 	return os.RemoveAll(p.Dir)
 }
 
-func (s *Scanner) gone(fileID int64) bool {
+func (s *Scanner) gone(fileID uid.ID) bool {
 	_, err := s.Files.File(fileID)
 	return errors.Is(err, db.ErrNotFound)
 }
@@ -968,7 +963,7 @@ func (s *Scanner) MakePreviews(ctx context.Context, progress func(float64), yiel
 		if !fileExists(f.Path) {
 			continue // a failure recorded now would outlast the outage
 		}
-		dir := filepath.Join(s.PreviewDir, strconv.FormatInt(f.ID, 10))
+		dir := filepath.Join(s.PreviewDir, f.ID.String())
 		pctx, cancel := context.WithTimeout(ctx, previewsLimit(f))
 		fr, err := thumbs.Previews(pctx, f.Path, dir)
 		cancel()

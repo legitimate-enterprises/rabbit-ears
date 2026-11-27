@@ -10,6 +10,7 @@ import (
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/api"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // fakeImages stands in for the provider's image cache: it writes the size
@@ -32,7 +33,7 @@ func TestItemArtworkFallsBackToAncestors(t *testing.T) {
 	var lib api.Library
 	e.expect(201, "POST", "/libraries", e.admin.token, map[string]any{"name": "TV", "kind": "tv"}, &lib)
 	items := e.svc.Items.Repo()
-	add := func(kind string, parent *int64) *item.Item {
+	add := func(kind string, parent *uid.ID) *item.Item {
 		it := &item.Item{LibraryID: lib.Id, Kind: kind, ParentID: parent, ParsedTitle: kind}
 		must(t, items.Create(it))
 		return it
@@ -44,16 +45,16 @@ func TestItemArtworkFallsBackToAncestors(t *testing.T) {
 	must(t, items.SetMetadata(&item.Metadata{ItemID: show.ID, Status: item.Matched, PosterPath: "/show.jpg", BackdropPath: "/wide.jpg"}))
 	must(t, items.SetMetadata(&item.Metadata{ItemID: ep.ID, Status: item.Matched, PosterPath: "/still.jpg"}))
 
-	get := func(id int64, kind string) string {
+	get := func(id uid.ID, kind string) string {
 		t.Helper()
 		status, raw := e.do("GET", "/items/"+itoa(id)+"/artwork/"+kind, e.plain.token, nil, nil)
 		if status != 200 {
-			t.Fatalf("%d %s: %d %s", id, kind, status, raw)
+			t.Fatalf("%s %s: %d %s", id, kind, status, raw)
 		}
 		return string(raw)
 	}
 	for _, c := range []struct {
-		id         int64
+		id         uid.ID
 		kind, want string
 	}{
 		{ep.ID, "poster", "w500/still.jpg"},
@@ -62,7 +63,7 @@ func TestItemArtworkFallsBackToAncestors(t *testing.T) {
 		{show.ID, "backdrop", "w1280/wide.jpg"},
 	} {
 		if got := get(c.id, c.kind); got != c.want {
-			t.Errorf("%d %s = %q, want %q", c.id, c.kind, got, c.want)
+			t.Errorf("%s %s = %q, want %q", c.id, c.kind, got, c.want)
 		}
 	}
 	if !strings.Contains(string(e.expect(404, "GET", "/items/"+itoa(bare.ID)+"/artwork/poster", e.plain.token, nil, nil)), "not_found") {

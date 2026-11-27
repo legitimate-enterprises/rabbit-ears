@@ -75,7 +75,7 @@ export async function search(ctx: Ctx, _: string[], query: URLSearchParams) {
 
 /** A person's movies and shows. */
 export async function personPage(ctx: Ctx, [id]: string[]) {
-  const personId = Number(id);
+  const personId = id;
   const [p, list] = await Promise.all([
     ok(ctx.api.GET("/people/{personId}", { params: { path: { personId } } })),
     items(ctx.api, { personId }),

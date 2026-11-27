@@ -93,7 +93,8 @@ func (s *Server) ExchangeSsoCode(ctx context.Context, r api.ExchangeSsoCodeReque
 
 func toSSOProvider(p *sso.Provider) api.SsoProvider {
 	return api.SsoProvider{Id: p.ID, Name: p.Name, Issuer: p.Issuer, ClientId: p.ClientID, ClientSecretSet: p.ClientSecret != "",
-		RequiredGroup: optStr(p.RequiredGroup), LinksByEmail: p.LinksByEmail, Enabled: p.Enabled, CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt}
+		RequiredGroup: optStr(p.RequiredGroup), LinksByEmail: p.LinksByEmail, Enabled: p.Enabled, CreatedAt: p.CreatedAt, ModifiedAt: p.ModifiedAt,
+		CreatedBy: p.CreatedBy, ModifiedBy: p.ModifiedBy}
 }
 
 // ssoProviderFrom applies an admin's form once the issuer answers; an
@@ -129,7 +130,10 @@ func (s *Server) CreateSsoProvider(ctx context.Context, r api.CreateSsoProviderR
 	if err := s.ssoProviderFrom(ctx, r.Body, p); err != nil {
 		return nil, err
 	}
-	if err := s.svc.SSO.Repo().Create(p); err != nil {
+	if r.Body.Id != nil {
+		p.ID = *r.Body.Id
+	}
+	if err := s.svc.SSO.Repo().Create(p, actor(ctx)); err != nil {
 		return nil, err
 	}
 	audit(ctx, "Added the single sign-on provider "+p.Name)
@@ -147,6 +151,9 @@ func (s *Server) GetSsoProvider(_ context.Context, r api.GetSsoProviderRequestOb
 
 // ReplaceSsoProvider edits, enables or disables a provider.
 func (s *Server) ReplaceSsoProvider(ctx context.Context, r api.ReplaceSsoProviderRequestObject) (api.ReplaceSsoProviderResponseObject, error) {
+	if err := sameID(r.Body.Id, r.ProviderId); err != nil {
+		return nil, err
+	}
 	p, err := s.svc.SSO.Repo().Get(r.ProviderId)
 	if err != nil {
 		return nil, err
@@ -154,7 +161,7 @@ func (s *Server) ReplaceSsoProvider(ctx context.Context, r api.ReplaceSsoProvide
 	if err := s.ssoProviderFrom(ctx, r.Body, p); err != nil {
 		return nil, err
 	}
-	if err := s.svc.SSO.Repo().Update(p); err != nil {
+	if err := s.svc.SSO.Repo().Update(p, actor(ctx)); err != nil {
 		return nil, err
 	}
 	audit(ctx, "Changed the single sign-on provider "+p.Name)
@@ -175,7 +182,8 @@ func (s *Server) DeleteSsoProvider(ctx context.Context, r api.DeleteSsoProviderR
 }
 
 func toIdentity(i *sso.Identity) api.AccountIdentity {
-	return api.AccountIdentity{Id: i.ID, AccountId: i.AccountID, ProviderId: i.ProviderID, Subject: i.Subject, Email: optStr(i.Email), CreatedAt: i.CreatedAt}
+	return api.AccountIdentity{Id: i.ID, AccountId: i.AccountID, ProviderId: i.ProviderID, Subject: i.Subject, Email: optStr(i.Email),
+		CreatedAt: i.CreatedAt, ModifiedAt: i.ModifiedAt}
 }
 
 // ListAccountIdentities pages an account's identities.

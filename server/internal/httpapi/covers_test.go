@@ -18,6 +18,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/httpapi"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 func pngOf(t *testing.T, w, h int) []byte {
@@ -89,6 +90,11 @@ func TestPlaylistImageUpload(t *testing.T) {
 		img.Bounds().Dx() != cover.MaxSide || h.Get("Cache-Control") != "private, max-age=86400" {
 		t.Fatalf("%d %s %v %v %v", status, format, err, img, h)
 	}
+	// The address and the validator name the cover by its id.
+	_, v, _ := strings.Cut(*pl.ImageUrl, "/image?v=")
+	if _, err := uid.Parse(v); err != nil || h.Get("ETag") != `"cover/`+v+`"` {
+		t.Fatalf("%s %s", *pl.ImageUrl, h.Get("ETag"))
+	}
 	if status, _, _ := e.send("GET", strings.TrimPrefix(*pl.ImageUrl, httpapi.BasePath), e.plain.token, "", nil,
 		"If-None-Match", h.Get("ETag")); status != 304 {
 		t.Fatalf("revalidated: %d", status)
@@ -135,7 +141,7 @@ func TestPlaylistImageUploadValidation(t *testing.T) {
 	if status, _, raw := e.send("PUT", path, e.plain.token, "application/octet-stream", make([]byte, 16<<20+1)); errorCode(t, raw) != "payload_too_large" {
 		t.Errorf("%d %s", status, raw)
 	}
-	if _, err := e.svc.Covers.Repo().Of(cover.Owner{PlaylistID: s.pl.Id}); !errors.Is(err, db.ErrNotFound) {
+	if _, err := e.svc.Covers.Repo().Of(cover.Owner{PlaylistID: &s.pl.Id}); !errors.Is(err, db.ErrNotFound) {
 		t.Fatalf("kept: %v", err)
 	}
 }
@@ -168,7 +174,7 @@ func TestPlaylistImageFromATitle(t *testing.T) {
 	e := newEnv(t)
 	e.svc.Items.Images, e.svc.Items.ImageDir = &fakeImages{}, t.TempDir()
 	s := e.sharedSetup()
-	for _, id := range []int64{s.g, s.r} {
+	for _, id := range []uid.ID{s.g, s.r} {
 		must(t, e.svc.Items.Repo().SetMetadata(&item.Metadata{ItemID: id, Status: item.Matched, PosterPath: "/p" + itoa(id) + ".jpg",
 			ContentRating: map[bool]string{true: "G", false: "R"}[id == s.g]}))
 	}
@@ -263,7 +269,7 @@ func TestImagesGoWithTheirOwners(t *testing.T) {
 	e.upload("/stations/"+itoa(st.Id)+"/image", e.plain.token, pngOf(t, 4, 4), nil)
 	e.expect(204, "DELETE", s.owner, e.plain.token, nil, nil)
 	e.expect(204, "DELETE", "/stations/"+itoa(st.Id), e.plain.token, nil, nil)
-	for _, o := range []cover.Owner{{PlaylistID: s.pl.Id}, {StationID: st.Id}} {
+	for _, o := range []cover.Owner{{PlaylistID: &s.pl.Id}, {StationID: &st.Id}} {
 		if _, err := e.svc.Covers.Repo().Of(o); !errors.Is(err, db.ErrNotFound) {
 			t.Errorf("%+v: %v", o, err)
 		}
@@ -277,7 +283,7 @@ func TestStationImage(t *testing.T) {
 	films := e.library("movies")
 	lantern := e.film(films, "Lantern", "2001-01-01", "R")
 	must(t, e.svc.Items.Repo().SetMetadata(&item.Metadata{ItemID: lantern, Status: item.Matched, BackdropPath: "/wide.jpg", ContentRating: "R"}))
-	pl := e.nightsPlaylist(map[int64]int64{lantern: 90})
+	pl := e.nightsPlaylist(map[uid.ID]int64{lantern: 90})
 	neighbor := e.neighbor(e.plain)
 	var st api.Station
 	e.expect(201, "POST", "/stations", e.plain.token, map[string]any{"name": "Nights", "playlistId": pl, "visibility": "household"}, &st)

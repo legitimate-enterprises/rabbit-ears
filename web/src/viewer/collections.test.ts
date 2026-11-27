@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setToken } from "../admin/api";
 import { boot } from "./app";
 import { at, calls, json, mockFetch, none, root, until } from "./testSupport";
+import { uid } from "../api/uid";
 
 vi.mock("hls.js", () => ({
   default: class {
@@ -16,7 +17,7 @@ const button = (r: ParentNode, label: string) =>
   [...r.querySelectorAll<HTMLElement>("button, a")].find((b) => b.textContent === label)!;
 const ts = "2026-01-01T00:00:00Z";
 const acct = (id: number, name: string, kind = "adult") => ({
-  id,
+  id: uid(id),
   kind,
   name,
   isAdmin: false,
@@ -25,57 +26,57 @@ const acct = (id: number, name: string, kind = "adult") => ({
   pending: false,
   filterMode: "ratings",
   createdAt: ts,
-  updatedAt: ts,
+  modifiedAt: ts,
 });
 const me = (active: number) => ({
-  device: { id: 1 },
+  device: { id: uid(1) },
   account: acct(1, "Heidi"),
-  activeProfileId: active,
-  household: { id: 1, name: "Heidi", adultId: 1, createdAt: ts },
+  activeProfileId: uid(active),
+  household: { id: uid(1), name: "Heidi", adultId: uid(1), createdAt: ts },
   profiles: [acct(1, "Heidi"), acct(2, "Jax", "kid")],
 });
 const page = (items: unknown[]) => ({ items });
 const base = (active = 1) => ({
   "GET /health": { status: "ok", version: "1.0.0", setupRequired: false },
   "GET /me": me(active),
-  "GET /profiles/1/watch-state": page([]),
-  "GET /profiles/2/watch-state": page([]),
-  "GET /profiles/1/show-progress": page([]),
-  "GET /profiles/2/show-progress": page([]),
+  [`GET /profiles/${uid(1)}/watch-state`]: page([]),
+  [`GET /profiles/${uid(2)}/watch-state`]: page([]),
+  [`GET /profiles/${uid(1)}/show-progress`]: page([]),
+  [`GET /profiles/${uid(2)}/show-progress`]: page([]),
   "GET /genres": page([]),
   "GET /items": page([]),
 });
 const col = (id: number, name: string, source = "custom", movieCount = 2, customOrder = false) => ({
-  id,
+  id: uid(id),
   source,
   name,
   movieCount,
   customOrder,
-  ...(source === "tmdb" ? { tmdbId: 10, overview: "A franchise." } : { householdId: 1 }),
+  ...(source === "tmdb" ? { tmdbId: 10, overview: "A franchise." } : { householdId: uid(1) }),
   createdAt: ts,
-  updatedAt: ts,
+  modifiedAt: ts,
 });
 const movie = (id: number, name: string, year: number, extra = {}) => ({
-  id,
-  libraryId: 1,
+  id: uid(id),
+  libraryId: uid(1),
   kind: "movie",
   parsedTitle: name,
   parsedYear: year,
   addedAt: ts,
-  updatedAt: ts,
+  modifiedAt: ts,
   ...extra,
 });
 const MOVIES = [movie(30, "Dune", 1984), movie(31, "Arrival", 2016)];
 const pl = (id: number, name: string) => ({
-  id,
-  profileId: 1,
+  id: uid(id),
+  profileId: uid(1),
   access: "owner",
   name,
   kind: "movies",
   itemCount: 2,
   durationMs: 0,
   createdAt: ts,
-  updatedAt: ts,
+  modifiedAt: ts,
 });
 
 beforeEach(() => {
@@ -88,8 +89,8 @@ describe("Collections view", () => {
   const routes = {
     "GET /collections": page([col(7, "Dune saga", "tmdb"), col(8, "Date night", "custom", 1)]),
     "POST /collections": col(9, "Rainy days"),
-    "GET /collections/9": col(9, "Rainy days", "custom", 0),
-    "GET /collections/9/movies": page([]),
+    [`GET /collections/${uid(9)}`]: col(9, "Rainy days", "custom", 0),
+    [`GET /collections/${uid(9)}/movies`]: page([]),
   };
 
   it("lists collections as tiles for an adult, who can make one", async () => {
@@ -110,9 +111,11 @@ describe("Collections view", () => {
     expect(text(r.querySelectorAll(".grid .poster b"))).toEqual(["Dune saga", "Date night"]);
     expect(text(r.querySelectorAll(".grid .poster .sub"))).toEqual(["2 movies", "1 movie"]);
     expect(r.querySelector<HTMLAnchorElement>(".grid .poster")!.getAttribute("href")).toBe(
-      "#/collection/7",
+      `#/collection/${uid(7)}`,
     );
-    expect(r.querySelector(".grid .art")!.getAttribute("data-art")).toBe("collection/7/poster");
+    expect(r.querySelector(".grid .art")!.getAttribute("data-art")).toBe(
+      `collection/${uid(7)}/poster`,
+    );
 
     button(r, "New collection").click();
     const dlg = document.querySelector("[role=dialog]")!;
@@ -147,19 +150,19 @@ describe("collection page", () => {
       ...base(),
       [`GET /collections/${c.id}`]: c,
       [`GET /collections/${c.id}/movies`]: () => page(movies),
-      [`DELETE /collections/${c.id}/movies/30`]: () => (
-        (movies = movies.filter((m) => m.id !== 30)),
+      [`DELETE /collections/${c.id}/movies/${uid(30)}`]: () => (
+        (movies = movies.filter((m) => m.id !== uid(30))),
         none()
       ),
       [`PUT /collections/${c.id}`]: { ...c, name: "Sandworms" },
       [`DELETE /collections/${c.id}`]: none,
-      "GET /profiles/1/playlists": page([pl(5, "Weekend")]),
-      "POST /profiles/1/playlists/5/entries": {},
+      [`GET /profiles/${uid(1)}/playlists`]: page([pl(5, "Weekend")]),
+      [`POST /profiles/${uid(1)}/playlists/${uid(5)}/entries`]: {},
     };
   };
 
   it("lets an adult rename, remove a movie, add to a playlist and delete a custom one", async () => {
-    await at("#/collection/8");
+    await at(`#/collection/${uid(8)}`);
     const r = root();
     await boot(r, { fetch: mockFetch(routes(col(8, "Date night"))) });
     await until(() => r.querySelector(".tracks"));
@@ -169,15 +172,17 @@ describe("collection page", () => {
       "Arri",
     ]);
     r.querySelector<HTMLElement>(".tracks .tr")!.click();
-    expect(location.hash).toBe("#/movie/30");
-    await at("#/collection/8");
+    expect(location.hash).toBe(`#/movie/${uid(30)}`);
+    await at(`#/collection/${uid(8)}`);
 
     button(r, "Add to playlist").click();
     await until(() => document.querySelector("[role=dialog] .choices button"));
     button(document.querySelector("[role=dialog]")!, "Weekend").click();
     await until(() => button(r, "Added to Weekend"));
-    expect(calls.find((c) => c.key === "POST /profiles/1/playlists/5/entries")!.body).toEqual({
-      collectionId: 8,
+    expect(
+      calls.find((c) => c.key === `POST /profiles/${uid(1)}/playlists/${uid(5)}/entries`)!.body,
+    ).toEqual({
+      collectionId: uid(8),
     });
 
     r.querySelector<HTMLElement>("[aria-label='Remove Dune']")!.click();
@@ -188,18 +193,20 @@ describe("collection page", () => {
     expect(dlg.querySelector("input")!.value).toBe("Date night");
     dlg.querySelector("input")!.value = "Sandworms";
     dlg.querySelector("form")!.requestSubmit();
-    await until(() => calls.some((c) => c.key === "PUT /collections/8"));
-    expect(calls.find((c) => c.key === "PUT /collections/8")!.body).toEqual({ name: "Sandworms" });
+    await until(() => calls.some((c) => c.key === `PUT /collections/${uid(8)}`));
+    expect(calls.find((c) => c.key === `PUT /collections/${uid(8)}`)!.body).toEqual({
+      name: "Sandworms",
+    });
 
     await until(() => !document.querySelector("[role=dialog]"));
     button(r, "Delete").click();
     button(document.querySelector("[role=dialog]")!, "Delete").click();
     await until(() => location.hash === "#/movies?view=collections");
-    expect(calls.some((c) => c.key === "DELETE /collections/8")).toBe(true);
+    expect(calls.some((c) => c.key === `DELETE /collections/${uid(8)}`)).toBe(true);
   });
 
   it("shows a TMDB collection with its overview and no editing, but Add to playlist", async () => {
-    await at("#/collection/7");
+    await at(`#/collection/${uid(7)}`);
     const r = root();
     await boot(r, { fetch: mockFetch(routes(col(7, "Dune saga", "tmdb"))) });
     await until(() => r.querySelector(".tracks"));
@@ -210,7 +217,7 @@ describe("collection page", () => {
   });
 
   it("gives a kid the movies and nothing to change", async () => {
-    await at("#/collection/8");
+    await at(`#/collection/${uid(8)}`);
     const r = root();
     await boot(r, { fetch: mockFetch({ ...routes(col(8, "Date night")), ...base(2) }) });
     await until(() => r.querySelector(".tracks"));
@@ -234,19 +241,19 @@ describe("hand order", () => {
     return {
       ...base(),
       "GET /collections": () => page([c(), col(9, "Plain", "custom", 1)]),
-      "GET /collections/8": () => c(),
-      "GET /collections/8/movies": () => page(movies),
-      "PUT /collections/8/movies/30/position": () => {
+      [`GET /collections/${uid(8)}`]: () => c(),
+      [`GET /collections/${uid(8)}/movies`]: () => page(movies),
+      [`PUT /collections/${uid(8)}/movies/${uid(30)}/position`]: () => {
         if (opts.fail) return json({ code: "forbidden", message: "Not yours to order" }, 403);
         movies = [movies[1], movies[2], movies[0]];
         customOrder = true;
         return c();
       },
-      "DELETE /collections/8/order": () => ((movies = trio), (customOrder = false), c()),
+      [`DELETE /collections/${uid(8)}/order`]: () => ((movies = trio), (customOrder = false), c()),
     };
   };
   const open = async (routes: Record<string, unknown>) => {
-    await at("#/collection/8");
+    await at(`#/collection/${uid(8)}`);
     const r = root();
     await boot(r, { fetch: mockFetch(routes) });
     await until(() => r.querySelector(".tracks"));
@@ -285,7 +292,9 @@ describe("hand order", () => {
     expect(button(r, "Edit order")).toBeUndefined();
     drag(r, 0, 2);
     await until(() => order(r)[0] === "Arri");
-    const put = calls.find((c) => c.key === "PUT /collections/8/movies/30/position")!;
+    const put = calls.find(
+      (c) => c.key === `PUT /collections/${uid(8)}/movies/${uid(30)}/position`,
+    )!;
     expect(put.body).toEqual({ position: 2 });
     expect(order(r)).toEqual(["Arri", "Sica", "Dune"]);
     expect(r.querySelector(".tracks .n")).not.toBeNull();
@@ -299,7 +308,7 @@ describe("hand order", () => {
   it("resets to release order and reloads", async () => {
     const r = await open(server({ customOrder: true }));
     button(r, "Reset to release order").click();
-    await until(() => calls.some((c) => c.key === "DELETE /collections/8/order"));
+    await until(() => calls.some((c) => c.key === `DELETE /collections/${uid(8)}/order`));
     await until(() => button(r, "Reset to release order") === undefined);
     expect(r.querySelector(".meta")!.textContent).not.toContain("In your order");
   });
@@ -328,21 +337,21 @@ describe("hand order", () => {
 describe("movie details", () => {
   const routes = (collections: unknown[]) => ({
     ...base(),
-    "GET /items/30": movie(30, "Dune", 1984, { collections }),
+    [`GET /items/${uid(30)}`]: movie(30, "Dune", 1984, { collections }),
     "GET /media-files": page([]),
-    "GET /items/30/credits": { cast: [], crew: [] },
+    [`GET /items/${uid(30)}/credits`]: { cast: [], crew: [] },
     "GET /collections": page([
       col(7, "Dune saga", "tmdb"),
       col(8, "Date night"),
       col(10, "Rainy days"),
     ]),
     "POST /collections": col(11, "Epics"),
-    "PUT /collections/8/movies/30": none,
-    "PUT /collections/11/movies/30": none,
+    [`PUT /collections/${uid(8)}/movies/${uid(30)}`]: none,
+    [`PUT /collections/${uid(11)}/movies/${uid(30)}`]: none,
   });
 
   it("names its collections as links", async () => {
-    await at("#/movie/30");
+    await at(`#/movie/${uid(30)}`);
     const r = root();
     await boot(r, {
       fetch: mockFetch(routes([col(7, "Dune saga", "tmdb"), col(8, "Date night")])),
@@ -350,13 +359,13 @@ describe("movie details", () => {
     await until(() => r.querySelector("dl.kv"));
     const links = [...r.querySelectorAll<HTMLAnchorElement>("dl.kv a")];
     expect(links.map((a) => [a.textContent, a.getAttribute("href")])).toEqual([
-      ["Dune saga", "#/collection/7"],
-      ["Date night", "#/collection/8"],
+      ["Dune saga", `#/collection/${uid(7)}`],
+      ["Date night", `#/collection/${uid(8)}`],
     ]);
   });
 
   it("adds to a custom collection or a new one; a kid has no button", async () => {
-    await at("#/movie/30");
+    await at(`#/movie/${uid(30)}`);
     const r = root();
     await boot(r, { fetch: mockFetch(routes([])) });
     await until(() => button(r, "More"));
@@ -367,14 +376,14 @@ describe("movie details", () => {
     expect(text(dlg.querySelectorAll(".choices button"))).toEqual(["Date night", "Rainy days"]);
     button(dlg, "Date night").click();
     await until(() => button(r, "Added to Date night"));
-    expect(calls.some((c) => c.key === "PUT /collections/8/movies/30")).toBe(true);
+    expect(calls.some((c) => c.key === `PUT /collections/${uid(8)}/movies/${uid(30)}`)).toBe(true);
 
     button(r, "Added to Date night").click();
     const again = document.querySelector("[role=dialog]")!;
     await until(() => again.querySelector(".choices button"));
     again.querySelector("input")!.value = "Epics";
     again.querySelector("form")!.requestSubmit();
-    await until(() => calls.some((c) => c.key === "PUT /collections/11/movies/30"));
+    await until(() => calls.some((c) => c.key === `PUT /collections/${uid(11)}/movies/${uid(30)}`));
     expect(calls.find((c) => c.key === "POST /collections")!.body).toEqual({ name: "Epics" });
 
     document.body.replaceChildren();
@@ -388,8 +397,8 @@ describe("movie details", () => {
 describe("playlist with a collection", () => {
   it("draws a collection entry as one row and sends its collectionId on reorder", async () => {
     const entry = (id: number, position: number, extra: object) => ({
-      id,
-      playlistId: 5,
+      id: uid(id),
+      playlistId: uid(5),
       position,
       itemCount: 1,
       durationMs: 0,
@@ -399,26 +408,26 @@ describe("playlist with a collection", () => {
     let entries = [
       entry(1, 0, {
         kind: "collection",
-        collectionId: 8,
+        collectionId: uid(8),
         itemCount: 2,
         collection: col(8, "Date night"),
       }),
-      entry(2, 1, { kind: "movie", itemId: 30, item: MOVIES[0] }),
+      entry(2, 1, { kind: "movie", itemId: uid(30), item: MOVIES[0] }),
     ];
-    await at("#/playlist/5");
+    await at(`#/playlist/${uid(5)}`);
     const r = root();
     await boot(r, {
       fetch: mockFetch({
         ...base(),
-        "GET /profiles/1/playlists/5": pl(5, "Weekend"),
-        "GET /profiles/1/playlists/5/entries": () => page(entries),
-        "GET /profiles/1/playlists/5/play-order": page([]),
-        "PUT /profiles/1/playlists/5/entries/1": () => (
+        [`GET /profiles/${uid(1)}/playlists/${uid(5)}`]: pl(5, "Weekend"),
+        [`GET /profiles/${uid(1)}/playlists/${uid(5)}/entries`]: () => page(entries),
+        [`GET /profiles/${uid(1)}/playlists/${uid(5)}/play-order`]: page([]),
+        [`PUT /profiles/${uid(1)}/playlists/${uid(5)}/entries/${uid(1)}`]: () => (
           (entries = [entries[1], entries[0]]),
           entries[1]
         ),
-        "DELETE /profiles/1/playlists/5/entries/2": () => (
-          (entries = entries.filter((e) => e.id !== 2)),
+        [`DELETE /profiles/${uid(1)}/playlists/${uid(5)}/entries/${uid(2)}`]: () => (
+          (entries = entries.filter((e) => e.id !== uid(2))),
           none()
         ),
       }),
@@ -426,21 +435,28 @@ describe("playlist with a collection", () => {
     await until(() => r.querySelector(".tracks"));
     const first = r.querySelector(".tracks .qrow")!;
     expect(first.querySelector("b")!.textContent).toBe("Date night2 movies");
-    expect(first.querySelector(".art")!.getAttribute("data-art")).toBe("collection/8/poster");
+    expect(first.querySelector(".art")!.getAttribute("data-art")).toBe(
+      `collection/${uid(8)}/poster`,
+    );
     first
       .querySelector(".tr")!
       .dispatchEvent(
         new KeyboardEvent("keydown", { key: "ArrowDown", altKey: true, bubbles: true }),
       );
-    await until(() => calls.some((c) => c.key === "PUT /profiles/1/playlists/5/entries/1"));
-    expect(calls.find((c) => c.key === "PUT /profiles/1/playlists/5/entries/1")!.body).toEqual({
-      collectionId: 8,
+    await until(() =>
+      calls.some((c) => c.key === `PUT /profiles/${uid(1)}/playlists/${uid(5)}/entries/${uid(1)}`),
+    );
+    expect(
+      calls.find((c) => c.key === `PUT /profiles/${uid(1)}/playlists/${uid(5)}/entries/${uid(1)}`)!
+        .body,
+    ).toEqual({
+      collectionId: uid(8),
       position: 1,
     });
     await until(() => r.querySelector(".tracks .qrow b")!.textContent!.startsWith("Dune"));
     r.querySelector<HTMLElement>("[aria-label='Remove Dune']")!.click();
     await until(() => r.querySelectorAll(".tracks .qrow").length === 1);
     r.querySelector<HTMLElement>(".tracks .tr")!.click();
-    expect(location.hash).toBe("#/collection/8");
+    expect(location.hash).toBe(`#/collection/${uid(8)}`);
   });
 });

@@ -5,6 +5,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/playback"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/session"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/transcode"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // Waited is how many Watch togethers have a channel for their next change.
@@ -23,10 +24,10 @@ func (c *ChannelService) Failed(s *session.Session) error { return c.failed(s) }
 
 // Listen adds a session to a source and reports that source's encoder
 // session.
-func (c *ChannelService) Listen(sessionID int64, key string, convert bool) (int64, error) {
+func (c *ChannelService) Listen(sessionID uid.ID, key string, convert bool) (uid.ID, error) {
 	src, err := c.listen(sessionID, key, transcode.Stream{}, convert)
 	if err != nil {
-		return 0, err
+		return uid.ID{}, err
 	}
 	return src.stream.SessionID, nil
 }

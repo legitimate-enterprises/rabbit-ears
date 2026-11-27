@@ -116,7 +116,7 @@ export interface paths {
         };
         /**
          * Sends the browser to the provider to sign in with the authorization code flow and PKCE.
-         * @description The redirect URI sent to the provider is this server's `/api/v1/auth/sso/callback` at the host the request names, over https when the connection is TLS or a reverse proxy on this host sent `X-Forwarded-Proto: https`. The cookie binds the sign-in to this browser for 10 minutes. A provider that is unknown, disabled or does not answer sends the browser back to the sign-in page with `#sso_error=provider_error`. When too many sign-ins are in flight, the one closest to expiring is dropped.
+         * @description The redirect URI sent to the provider is this server's `/api/v2/auth/sso/callback` at the host the request names, over https when the connection is TLS or a reverse proxy on this host sent `X-Forwarded-Proto: https`. The cookie binds the sign-in to this browser for 10 minutes. A provider that is unknown, disabled or does not answer sends the browser back to the sign-in page with `#sso_error=provider_error`. When too many sign-ins are in flight, the one closest to expiring is dropped.
          */
         get: operations["startSso"];
         put?: never;
@@ -4060,9 +4060,11 @@ export interface paths {
          *     one SQLite database: the schema's tables holding every row the
          *     household may see, its views, among them those that apply each
          *     profile's kid filter such as profile_item and profile_station, and
-         *     its indexes. Its
-         *     one-row table replica_meta holds `schema`, `version`, the version
-         *     the snapshot was taken at, and `household_id`. The client replaces
+         *     its indexes. Every id column, `household_id` included, holds the
+         *     id's 16 bytes as a BLOB; getSyncChanges sends the same ids as
+         *     canonical UUID strings, which the client writes back as those bytes.
+         *     Its one-row table replica_meta holds `schema`, `version`, the
+         *     version the snapshot was taken at, and `household_id`. The client replaces
          *     its replica with the file whole, then asks getSyncChanges with
          *     `since` set to replica_meta's `version`. A `schema` outside
          *     SyncRanges' schemaMin to schemaMax answers 400.
@@ -4141,9 +4143,9 @@ export interface paths {
          *
          *     A batch that fails validation, names in `touched` a table that is
          *     not one of the sync schema's, a key of the wrong length or a key
-         *     part of the wrong type (an integer for an integer column, a string
-         *     for a text one), or whose `seq` does not strictly increase, answers
-         *     400 and runs nothing.
+         *     part of the wrong type (an integer for an integer column, a
+         *     canonical UUID string for an id column, a string for a text one), or
+         *     whose `seq` does not strictly increase, answers 400 and runs nothing.
          */
         post: operations["replaySyncActions"];
         delete?: never;
@@ -4156,8 +4158,8 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
-        /** Format: int64 */
-        Id: number;
+        /** Format: uuid */
+        Id: string;
         Error: {
             /** @enum {string} */
             code: "bad_request" | "unauthorized" | "forbidden" | "not_found" | "conflict" | "pin_required" | "pin_locked" | "device_locked" | "too_many_requests" | "payload_too_large" | "not_implemented" | "internal" | "off_air";
@@ -4358,7 +4360,11 @@ export interface components {
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
-            updatedAt: string;
+            modifiedAt: string;
+            /** @description The profile that created it; absent when none did, as for what the server made, or when that profile is gone. */
+            createdBy?: components["schemas"]["Id"];
+            /** @description The profile that last changed it; absent when none did, as for what the server made, or when that profile is gone. */
+            modifiedBy?: components["schemas"]["Id"];
         };
         /** @description One of the server's eight profile colors: #3C4170, #2E6B5B, #6B3A2E, #5B4A8A, #8A5A2B, #2E5B8A, #6B2E5A, #4A6B2E. Any other value is a bad_request. */
         ProfileColor: string;
@@ -4372,6 +4378,8 @@ export interface components {
         };
         /** @description Households are set by joining and by profiles, never here. */
         AccountInput: {
+            /** @description On createAccount: the new account's id, a UUIDv7 the client chose; absent, the server chooses one. An id already in use answers 409. On replaceAccount, an id other than the path's answers 400. */
+            id?: components["schemas"]["Id"];
             kind: components["schemas"]["AccountKind"];
             /**
              * Format: email
@@ -4396,6 +4404,8 @@ export interface components {
             revoked?: boolean;
         };
         ProfileInput: {
+            /** @description On createProfile: the new kid's id, a UUIDv7 the client chose; absent, the server chooses one. An id already in use answers 409. On replaceProfile, an id other than the path's answers 400. */
+            id?: components["schemas"]["Id"];
             name: string;
             /** Format: date */
             birthday: string;
@@ -4424,8 +4434,16 @@ export interface components {
             adultId: components["schemas"]["Id"];
             /** Format: date-time */
             createdAt: string;
+            /** Format: date-time */
+            modifiedAt: string;
+            /** @description The profile that created it; absent when none did, as for what the server made, or when that profile is gone. */
+            createdBy?: components["schemas"]["Id"];
+            /** @description The profile that last changed it; absent when none did, as for what the server made, or when that profile is gone. */
+            modifiedBy?: components["schemas"]["Id"];
         };
         HouseholdInput: {
+            /** @description On createHousehold: the new household's id, a UUIDv7 the client chose; absent, the server chooses one. An id already in use answers 409. On replaceHousehold, an id other than the path's answers 400. */
+            id?: components["schemas"]["Id"];
             name: string;
             adultId: components["schemas"]["Id"];
         };
@@ -4446,8 +4464,16 @@ export interface components {
             toName: string;
             /** Format: date-time */
             createdAt: string;
+            /** Format: date-time */
+            modifiedAt: string;
+            /** @description The profile that created it; absent when none did, as for what the server made, or when that profile is gone. */
+            createdBy?: components["schemas"]["Id"];
+            /** @description The profile that last changed it; absent when none did, as for what the server made, or when that profile is gone. */
+            modifiedBy?: components["schemas"]["Id"];
         };
         ProfileOfferInput: {
+            /** @description On createProfileOffer: the new offer's id, a UUIDv7 the client chose; absent, the server chooses one. An id already in use answers 409. */
+            id?: components["schemas"]["Id"];
             profileId: components["schemas"]["Id"];
             /** @description A linked adult. */
             toProfileId: components["schemas"]["Id"];
@@ -4497,6 +4523,8 @@ export interface components {
             revokedAt?: string;
             /** Format: date-time */
             createdAt: string;
+            /** Format: date-time */
+            modifiedAt: string;
         };
         DeviceInput: {
             name: string;
@@ -4522,6 +4550,12 @@ export interface components {
             revokedAt?: string;
             /** Format: date-time */
             createdAt: string;
+            /** Format: date-time */
+            modifiedAt: string;
+            /** @description The profile that created it; absent when none did, as for what the server made, or when that profile is gone. */
+            createdBy?: components["schemas"]["Id"];
+            /** @description The profile that last changed it; absent when none did, as for what the server made, or when that profile is gone. */
+            modifiedBy?: components["schemas"]["Id"];
         };
         /**
          * @description Pending until an adult approves or denies the code. Expired once its
@@ -4584,6 +4618,8 @@ export interface components {
              */
             createdAt: string;
             /** Format: date-time */
+            modifiedAt: string;
+            /** Format: date-time */
             expiresAt: string;
         };
         DeviceLink: {
@@ -4604,12 +4640,18 @@ export interface components {
             expiresAt: string;
             /** Format: date-time */
             createdAt: string;
+            /** Format: date-time */
+            modifiedAt: string;
         };
         DeviceLinkPage: {
             items: components["schemas"]["DeviceLink"][];
             nextOffset?: number;
         };
         HouseholdAdultInput: {
+            /** @description The new adult's account id, a UUIDv7 the client chose; absent, the server chooses one. An id already in use answers 409. */
+            id?: components["schemas"]["Id"];
+            /** @description The new join code's id, a UUIDv7 the client chose; absent, the server chooses one. An id already in use answers 409. */
+            joinCodeId?: components["schemas"]["Id"];
             name: string;
             /** Format: email */
             email: string;
@@ -4624,6 +4666,8 @@ export interface components {
             joinCode: components["schemas"]["JoinCode"];
         };
         MakeAdultInput: {
+            /** @description The new join code's id, a UUIDv7 the client chose; absent, the server chooses one. An id already in use answers 409. */
+            joinCodeId?: components["schemas"]["Id"];
             /** Format: email */
             email: string;
             /**
@@ -4633,12 +4677,18 @@ export interface components {
             expiresInDays: 1 | 7 | 30;
         };
         JoinCodeInput: {
+            /** @description On createJoinCode: the new join code's id, a UUIDv7 the client chose; absent, the server chooses one. An id already in use answers 409. */
+            id?: components["schemas"]["Id"];
             accountId: components["schemas"]["Id"];
             /**
              * @default 7
              * @enum {integer}
              */
             expiresInDays: 1 | 7 | 30;
+        };
+        JoinCodeResendInput: {
+            /** @description The new join code's id, a UUIDv7 the client chose; absent, the server chooses one. An id already in use answers 409. */
+            joinCodeId?: components["schemas"]["Id"];
         };
         JoinCodePage: {
             items: components["schemas"]["JoinCode"][];
@@ -4661,7 +4711,11 @@ export interface components {
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
-            updatedAt: string;
+            modifiedAt: string;
+            /** @description The profile that created it; absent when none did, as for what the server made, or when that profile is gone. */
+            createdBy?: components["schemas"]["Id"];
+            /** @description The profile that last changed it; absent when none did, as for what the server made, or when that profile is gone. */
+            modifiedBy?: components["schemas"]["Id"];
         };
         /** @description Read-only summary of what a library holds; counts of kinds the library does not have are 0. */
         LibraryStats: {
@@ -4685,6 +4739,8 @@ export interface components {
             videos?: number;
         };
         LibraryInput: {
+            /** @description On createLibrary: the new library's id, a UUIDv7 the client chose; absent, the server chooses one. An id already in use answers 409. On replaceLibrary, an id other than the path's answers 400. */
+            id?: components["schemas"]["Id"];
             name: string;
             kind: components["schemas"]["LibraryKind"];
             /** @default 3 */
@@ -4700,11 +4756,21 @@ export interface components {
             id: components["schemas"]["Id"];
             libraryId: components["schemas"]["Id"];
             path: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            modifiedAt: string;
+            /** @description The profile that created it; absent when none did, as for what the server made, or when that profile is gone. */
+            createdBy?: components["schemas"]["Id"];
+            /** @description The profile that last changed it; absent when none did, as for what the server made, or when that profile is gone. */
+            modifiedBy?: components["schemas"]["Id"];
         };
         FolderPage: {
             items: components["schemas"]["Folder"][];
         };
         FolderInput: {
+            /** @description On addLibraryFolder: the new folder's id, a UUIDv7 the client chose; absent, the server chooses one. An id already in use answers 409. On replaceLibraryFolder, an id other than the path's answers 400. */
+            id?: components["schemas"]["Id"];
             path: string;
         };
         /** @enum {string} */
@@ -4743,7 +4809,9 @@ export interface components {
             /** Format: date-time */
             addedAt: string;
             /** Format: date-time */
-            updatedAt: string;
+            createdAt: string;
+            /** Format: date-time */
+            modifiedAt: string;
             /** @description A movie or episode with files, every one of them marked missing (MediaFile.missingAt): it stays listed and startPlayback answers 409 until a file is back. Absent means false. */
             unavailable?: boolean;
             /** @description Movies and shows only: whether it is kids' content, which an adult with hideKidsContent does not browse. It is kidsContentOverride when set, else whether it is rated G (a movie) or TV-Y, TV-Y7 or TV-G (a show). A show's seasons and episodes follow it. */
@@ -4871,9 +4939,19 @@ export interface components {
             phrases: string[];
             /** @description Three colors, as #RRGGBB, for the wash behind the occasion's screen; absent or empty keeps the plain background. */
             colors?: string[];
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            modifiedAt: string;
+            /** @description The profile that created it; absent when none did, as for what the server made, or when that profile is gone. */
+            createdBy?: components["schemas"]["Id"];
+            /** @description The profile that last changed it; absent when none did, as for what the server made, or when that profile is gone. */
+            modifiedBy?: components["schemas"]["Id"];
         };
         /** @description Exactly one of holiday, or month with day. February 29 anchors only leap years. phrases are trimmed, and a phrase equal to an earlier one ignoring case is dropped; a phrase blank once trimmed is refused. colors are none or exactly three. On createOccasion, phrases or colors absent give an occasion anchored to a holiday that holiday's built-in phrases or colors, and any other occasion none; an empty array gives none. On replaceOccasion, phrases or colors absent are left as stored, and an empty array clears them. */
         OccasionInput: {
+            /** @description On createOccasion: the new occasion's id, a UUIDv7 the client chose; absent, the server chooses one. An id already in use answers 409. On replaceOccasion, an id other than the path's answers 400. */
+            id?: components["schemas"]["Id"];
             name: string;
             /** @description A key of listHolidays. */
             holiday?: string;
@@ -4981,14 +5059,17 @@ export interface components {
         };
         MediaFile: {
             id: components["schemas"]["Id"];
-            /** @description The first item it belongs to; a file holding several episodes belongs to each. listMediaFiles lists it under every one. */
-            itemId: components["schemas"]["Id"];
+            /** @description The first item it belongs to; a file holding several episodes belongs to each. listMediaFiles lists it under every one. Absent for a file of no item. */
+            itemId?: components["schemas"]["Id"];
             /** @description The base name unless the caller is an admin. */
             path: string;
             /** Format: int64 */
             sizeBytes: number;
-            /** Format: date-time */
-            modifiedAt: string;
+            /**
+             * Format: date-time
+             * @description The file's modification time on disk.
+             */
+            fileModifiedAt: string;
             container?: string;
             /** Format: int64 */
             durationMs?: number;
@@ -5018,6 +5099,10 @@ export interface components {
             libraryId?: components["schemas"]["Id"];
             /** @description On listMediaFiles by problem only, the shown title of the first item it belongs to. */
             title?: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            modifiedAt: string;
         };
         MediaFileInput: {
             /** @description The file joins this item's first untagged edition and leaves any other item's. */
@@ -5025,8 +5110,11 @@ export interface components {
             path: string;
             /** Format: int64 */
             sizeBytes: number;
-            /** Format: date-time */
-            modifiedAt: string;
+            /**
+             * Format: date-time
+             * @description The file's modification time on disk.
+             */
+            fileModifiedAt: string;
             container?: string;
             /** Format: int64 */
             durationMs?: number;
@@ -5061,6 +5149,8 @@ export interface components {
             height: number;
             /** Format: date-time */
             createdAt: string;
+            /** Format: date-time */
+            modifiedAt: string;
         };
         SeekPreviewPage: {
             items: components["schemas"]["SeekPreview"][];
@@ -5185,8 +5275,11 @@ export interface components {
             playCount: number;
             /** Format: date-time */
             lastPlayedAt?: string;
-            /** Format: date-time */
-            updatedAt: string;
+            /**
+             * Format: date-time
+             * @description The instant of the write that set it, as the client gave it; the latest wins.
+             */
+            changedAt: string;
         };
         WatchStateInput: {
             watched: boolean;
@@ -5269,6 +5362,8 @@ export interface components {
             lastRun?: components["schemas"]["TaskRun"];
             /** Format: date-time */
             createdAt: string;
+            /** Format: date-time */
+            modifiedAt: string;
         };
         TaskInput: {
             name: string;
@@ -5343,7 +5438,9 @@ export interface components {
             /** Format: date-time */
             startedAt: string;
             /** Format: date-time */
-            updatedAt: string;
+            createdAt: string;
+            /** Format: date-time */
+            modifiedAt: string;
             /** Format: date-time */
             endedAt?: string;
         };
@@ -5726,7 +5823,7 @@ export interface components {
             height: number;
             /**
              * @description Server-relative URL of one frame with `{n}` standing for its index from 0. It carries its own authorization like streamUrl.
-             * @example /api/v1/streams/k/0/previews/{n}.jpg
+             * @example /api/v2/streams/k/0/previews/{n}.jpg
              */
             frameUrl: string;
             /** @description Server-relative URL of every frame as one Roku BIF file, authorized the same way. */
@@ -6033,7 +6130,11 @@ export interface components {
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
-            updatedAt: string;
+            modifiedAt: string;
+            /** @description The profile that created it; absent when none did, as for what the server made, or when that profile is gone. */
+            createdBy?: components["schemas"]["Id"];
+            /** @description The profile that last changed it; absent when none did, as for what the server made, or when that profile is gone. */
+            modifiedBy?: components["schemas"]["Id"];
         };
         /** @description A custom image other than an uploaded file: exactly one of itemId and url. itemId names the title of one of the playlist's entries, which the owner may see and which has that artwork; the image follows the title's artwork, and is not shown while the title is out of the playlist, or to a profile that may not see it. url is an http or https link the server fetches once, within 10 seconds and 16 MiB, from a public address: not loopback, link-local, a private network or the server's own, before or after a redirect. */
         CustomImageInput: {
@@ -6121,6 +6222,8 @@ export interface components {
             items: components["schemas"]["ShareHousehold"][];
         };
         PlaylistInput: {
+            /** @description On createPlaylist: the new playlist's id, a UUIDv7 the client chose; absent, the server chooses one. An id already in use answers 409. On replacePlaylist, an id other than the path's answers 400. */
+            id?: components["schemas"]["Id"];
             name: string;
             kind: components["schemas"]["PlaylistKind"];
         };
@@ -6177,9 +6280,19 @@ export interface components {
             collection?: components["schemas"]["Collection"];
             /** Format: date-time */
             addedAt: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            modifiedAt: string;
+            /** @description The profile that created it; absent when none did, as for what the server made, or when that profile is gone. */
+            createdBy?: components["schemas"]["Id"];
+            /** @description The profile that last changed it; absent when none did, as for what the server made, or when that profile is gone. */
+            modifiedBy?: components["schemas"]["Id"];
         };
         /** @description Exactly one of itemId and collectionId; both or neither answers 400. On replacePlaylistEntry an editionId other than the entry's answers 400 and an absent one keeps it. */
         PlaylistEntryInput: {
+            /** @description On addPlaylistEntry and addPlaylistEntries: the new entry's id, a UUIDv7 the client chose; absent, the server chooses one. An id already in use, or given twice in one batch, answers 409. On replacePlaylistEntry, an id other than the path's answers 400. */
+            id?: components["schemas"]["Id"];
             itemId?: components["schemas"]["Id"];
             collectionId?: components["schemas"]["Id"];
             /** @description Where it goes, from 0; past the end or absent puts it last. It takes a rank between its new neighbours', so a late replay can land elsewhere; between two of equal rank it goes after both. */
@@ -6247,13 +6360,19 @@ export interface components {
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
-            updatedAt: string;
+            modifiedAt: string;
+            /** @description The profile that created it; absent when none did, as for what the server made, or when that profile is gone. */
+            createdBy?: components["schemas"]["Id"];
+            /** @description The profile that last changed it; absent when none did, as for what the server made, or when that profile is gone. */
+            modifiedBy?: components["schemas"]["Id"];
         };
         CollectionMoviePositionInput: {
             /** @description Where the movie goes, from 0; past the end or absent puts it last. */
             position?: number;
         };
         CollectionInput: {
+            /** @description On createCollection: the new collection's id, a UUIDv7 the client chose; absent, the server chooses one. An id already in use answers 409. On replaceCollection, an id other than the path's answers 400. */
+            id?: components["schemas"]["Id"];
             name: string;
         };
         CollectionPage: {
@@ -6391,6 +6510,8 @@ export interface components {
         Weekday: "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday" | "sunday";
         /** @description A range of the day in the server's local time, as 18:00 to 22:00. A to at or before from runs past midnight, and belongs to the day it starts on. */
         StationTimeRange: {
+            /** @description Always sent. On createStation and replaceStation: the range's id, a UUIDv7 the client chose; absent, the server chooses one. A range replaceStation is given keeps its id when it sends it again; an id in use by another station's range, or given twice, answers 409. */
+            id?: components["schemas"]["Id"];
             from: string;
             to: string;
         };
@@ -6431,9 +6552,17 @@ export interface components {
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
-            updatedAt: string;
+            modifiedAt: string;
+            /** @description The profile that created it; absent when none did, as for what the server made, or when that profile is gone. */
+            createdBy?: components["schemas"]["Id"];
+            /** @description The profile that last changed it; absent when none did, as for what the server made, or when that profile is gone. */
+            modifiedBy?: components["schemas"]["Id"];
         };
         StationInput: {
+            /** @description On createStation only: the new station's id, a UUIDv7 the client chose; absent, the server chooses one. An id already in use answers 409. On replaceStation, an id other than the path's answers 400. */
+            id?: components["schemas"]["Id"];
+            /** @description On createStation without playlistId only: the id of the playlist the station owns, a UUIDv7 the client chose; absent, the server chooses one. An id already in use answers 409; with playlistId, or on replaceStation, it answers 400. */
+            ownPlaylistId?: components["schemas"]["Id"];
             name: string;
             /** @description One of the active adult's playlists, or one shared with them. Absent on create makes the station its own empty playlist of kind; absent on replace keeps the station's. */
             playlistId?: components["schemas"]["Id"];
@@ -6545,9 +6674,15 @@ export interface components {
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
-            updatedAt: string;
+            modifiedAt: string;
+            /** @description The profile that created it; absent when none did, as for what the server made, or when that profile is gone. */
+            createdBy?: components["schemas"]["Id"];
+            /** @description The profile that last changed it; absent when none did, as for what the server made, or when that profile is gone. */
+            modifiedBy?: components["schemas"]["Id"];
         };
         SsoProviderInput: {
+            /** @description On createSsoProvider: the new provider's id, a UUIDv7 the client chose; absent, the server chooses one. An id already in use answers 409. On replaceSsoProvider, an id other than the path's answers 400. */
+            id?: components["schemas"]["Id"];
             name: string;
             issuer: string;
             clientId: string;
@@ -6577,6 +6712,8 @@ export interface components {
             email?: string;
             /** Format: date-time */
             createdAt: string;
+            /** Format: date-time */
+            modifiedAt: string;
         };
         AccountIdentityPage: {
             items: components["schemas"]["AccountIdentity"][];
@@ -6630,7 +6767,7 @@ export interface components {
             /** @description The newest sync schema the server serves. */
             schemaMax: number;
         };
-        /** @description A column value as SQLite holds it: a JSON integer, number, string or null, never a boolean, array or object; true and false are 1 and 0. A key part is never null. */
+        /** @description A column value as SQLite holds it: a JSON integer, number, string or null, never a boolean, array or object; true and false are 1 and 0. A key part is never null. A BLOB column (an id) is its canonical lowercase UUID string. */
         SyncScalar: unknown;
         /** @description Rows of one table of the sync schema, each a value per column. */
         SyncTable: {
@@ -6670,7 +6807,7 @@ export interface components {
             apiVersion: string;
             actions: components["schemas"]["SyncAction"][];
         };
-        /** @description A row of the sync schema an action may change, by its primary key, its columns in the table's key order. */
+        /** @description A row of the sync schema an action may change, by its primary key, its columns in the table's key order: a JSON integer for an INTEGER key column, a canonical lowercase UUID string for an id (BLOB) one, a string for a TEXT one. */
         SyncTouched: {
             table: string;
             key: components["schemas"]["SyncScalar"][];
@@ -6690,7 +6827,7 @@ export interface components {
             operationId: string;
             /** @enum {string} */
             method: "PUT" | "POST" | "DELETE";
-            /** @description Relative to /api/v1, path parameters filled in and query included. */
+            /** @description Relative to /api/v2, path parameters filled in and query included. */
             path: string;
             /** @description The request body; absent for none. */
             body?: unknown;
@@ -6731,11 +6868,13 @@ export interface components {
              * @description The last position the device reported.
              */
             positionMs: number;
+            /** Format: date-time */
+            createdAt: string;
             /**
              * Format: date-time
              * @description When the device last reported.
              */
-            updatedAt: string;
+            modifiedAt: string;
             /** Format: date-time */
             endedAt?: string;
             /** @description The device Move here took it to, as Moved to Kitchen iPad; set only on a session ended that way. */
@@ -6800,6 +6939,8 @@ export interface components {
             remove: components["schemas"]["Id"][];
         };
         DownloadInput: {
+            /** @description The new download's id, a UUIDv7 the client chose; absent, the server chooses one. Used only when a new download is made: a file already claimed answers its download, with that download's id. An id already in use by another download answers 409. */
+            id?: components["schemas"]["Id"];
             itemId: components["schemas"]["Id"];
             /** @description An edition of the item; absent is the default. */
             editionId?: components["schemas"]["Id"];
@@ -6809,6 +6950,8 @@ export interface components {
             snapshot: components["schemas"]["CapabilitySnapshot"];
         };
         DownloadBatchTitle: {
+            /** @description The new download's id, a UUIDv7 the client chose; absent, the server chooses one. Used only when a new download is made: a file already claimed answers its download, with that download's id. An id already in use by another download answers 409, as that title's error conflict. */
+            id?: components["schemas"]["Id"];
             itemId: components["schemas"]["Id"];
             /** @description An edition of the item; absent is the default. */
             editionId?: components["schemas"]["Id"];
@@ -6852,7 +6995,7 @@ export interface components {
          *     share of a conversion made.
          *
          *     Instead of polling, a client may fetch the file before it is ready
-         *     with `?wait=1`, at `/api/v1/downloads/{id}/file`, url's path once
+         *     with `?wait=1`, at `/api/v2/downloads/{id}/file`, url's path once
          *     ready: the request is held until the conversion is ready and then
          *     served as above. A conversion that failed, or fails while held,
          *     answers 500 internal with its error as the message. A download that
@@ -6882,6 +7025,12 @@ export interface components {
             subtitles: components["schemas"]["DownloadSubtitle"][];
             /** Format: date-time */
             createdAt: string;
+            /** Format: date-time */
+            modifiedAt: string;
+            /** @description The profile that created it; absent when none did, as for what the server made, or when that profile is gone. */
+            createdBy?: components["schemas"]["Id"];
+            /** @description The profile that last changed it; absent when none did, as for what the server made, or when that profile is gone. */
+            modifiedBy?: components["schemas"]["Id"];
             /**
              * Format: date-time
              * @description Absent while the conversion is still to finish.
@@ -6916,6 +7065,8 @@ export interface components {
             error?: string;
             /** Format: date-time */
             createdAt: string;
+            /** Format: date-time */
+            modifiedAt: string;
             /** Format: date-time */
             startedAt?: string;
             /** Format: date-time */
@@ -7077,8 +7228,8 @@ export interface components {
         /** @description The least lead, in milliseconds, the member's player needs to start on time, for a platform that starts imprecisely. Used with `rttMs`. */
         WatchTogetherFloorMs: number;
         StationId: components["schemas"]["Id"];
-        /** @description Read by nothing; imageUrl carries it so that a new image has a new address. */
-        ImageVersion: number;
+        /** @description Read by nothing; imageUrl carries it, the image's id, so that a new image has a new address. */
+        ImageVersion: string;
         SsoProviderId: components["schemas"]["Id"];
         /** @description Only those filed under this letter of `listMusicLetters`. */
         MusicLetter: string;
@@ -7986,6 +8137,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
         };
     };
     getProfile: {
@@ -8153,7 +8305,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["JoinCodeResendInput"];
+            };
+        };
         responses: {
             /** @description The pending adult and the new code to hand them. */
             201: {
@@ -8164,6 +8320,7 @@ export interface operations {
                     "application/json": components["schemas"]["HouseholdInvite"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
@@ -8645,6 +8802,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             501: components["responses"]["NotImplemented"];
         };
     };
@@ -12235,6 +12393,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             501: components["responses"]["NotImplemented"];
         };
     };
@@ -12384,6 +12543,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             501: components["responses"]["NotImplemented"];
         };
     };
@@ -12816,7 +12976,7 @@ export interface operations {
     getPlaylistImage: {
         parameters: {
             query?: {
-                /** @description Read by nothing; imageUrl carries it so that a new image has a new address. */
+                /** @description Read by nothing; imageUrl carries it, the image's id, so that a new image has a new address. */
                 v?: components["parameters"]["ImageVersion"];
             };
             header?: {
@@ -12896,7 +13056,7 @@ export interface operations {
     getStationImage: {
         parameters: {
             query?: {
-                /** @description Read by nothing; imageUrl carries it so that a new image has a new address. */
+                /** @description Read by nothing; imageUrl carries it, the image's id, so that a new image has a new address. */
                 v?: components["parameters"]["ImageVersion"];
             };
             header?: {
@@ -13076,6 +13236,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
             501: components["responses"]["NotImplemented"];
         };
     };
@@ -13567,6 +13728,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
         };
     };
     getStation: {
@@ -13621,6 +13783,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
         };
     };
     deleteStation: {
@@ -13866,6 +14029,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
         };
     };
     getSsoProvider: {

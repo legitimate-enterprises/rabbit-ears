@@ -2,6 +2,7 @@ package scan
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,9 +15,10 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/library"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/probe"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/tmdb"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
-func (e *env) editions(itemID int64) []*edition.Edition {
+func (e *env) editions(itemID uid.ID) []*edition.Edition {
 	e.t.Helper()
 	es, err := edition.New(e.d).ForItem(itemID)
 	if err != nil {
@@ -84,7 +86,7 @@ func (e *env) movieOf(path string) *item.Item {
 	e.t.Helper()
 	f, err := e.files.FileByPath(path)
 	must(e.t, err)
-	it, err := e.items.Get(f.ItemID)
+	it, err := e.items.Get(*f.ItemID)
 	must(e.t, err)
 	return it
 }
@@ -126,7 +128,7 @@ func TestMovieFolderFileStatingAnotherIsItsOwn(t *testing.T) {
 	fixtureCopy(t, "h264-high41.mp4", a)
 	e.mustScan()
 	if ma, mb := e.movieOf(a), e.movieOf(b); ma.ID == mb.ID || e.matched(ma) != 11 || e.matched(mb) != 12 || len(e.reviews("")) != 0 {
-		t.Fatalf("a in %d matched %d, b in %d matched %d, reviews %+v", ma.ID, e.matched(ma), mb.ID, e.matched(mb), e.reviews(""))
+		t.Fatalf("a in %s matched %d, b in %s matched %d, reviews %+v", ma.ID, e.matched(ma), mb.ID, e.matched(mb), e.reviews(""))
 	}
 }
 
@@ -170,7 +172,7 @@ func TestReplacedMovieFileKeepsItsIDs(t *testing.T) {
 	after := e.onlyMovie()
 	files, _ := e.files.FilesForItem(after.ID)
 	if after.ID != before.ID || len(files) != 1 || files[0].Path != upgraded || e.missing(upgraded) || e.editions(after.ID)[0].ID != ed {
-		t.Fatalf("before %d after %d files %+v", before.ID, after.ID, files)
+		t.Fatalf("before %s after %s files %+v", before.ID, after.ID, files)
 	}
 }
 
@@ -234,25 +236,28 @@ func TestNewMovieWithKnownTMDBIDFolds(t *testing.T) {
 	m := e.onlyMovie()
 	files, _ := e.files.FilesForItem(m.ID)
 	if m.ID != older.ID || len(files) != 2 {
-		t.Fatalf("movie %d (older %d) files %d", m.ID, older.ID, len(files))
+		t.Fatalf("movie %s (older %s) files %d", m.ID, older.ID, len(files))
 	}
 }
 
 // refs lists what points at movies: allow lists, playlist entries and
 // station programs with their editions' titles, collection entries, and
-// watch state as account:item:watched:position:last played.
+// watch state as account:item:watched:position:last played, ids in hex.
 func (e *env) refs() string {
 	e.t.Helper()
 	var s string
 	must(e.t, e.d.QueryRow(`SELECT
-		(SELECT group_concat(item_id) FROM account_allow) || ' ' ||
-		(SELECT group_concat(p.item_id || '/' || d.item_id) FROM playlist_entry p JOIN edition d ON d.id = p.edition_id) || ' ' ||
-		(SELECT group_concat(p.item_id || '/' || d.item_id) FROM station_program p JOIN edition d ON d.id = p.edition_id) || ' ' ||
-		(SELECT group_concat(item_id) FROM collection_movie) || ' ' ||
-		(SELECT group_concat(account_id || ':' || item_id || ':' || watched || ':' || position_ms || ':' || last_played_at, ',')
+		(SELECT group_concat(lower(hex(item_id))) FROM account_allow) || ' ' ||
+		(SELECT group_concat(lower(hex(p.item_id)) || '/' || lower(hex(d.item_id))) FROM playlist_entry p JOIN edition d ON d.id = p.edition_id) || ' ' ||
+		(SELECT group_concat(lower(hex(p.item_id)) || '/' || lower(hex(d.item_id))) FROM station_program p JOIN edition d ON d.id = p.edition_id) || ' ' ||
+		(SELECT group_concat(lower(hex(item_id))) FROM collection_movie) || ' ' ||
+		(SELECT group_concat(lower(hex(account_id)) || ':' || lower(hex(item_id)) || ':' || watched || ':' || position_ms || ':' || last_played_at, ',')
 			FROM (SELECT * FROM watch_state ORDER BY account_id))`).Scan(&s))
 	return s
 }
+
+// hexOf is an id as refs and SQL blob literals spell it.
+func hexOf(id uid.ID) string { return hex.EncodeToString(id[:]) }
 
 // Two movies a later match gives one TMDB id are one title, the older: it
 // takes the newer's files, and what pointed at the newer points at it,
@@ -267,39 +272,43 @@ func TestMatchedDuplicateMoviesFold(t *testing.T) {
 	if len(ms) != 2 {
 		t.Fatalf("movies %+v", ms)
 	}
-	older, newer := min(ms[0].ID, ms[1].ID), max(ms[0].ID, ms[1].ID)
+	slices.SortFunc(ms, func(a, b *item.Item) int { return a.ID.Compare(b.ID) })
+	older, newer := ms[0].ID, ms[1].ID
 	ed := e.editions(newer)[0].ID
+	lit := func(id uid.ID) string { return "x'" + hexOf(id) + "'" }
 	for _, q := range []string{
-		`INSERT INTO account (id, kind, name, created_at, updated_at) VALUES (1,'adult','A',0,0), (3,'adult','B',0,0)`,
-		`INSERT INTO household (id, name, adult_id, created_at) VALUES (1,'H',1,0)`,
-		`INSERT INTO account (id, kind, name, household_id, created_at, updated_at) VALUES (2,'kid','K',1,0,0)`,
-		`INSERT INTO account_allow (account_id, item_id) VALUES (2,NEWER)`,
-		`INSERT INTO playlist (id, account_id, name, kind, created_at, updated_at) VALUES (1,1,'P','movies',0,0)`,
-		`INSERT INTO playlist_entry (id, playlist_id, item_id, edition_id, rank, added_at) VALUES (1,1,NEWER,ED,'a0',0)`,
-		`INSERT INTO collection (id, source, household_id, name, created_at, updated_at) VALUES (1,'custom',1,'C',0,0)`,
-		`INSERT INTO collection_movie (collection_id, item_id) VALUES (1,NEWER)`,
-		`INSERT INTO station (id, account_id, playlist_id, name, visibility, created_at, updated_at) VALUES (1,1,1,'S','private',0,0)`,
-		`INSERT INTO station_program (station_id, item_id, edition_id, entry_id, loop, position, starts_at, ends_at) VALUES (1,NEWER,ED,1,0,0,0,1)`,
-		`INSERT INTO watch_state (account_id, item_id, watched, position_ms, last_played_at, updated_at)
-			VALUES (1,OLDER,1,0,100,100), (1,NEWER,0,5000,200,200), (3,NEWER,0,7000,50,50)`,
+		`INSERT INTO account (id, kind, name, created_at, modified_at) VALUES (#1,'adult','A',0,0), (#3,'adult','B',0,0)`,
+		`INSERT INTO household (id, name, adult_id, created_at, modified_at) VALUES (#1,'H',#1,0,0)`,
+		`INSERT INTO account (id, kind, name, household_id, created_at, modified_at) VALUES (#2,'kid','K',#1,0,0)`,
+		`INSERT INTO account_allow (account_id, item_id) VALUES (#2,NEWER)`,
+		`INSERT INTO playlist (id, account_id, name, kind, created_at, modified_at) VALUES (#1,#1,'P','movies',0,0)`,
+		`INSERT INTO playlist_entry (id, playlist_id, item_id, edition_id, rank, added_at, created_at, modified_at) VALUES (#1,#1,NEWER,ED,'a0',0,0,0)`,
+		`INSERT INTO collection (id, source, household_id, name, created_at, modified_at) VALUES (#1,'custom',#1,'C',0,0)`,
+		`INSERT INTO collection_movie (collection_id, item_id) VALUES (#1,NEWER)`,
+		`INSERT INTO station (id, account_id, playlist_id, name, visibility, created_at, modified_at) VALUES (#1,#1,#1,'S','private',0,0)`,
+		`INSERT INTO station_program (id, station_id, item_id, edition_id, entry_id, loop, position, starts_at, ends_at, created_at, modified_at)
+			VALUES (#1,#1,NEWER,ED,#1,0,0,0,1,0,0)`,
+		`INSERT INTO watch_state (account_id, item_id, watched, position_ms, last_played_at, changed_at)
+			VALUES (#1,OLDER,1,0,100,100), (#1,NEWER,0,5000,200,200), (#3,NEWER,0,7000,50,50)`,
 	} {
-		_, err := e.d.Exec(strings.NewReplacer("OLDER", fmt.Sprint(older), "NEWER", fmt.Sprint(newer), "ED", fmt.Sprint(ed)).Replace(q))
+		_, err := e.d.Exec(strings.NewReplacer("OLDER", lit(older), "NEWER", lit(newer), "ED", lit(ed),
+			"#1", lit(uid.N(1)), "#2", lit(uid.N(2)), "#3", lit(uid.N(3))).Replace(q))
 		must(t, err)
 	}
 	e.s.Provider = oneFilm{}
 	e.mustScan()
 	m := e.onlyMovie()
 	files, _ := e.files.FilesForItem(m.ID)
-	want := fmt.Sprintf("%[1]d %[1]d/%[1]d %[1]d/%[1]d %[1]d 1:%[1]d:1:5000:200,3:%[1]d:0:7000:50", older)
+	want := fmt.Sprintf("%[1]s %[1]s/%[1]s %[1]s/%[1]s %[1]s %[2]s:%[1]s:1:5000:200,%[3]s:%[1]s:0:7000:50", hexOf(older), hexOf(uid.N(1)), hexOf(uid.N(3)))
 	if m.ID != older || len(files) != 2 || e.refs() != want {
-		t.Fatalf("movie %d (older %d) files %d refs %q, want %q", m.ID, older, len(files), e.refs(), want)
+		t.Fatalf("movie %s (older %s) files %d refs %q, want %q", m.ID, older, len(files), e.refs(), want)
 	}
 	e.mustScan()
 	if _, err := e.s.RetryDue(context.Background(), 100); err != nil {
 		t.Fatal(err)
 	}
 	if m := e.onlyMovie(); m.ID != older || e.refs() != want {
-		t.Fatalf("again: movie %d refs %q", m.ID, e.refs())
+		t.Fatalf("again: movie %s refs %q", m.ID, e.refs())
 	}
 }
 
@@ -339,9 +348,9 @@ func TestOnlyOneLibrarysMoviesOfOneIDFold(t *testing.T) {
 	fixtureCopy(t, "h264-high41.mp4", filepath.Join(e.root, "Lantern (2001)", "a.mp4"))
 	fixtureCopy(t, "chapters.mkv", filepath.Join(e.root, "Harbor (2003)", "b.mkv"))
 	other := &library.Library{Name: "M", Kind: library.Movies}
-	must(t, e.s.Libraries.Create(other))
+	must(t, e.s.Libraries.Create(other, nil))
 	dir := t.TempDir()
-	_, err := e.s.Libraries.AddFolder(other.ID, dir)
+	err := e.s.Libraries.AddFolder(&library.Folder{LibraryID: other.ID, Path: dir}, nil)
 	must(t, err)
 	fixtureCopy(t, "h264-high41.mp4", filepath.Join(dir, "Lantern (2001)", "c.mp4"))
 	e.mustScan()
@@ -351,7 +360,7 @@ func TestOnlyOneLibrarysMoviesOfOneIDFold(t *testing.T) {
 	if _, err := e.s.RetryDue(context.Background(), 100); err != nil {
 		t.Fatal(err)
 	}
-	n, err := e.items.Count(item.Filter{LibraryID: other.ID, Kind: item.Movie})
+	n, err := e.items.Count(item.Filter{LibraryID: &other.ID, Kind: item.Movie})
 	must(t, err)
 	if len(e.list(item.Movie)) != 2 || n != 1 {
 		t.Fatalf("movies %d and %d", len(e.list(item.Movie)), n)

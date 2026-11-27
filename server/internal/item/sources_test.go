@@ -11,6 +11,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/library"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/person"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // shownAs is what Metadata shows of the fields both rows of every titled
@@ -30,9 +31,9 @@ func TestSettingsPickEachField(t *testing.T) {
 	d := dbtest.Open(t)
 	r, genres := item.New(d), genre.New(d)
 	libs := library.New(d)
-	lib := func(kind string) int64 {
+	lib := func(kind string) uid.ID {
 		l := &library.Library{Name: kind, Kind: kind}
-		if err := libs.Create(l); err != nil {
+		if err := libs.Create(l, nil); err != nil {
 			t.Fatal(err)
 		}
 		return l.ID
@@ -45,7 +46,7 @@ func TestSettingsPickEachField(t *testing.T) {
 	artist := mustCreate(t, r, &item.Item{LibraryID: mu, Kind: item.Artist, ParsedTitle: "a"})
 	album := mustCreate(t, r, &item.Item{LibraryID: mu, ParentID: &artist.ID, Kind: item.Album, ParsedTitle: "al"})
 	channel := mustCreate(t, r, &item.Item{LibraryID: yt, Kind: item.Channel, ParsedTitle: "c"})
-	providers := map[int64]string{movie.ID: "tmdb", episode.ID: "tmdb", album.ID: item.MusicBrainz, channel.ID: "youtube"}
+	providers := map[uid.ID]string{movie.ID: "tmdb", episode.ID: "tmdb", album.ID: item.MusicBrainz, channel.ID: "youtube"}
 	for id, provider := range providers {
 		if err := r.SetLocal(&item.Metadata{ItemID: id, Title: "Local", RuntimeMinutes: intp(90), PosterPath: "/files/local.jpg"}); err != nil {
 			t.Fatal(err)
@@ -155,7 +156,7 @@ func TestKidsReadTheShownRating(t *testing.T) {
 	d := dbtest.Open(t)
 	r := item.New(d)
 	l := &library.Library{Name: "mv", Kind: library.Movies}
-	if err := library.New(d).Create(l); err != nil {
+	if err := library.New(d).Create(l, nil); err != nil {
 		t.Fatal(err)
 	}
 	m := mustCreate(t, r, &item.Item{LibraryID: l.ID, Kind: item.Movie, ParsedTitle: "Cars"})

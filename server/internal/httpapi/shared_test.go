@@ -6,19 +6,20 @@ import (
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/api"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/household"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // putIn puts a profile into another household as well, as an admin does.
-func (e *env) putIn(profile int64, h *household.Household) {
+func (e *env) putIn(profile uid.ID, h *household.Household) {
 	e.t.Helper()
 	e.expect(204, "PUT", memberPath(h, profile), e.admin.token, nil, nil)
 }
 
-func profileIDs(e *env, token string) []int64 {
+func profileIDs(e *env, token string) []uid.ID {
 	e.t.Helper()
 	var page api.AccountPage
 	e.expect(200, "GET", "/profiles", token, nil, &page)
-	var out []int64
+	var out []uid.ID
 	for _, a := range page.Items {
 		out = append(out, a.Id)
 	}
@@ -51,7 +52,7 @@ func TestASharedKidAppearsInBothHouseholdsWhosWatching(t *testing.T) {
 	e.expect(204, "POST", "/profiles/"+itoa(k.Id)+"/unlock", e.admin.token, map[string]any{}, nil)
 	e.expect(200, "GET", "/me", e.admin.token, nil, &me)
 	if me.ActiveProfileId != k.Id {
-		t.Fatalf("the admin's device acts as %d", me.ActiveProfileId)
+		t.Fatalf("the admin's device acts as %v", me.ActiveProfileId)
 	}
 	e.expect(200, "GET", "/profiles/"+itoa(k.Id)+"/watch-state", e.admin.token, nil, nil)
 
@@ -59,7 +60,7 @@ func TestASharedKidAppearsInBothHouseholdsWhosWatching(t *testing.T) {
 	e.expect(204, "POST", "/profiles/"+itoa(e.plain.account.ID)+"/unlock", tablet, map[string]any{}, nil)
 	e.expect(200, "GET", "/me", tablet, nil, &me)
 	if me.ActiveProfileId != e.plain.account.ID {
-		t.Fatalf("a device of the household cannot switch to a present adult: %d", me.ActiveProfileId)
+		t.Fatalf("a device of the household cannot switch to a present adult: %v", me.ActiveProfileId)
 	}
 }
 
@@ -77,7 +78,7 @@ func TestProfilesSayTheyAreSharedOrPresent(t *testing.T) {
 		households int
 		present    bool
 	}
-	check := func(as []api.Account, wants map[int64]want) {
+	check := func(as []api.Account, wants map[uid.ID]want) {
 		t.Helper()
 		for _, a := range as {
 			w, ok := wants[a.Id]
@@ -95,15 +96,15 @@ func TestProfilesSayTheyAreSharedOrPresent(t *testing.T) {
 	}
 	var page api.AccountPage
 	e.expect(200, "GET", "/profiles", e.admin.token, nil, &page)
-	check(page.Items, map[int64]want{k.Id: {2, false}, e.plain.account.ID: {2, true}, e.admin.account.ID: {1, false}})
+	check(page.Items, map[uid.ID]want{k.Id: {2, false}, e.plain.account.ID: {2, true}, e.admin.account.ID: {1, false}})
 	e.expect(200, "GET", "/profiles", e.plain.token, nil, &page)
-	check(page.Items, map[int64]want{k.Id: {2, false}, e.plain.account.ID: {2, false}})
+	check(page.Items, map[uid.ID]want{k.Id: {2, false}, e.plain.account.ID: {2, false}})
 	var me api.Me
 	e.expect(200, "GET", "/me", e.admin.token, nil, &me)
-	check(append(me.Profiles, me.Account), map[int64]want{k.Id: {2, false}, e.plain.account.ID: {2, true}})
+	check(append(me.Profiles, me.Account), map[uid.ID]want{k.Id: {2, false}, e.plain.account.ID: {2, true}})
 	var one api.Account
 	e.expect(200, "GET", "/profiles/"+itoa(k.Id), e.admin.token, nil, &one)
-	check([]api.Account{one}, map[int64]want{k.Id: {2, false}})
+	check([]api.Account{one}, map[uid.ID]want{k.Id: {2, false}})
 }
 
 // presentDevice signs u in on a device put in another household they are
@@ -145,7 +146,7 @@ func TestAPresentAdultManagesNothingThere(t *testing.T) {
 			{"POST", kid + "/make-adult", map[string]any{"email": "ned@example.test"}},
 			{"POST", "/household/adults", map[string]any{"name": "Dee", "email": "dee@example.test"}},
 			{"GET", "/household/device-links", nil},
-			{"DELETE", "/household/device-links/1", nil},
+			{"DELETE", "/household/device-links/" + itoa(uid.N(1)), nil},
 			{"GET", "/link/" + link.Code, nil},
 			{"POST", "/link/" + link.Code + "/approve", nil},
 			{"POST", "/link/" + link.Code + "/deny", nil},
@@ -171,7 +172,7 @@ func TestAPresentAdultManagesNothingThere(t *testing.T) {
 func TestDeletingASharedProfileOnlyTakesItOutOfTheHousehold(t *testing.T) {
 	e := newEnv(t)
 	k, l := e.kid(e.plain, "Mia"), e.kid(e.plain, "Leo")
-	for _, id := range []int64{k.Id, l.Id, e.plain.account.ID} {
+	for _, id := range []uid.ID{k.Id, l.Id, e.plain.account.ID} {
 		e.putIn(id, e.admin.household)
 	}
 	e.expect(204, "DELETE", "/profiles/"+itoa(k.Id), e.admin.token, nil, nil)
@@ -244,7 +245,7 @@ func TestDeletingAHouseholdKeepsProfilesHeldElsewhere(t *testing.T) {
 			if got := e.adminAccount(shared.Id); got.HouseholdId == nil || *got.HouseholdId != e.admin.household.ID {
 				t.Fatalf("the shared kid's other household is not its own: %+v", got)
 			}
-			if got := *e.adminAccount(e.admin.account.ID).HouseholdIds; !slices.Equal(got, []int64{e.admin.household.ID}) {
+			if got := *e.adminAccount(e.admin.account.ID).HouseholdIds; !slices.Equal(got, []uid.ID{e.admin.household.ID}) {
 				t.Fatalf("the present adult keeps only their own household: %v", got)
 			}
 			e.expect(401, "GET", "/me", visiting, nil, nil)
@@ -264,7 +265,7 @@ func TestASharedKidMadeAnAdultLeavesTheirOtherHouseholds(t *testing.T) {
 	e.expect(201, "POST", "/profiles/"+itoa(k.Id)+"/make-adult", e.admin.token, map[string]any{"email": "mia@example.test"}, nil)
 	got := e.adminAccount(k.Id)
 	if got.Kind != api.Adult || got.HouseholdId == nil || *got.HouseholdId != e.admin.household.ID ||
-		!slices.Equal(*got.HouseholdIds, []int64{e.admin.household.ID}) {
+		!slices.Equal(*got.HouseholdIds, []uid.ID{e.admin.household.ID}) {
 		t.Fatalf("not an adult of the household that made them alone: %+v", got)
 	}
 	if slices.Contains(profileIDs(e, e.plain.token), k.Id) {
@@ -293,7 +294,7 @@ func TestAnAdultInTwoHouseholdsMovesTheirDevice(t *testing.T) {
 		t.Fatalf("one household lists none: %+v", other.Households)
 	}
 
-	moveTo := func(want int, token string, h int64) {
+	moveTo := func(want int, token string, h uid.ID) {
 		t.Helper()
 		e.expect(want, "PUT", "/me/household", token, map[string]any{"householdId": h}, nil)
 	}
@@ -323,11 +324,11 @@ func TestAnAdultInTwoHouseholdsMovesTheirDevice(t *testing.T) {
 func TestAnAdminLinksAdultsOfDifferentHouseholds(t *testing.T) {
 	e := newEnv(t)
 	plain, admin := e.plain.account.ID, e.admin.account.ID
-	body := func(a, b int64) map[string]any { return map[string]any{"accountId": a, "otherAccountId": b} }
+	body := func(a, b uid.ID) map[string]any { return map[string]any{"accountId": a, "otherAccountId": b} }
 	e.expect(403, "POST", "/adult-links", e.plain.token, body(plain, admin), nil)
 	var l api.AdultLink
 	e.expect(201, "POST", "/adult-links", e.admin.token, body(plain, admin), &l)
-	if l.AccountId != min(plain, admin) || l.OtherAccountId != max(plain, admin) || l.Tv {
+	if lo, hi := ordered(plain, admin); l.AccountId != lo || l.OtherAccountId != hi || l.Tv {
 		t.Fatalf("lower id first, off TVs: %+v", l)
 	}
 	e.expect(409, "POST", "/adult-links", e.admin.token, body(admin, plain), nil)
@@ -336,7 +337,7 @@ func TestAnAdminLinksAdultsOfDifferentHouseholds(t *testing.T) {
 	var inv api.HouseholdInvite
 	e.expect(201, "POST", "/household/adults", e.admin.token, map[string]any{"name": "Dee", "email": "dee@example.test"}, &inv)
 	cy := e.member(e.plain, "Cy", "cy@example.test")
-	for _, other := range []int64{plain, k.Id, inv.Account.Id, 999} {
+	for _, other := range []uid.ID{plain, k.Id, inv.Account.Id, uid.N(999)} {
 		e.expect(400, "POST", "/adult-links", e.admin.token, body(plain, other), nil)
 	}
 	e.expect(409, "POST", "/adult-links", e.admin.token, body(cy.account.ID, plain), nil)
@@ -358,7 +359,7 @@ func TestAnAdminLinksAdultsOfDifferentHouseholds(t *testing.T) {
 	e.expect(404, "GET", path, e.admin.token, nil, nil)
 }
 
-func (e *env) adminAccount(id int64) api.Account {
+func (e *env) adminAccount(id uid.ID) api.Account {
 	e.t.Helper()
 	var a api.Account
 	e.expect(200, "GET", "/accounts/"+itoa(id), e.admin.token, nil, &a)
@@ -368,7 +369,7 @@ func (e *env) adminAccount(id int64) api.Account {
 	return a
 }
 
-func memberPath(h *household.Household, id int64) string {
+func memberPath(h *household.Household, id uid.ID) string {
 	return "/households/" + itoa(h.ID) + "/members/" + itoa(id)
 }
 
@@ -380,15 +381,15 @@ func TestAnAdminPutsAProfileIntoAHouseholdAndTakesItOut(t *testing.T) {
 	k := e.kid(e.plain, "Mia")
 	into := memberPath
 	e.expect(403, "PUT", into(e.admin.household, k.Id), e.plain.token, nil, nil)
-	e.expect(404, "PUT", "/households/999/members/"+itoa(k.Id), e.admin.token, nil, nil)
-	e.expect(404, "PUT", into(e.admin.household, 999), e.admin.token, nil, nil)
+	e.expect(404, "PUT", "/households/"+itoa(uid.N(999))+"/members/"+itoa(k.Id), e.admin.token, nil, nil)
+	e.expect(404, "PUT", into(e.admin.household, uid.N(999)), e.admin.token, nil, nil)
 	var inv api.HouseholdInvite
 	e.expect(201, "POST", "/household/adults", e.plain.token, map[string]any{"name": "Dee", "email": "dee@example.test"}, &inv)
 	e.expect(409, "PUT", into(e.admin.household, inv.Account.Id), e.admin.token, nil, nil)
 
 	e.expect(204, "PUT", into(e.admin.household, k.Id), e.admin.token, nil, nil)
 	e.expect(204, "PUT", into(e.admin.household, k.Id), e.admin.token, nil, nil)
-	if got := *e.adminAccount(k.Id).HouseholdIds; !slices.Equal(got, []int64{e.plain.household.ID, e.admin.household.ID}) {
+	if got := *e.adminAccount(k.Id).HouseholdIds; !slices.Equal(got, []uid.ID{e.plain.household.ID, e.admin.household.ID}) {
 		t.Fatalf("own household first, then the other: %v", got)
 	}
 	if !slices.Contains(profileIDs(e, e.admin.token), k.Id) {
@@ -412,7 +413,7 @@ func TestAnAdminPutsAProfileIntoAHouseholdAndTakesItOut(t *testing.T) {
 	e.expect(204, "PUT", into(e.admin.household, k.Id), e.admin.token, nil, nil)
 	e.expect(204, "DELETE", into(e.plain.household, k.Id), e.admin.token, nil, nil)
 	moved := e.adminAccount(k.Id)
-	if moved.HouseholdId == nil || *moved.HouseholdId != e.admin.household.ID || !slices.Equal(*moved.HouseholdIds, []int64{e.admin.household.ID}) {
+	if moved.HouseholdId == nil || *moved.HouseholdId != e.admin.household.ID || !slices.Equal(*moved.HouseholdIds, []uid.ID{e.admin.household.ID}) {
 		t.Fatalf("the kid's other household becomes its own: %+v", moved)
 	}
 	if slices.Contains(profileIDs(e, e.plain.token), k.Id) {

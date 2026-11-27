@@ -14,6 +14,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/live"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/together"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 const (
@@ -60,11 +61,11 @@ type WatchTogetherService struct {
 	accounts *account.Repo
 	mu       sync.Mutex
 	// changed holds, per Watch together, a channel closed on its next change.
-	changed map[int64]chan struct{}
+	changed map[uid.ID]chan struct{}
 	// needs holds, per Watch together and device, what the device's latest
 	// poll said it needs to hear of an action and act on it; a device with
 	// none is taken to need Lead.
-	needs map[int64]map[int64]time.Duration
+	needs map[uid.ID]map[uid.ID]time.Duration
 	// Now is the clock for the window, presence and the shared position;
 	// tests replace it.
 	Now func() time.Time
@@ -75,34 +76,35 @@ type WatchTogetherService struct {
 	Events *live.Hub
 }
 
-func (s *WatchTogetherService) announce(v Shared, change string, sessionID int64) {
-	s.Events.Publish(live.Event{Kind: live.WatchTogether, Change: change, HouseholdID: v.W.HouseholdID, OpenerID: v.host(), ItemID: v.W.ItemID,
-		WatchTogetherID: v.W.ID, SessionID: sessionID})
+func (s *WatchTogetherService) announce(v Shared, change string, sessionID *uid.ID) {
+	s.Events.Publish(live.Event{Kind: live.WatchTogether, Change: change, HouseholdID: ref(v.W.HouseholdID), OpenerID: v.host(), ItemID: ref(v.W.ItemID),
+		WatchTogetherID: ref(v.W.ID), SessionID: sessionID})
 }
 
 // NewWatchTogetherService returns a WatchTogetherService over repo, whose
 // titles are in items and profiles in accounts.
 func NewWatchTogetherService(repo *together.Repo, items *item.Repo, accounts *account.Repo) *WatchTogetherService {
-	return &WatchTogetherService{repo: repo, items: items, accounts: accounts, changed: map[int64]chan struct{}{},
-		needs: map[int64]map[int64]time.Duration{}, Now: time.Now, Hold: Hold}
+	return &WatchTogetherService{repo: repo, items: items, accounts: accounts, changed: map[uid.ID]chan struct{}{},
+		needs: map[uid.ID]map[uid.ID]time.Duration{}, Now: time.Now, Hold: Hold}
 }
 
 // Where is the device a profile acts on: its household, and whether it is
 // a TV, on which only links set for TVs hold.
 type Where struct {
-	HouseholdID int64
+	HouseholdID uid.ID
 	TV          bool
 }
 
 // finds reports whether a profile on a device at where finds v.
-func (s *WatchTogetherService) finds(where Where, accountID int64, v Shared) (bool, error) {
+func (s *WatchTogetherService) finds(where Where, accountID uid.ID, v Shared) (bool, error) {
+	host := v.host()
 	switch {
 	case v.W.HouseholdID == where.HouseholdID, v.Member(accountID) != nil:
 		return true, nil
-	case v.host() == 0:
+	case host == nil:
 		return false, nil
 	}
-	return s.accounts.Sees(&account.Account{ID: accountID}, v.host(), where.TV)
+	return s.accounts.Sees(&account.Account{ID: accountID}, *host, where.TV)
 }
 
 // save writes w and wakes everyone waiting on it. Callers hold mu.
@@ -121,7 +123,7 @@ func (s *WatchTogetherService) save(w *together.Together) error {
 // believed. Values are clamped to Lead, the most that is ever waited. Only
 // a member device of one still open is believed, so a stranger's call
 // stores nothing.
-func (s *WatchTogetherService) Report(id, deviceID int64, rttMs, floorMs *int64) {
+func (s *WatchTogetherService) Report(id, deviceID uid.ID, rttMs, floorMs *int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	w, err := s.repo.Get(id)
@@ -139,7 +141,7 @@ func (s *WatchTogetherService) Report(id, deviceID int64, rttMs, floorMs *int64)
 		}
 	}
 	if s.needs[id] == nil {
-		s.needs[id] = map[int64]time.Duration{}
+		s.needs[id] = map[uid.ID]time.Duration{}
 	}
 	s.needs[id][deviceID] = need
 }
@@ -162,7 +164,7 @@ func (s *WatchTogetherService) lead(v Shared) time.Duration {
 }
 
 // next is closed on w's next change. Callers hold mu.
-func (s *WatchTogetherService) next(id int64) <-chan struct{} {
+func (s *WatchTogetherService) next(id uid.ID) <-chan struct{} {
 	ch, ok := s.changed[id]
 	if !ok {
 		ch = make(chan struct{})
@@ -189,12 +191,12 @@ func (v Shared) Status() string {
 	return "waiting"
 }
 
-// host is the account that opened it, 0 if unknown.
-func (v Shared) host() int64 {
+// host is the account that opened it, nil if unknown.
+func (v Shared) host() *uid.ID {
 	if len(v.Members) == 0 {
-		return 0
+		return nil
 	}
-	return v.Members[0].AccountID
+	return ref(v.Members[0].AccountID)
 }
 
 // Guest is the profile that joined, if one has.
@@ -203,7 +205,7 @@ func (v Shared) Guest() *together.Member {
 }
 
 // Member is the given profile's membership, if any.
-func (v Shared) Member(accountID int64) *together.Member {
+func (v Shared) Member(accountID uid.ID) *together.Member {
 	return v.member(func(m *together.Member) bool { return m.AccountID == accountID })
 }
 
@@ -241,7 +243,7 @@ func (s *WatchTogetherService) now() time.Time { return s.Now().UTC().Truncate(t
 // ends it if its window passed unjoined or its members went quiet; one it
 // does not find is not found, nor is one on a title the audience may not
 // see, which ends if that audience is a member of it.
-func (s *WatchTogetherService) load(where Where, accountID, id int64, a item.Audience, now time.Time) (Shared, error) {
+func (s *WatchTogetherService) load(where Where, accountID, id uid.ID, a item.Audience, now time.Time) (Shared, error) {
 	w, err := s.repo.Get(id)
 	if err != nil {
 		return Shared{}, err
@@ -260,7 +262,7 @@ func (s *WatchTogetherService) load(where Where, accountID, id int64, a item.Aud
 	if ok, err := s.items.Visible(w.ItemID, a); err != nil || ok {
 		return v, err
 	}
-	if v.Member(a.AccountID) != nil && w.EndedAt == nil {
+	if a.AccountID != nil && v.Member(*a.AccountID) != nil && w.EndedAt == nil {
 		if err := s.end(v, now); err != nil {
 			return Shared{}, err
 		}
@@ -303,7 +305,7 @@ func (s *WatchTogetherService) end(v Shared, at time.Time) error {
 	if err := s.save(w); err != nil {
 		return err
 	}
-	s.announce(v, live.Ended, 0)
+	s.announce(v, live.Ended, nil)
 	return nil
 }
 
@@ -328,9 +330,9 @@ func (s *WatchTogetherService) leaveAll(list []*together.Together, err error, ke
 }
 
 // Open starts a Watch together on an item with host as its host, paused at
-// positionMs, ending any other the host is in. fromSessionID, when not 0,
+// positionMs, ending any other the host is in. fromSessionID, when not nil,
 // is the playback session whose device is asked to join it at once.
-func (s *WatchTogetherService) Open(householdID, itemID int64, host together.Member, positionMs, fromSessionID int64) (Shared, error) {
+func (s *WatchTogetherService) Open(householdID, itemID uid.ID, host together.Member, positionMs int64, fromSessionID *uid.ID) (Shared, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
@@ -350,13 +352,13 @@ func (s *WatchTogetherService) Open(householdID, itemID int64, host together.Mem
 }
 
 // List is the open Watch togethers the profile finds on a device at where,
-// on an item (0 for any), that are waiting or that the profile is in,
+// on an item (nil for any), that are waiting or that the profile is in,
 // newest first, on the titles the audience may see.
-func (s *WatchTogetherService) List(where Where, accountID, itemID int64, a item.Audience) ([]Shared, error) {
+func (s *WatchTogetherService) List(where Where, accountID uid.ID, itemID *uid.ID, a item.Audience) ([]Shared, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
-	list, err := s.repo.Open(0, itemID)
+	list, err := s.repo.Open(nil, itemID)
 	if err != nil {
 		return nil, err
 	}
@@ -388,13 +390,13 @@ func (s *WatchTogetherService) List(where Where, accountID, itemID int64, a item
 }
 
 // Poll reads one Watch together, marking the profile present if a member.
-func (s *WatchTogetherService) Poll(where Where, accountID, id int64, a item.Audience) (Shared, error) {
+func (s *WatchTogetherService) Poll(where Where, accountID, id uid.ID, a item.Audience) (Shared, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.poll(where, accountID, id, a)
 }
 
-func (s *WatchTogetherService) poll(where Where, accountID, id int64, a item.Audience) (Shared, error) {
+func (s *WatchTogetherService) poll(where Where, accountID, id uid.ID, a item.Audience) (Shared, error) {
 	now := s.now()
 	v, err := s.load(where, accountID, id, a, now)
 	if m := v.Member(accountID); err == nil && m != nil && v.W.EndedAt == nil {
@@ -406,7 +408,7 @@ func (s *WatchTogetherService) poll(where Where, accountID, id int64, a item.Aud
 
 // Wait is Poll held until the version passes after, it ends, or Hold runs
 // out, whichever is first; the answer is as of when it returns.
-func (s *WatchTogetherService) Wait(ctx context.Context, where Where, accountID, id int64, after int, a item.Audience) (Shared, error) {
+func (s *WatchTogetherService) Wait(ctx context.Context, where Where, accountID, id uid.ID, after int, a item.Audience) (Shared, error) {
 	timeout := time.NewTimer(s.Hold)
 	defer timeout.Stop()
 	for {
@@ -429,7 +431,7 @@ func (s *WatchTogetherService) Wait(ctx context.Context, where Where, accountID,
 }
 
 // Join makes guest the second member, ending any other the guest is in.
-func (s *WatchTogetherService) Join(where Where, id int64, guest together.Member, a item.Audience) (Shared, error) {
+func (s *WatchTogetherService) Join(where Where, id uid.ID, guest together.Member, a item.Audience) (Shared, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
@@ -462,7 +464,7 @@ func (s *WatchTogetherService) Join(where Where, id int64, guest together.Member
 	if err := s.save(v.W); err != nil {
 		return v, err
 	}
-	s.announce(v, live.Joined, 0)
+	s.announce(v, live.Joined, nil)
 	return v, nil
 }
 
@@ -471,7 +473,7 @@ func (s *WatchTogetherService) Join(where Where, id int64, guest together.Member
 // play or pause holds the sender's position. A change that matches the
 // shared state within Drift, as when both press pause, is the same state
 // and changes nothing, so the first pause keeps who paused.
-func (s *WatchTogetherService) SetState(where Where, accountID, id int64, playing bool, positionMs int64, a item.Audience) (Shared, error) {
+func (s *WatchTogetherService) SetState(where Where, accountID, id uid.ID, playing bool, positionMs int64, a item.Audience) (Shared, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
@@ -498,7 +500,7 @@ func (s *WatchTogetherService) SetState(where Where, accountID, id int64, playin
 	case playing:
 		w.PausedBy = nil
 	case w.Playing:
-		w.PausedBy = &accountID
+		w.PausedBy = ref(accountID)
 	}
 	at := now.Add(s.lead(v))
 	if w.Playing && playing {
@@ -510,7 +512,7 @@ func (s *WatchTogetherService) SetState(where Where, accountID, id int64, playin
 }
 
 // Leave ends a Watch together for both; leaving one that has ended is done.
-func (s *WatchTogetherService) Leave(where Where, accountID, id int64, a item.Audience) error {
+func (s *WatchTogetherService) Leave(where Where, accountID, id uid.ID, a item.Audience) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
@@ -527,18 +529,18 @@ func (s *WatchTogetherService) Leave(where Where, accountID, id int64, a item.Au
 }
 
 // LeaveDevice ends the open Watch togethers with a member on the device,
-// except those on keepItemID (0 keeps none): a device that plays another
+// except those on keepItemID (nil keeps none): a device that plays another
 // title, or signs out, has left.
-func (s *WatchTogetherService) LeaveDevice(deviceID, keepItemID int64) error {
+func (s *WatchTogetherService) LeaveDevice(deviceID uid.ID, keepItemID *uid.ID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	list, err := s.repo.ForDevice(deviceID)
-	return s.leaveAll(list, err, func(w *together.Together) bool { return w.ItemID == keepItemID }, s.now())
+	return s.leaveAll(list, err, func(w *together.Together) bool { return keepItemID != nil && w.ItemID == *keepItemID }, s.now())
 }
 
 // LeaveAccount ends the open Watch togethers a profile is in: a revoked or
 // deleted account has left on every device.
-func (s *WatchTogetherService) LeaveAccount(accountID int64) error {
+func (s *WatchTogetherService) LeaveAccount(accountID uid.ID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	list, err := s.repo.ForAccount(accountID)

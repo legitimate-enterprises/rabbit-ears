@@ -12,6 +12,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/api"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/account"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/httpapi"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // provider adds a provider at p through the admin API; extra overrides
@@ -32,7 +33,7 @@ func (e *env) provider(p *idp, extra map[string]any) api.SsoProvider {
 
 // ssoFlow runs one sign-in the way a browser does: start, the provider,
 // the callback. It answers the sign-in page the callback sends it to.
-func (e *env) ssoFlow(b *browser, providerID int64, returnTo string) *url.URL {
+func (e *env) ssoFlow(b *browser, providerID uid.ID, returnTo string) *url.URL {
 	e.t.Helper()
 	toIDP, _ := b.get(e.url + "/auth/sso/" + itoa(providerID) + "/start?returnTo=" + returnTo)
 	if !strings.Contains(toIDP.Host, "127.0.0.1") {
@@ -44,7 +45,7 @@ func (e *env) ssoFlow(b *browser, providerID int64, returnTo string) *url.URL {
 }
 
 // ssoCode is a happy sign-in's one-time code.
-func (e *env) ssoCode(b *browser, providerID int64) string {
+func (e *env) ssoCode(b *browser, providerID uid.ID) string {
 	e.t.Helper()
 	back := e.ssoFlow(b, providerID, "viewer")
 	f := fragment(e.t, back)
@@ -54,7 +55,7 @@ func (e *env) ssoCode(b *browser, providerID int64) string {
 	return f.Get("sso")
 }
 
-func (e *env) ssoError(b *browser, providerID int64) string {
+func (e *env) ssoError(b *browser, providerID uid.ID) string {
 	e.t.Helper()
 	back := e.ssoFlow(b, providerID, "viewer")
 	return fragment(e.t, back).Get("sso_error")
@@ -164,7 +165,7 @@ func TestSSOLinksByEmailOnceThenBySubject(t *testing.T) {
 	if _, s := e.exchange(b, e.ssoCode(b, prov.Id)); s.Me.Account.Id != e.plain.account.ID {
 		t.Fatalf("%+v", s.Me.Account)
 	}
-	e.expect(404, "GET", "/accounts/999/identities", e.admin.token, nil, nil)
+	e.expect(404, "GET", "/accounts/"+itoa(uid.N(999))+"/identities", e.admin.token, nil, nil)
 }
 
 // A user may set their email to anyone's on some providers, so only one the
@@ -355,7 +356,7 @@ func TestSSODisabledProvider(t *testing.T) {
 	if to, _ := b.get(e.url + "/auth/sso/" + itoa(prov.Id) + "/start"); to.Path != "/" || fragment(t, to).Get("sso_error") != "provider_error" {
 		t.Fatal(to)
 	}
-	if to, _ := b.get(e.url + "/auth/sso/999/start?returnTo=admin"); to.Path != "/admin/" || fragment(t, to).Get("sso_error") != "provider_error" {
+	if to, _ := b.get(e.url + "/auth/sso/" + itoa(uid.N(999)) + "/start?returnTo=admin"); to.Path != "/admin/" || fragment(t, to).Get("sso_error") != "provider_error" {
 		t.Fatal(to)
 	}
 
@@ -380,7 +381,7 @@ func TestSSOAccountThatMayNotSignIn(t *testing.T) {
 
 	now := time.Now().UTC()
 	e.plain.account.RevokedAt = &now
-	must(t, e.svc.Accounts.Repo().Update(e.plain.account))
+	must(t, e.svc.Accounts.Repo().Update(e.plain.account, nil))
 	if status, _ := e.exchange(b, code); status != 401 {
 		t.Fatalf("revoked after the callback: %d", status)
 	}
@@ -389,7 +390,7 @@ func TestSSOAccountThatMayNotSignIn(t *testing.T) {
 	}
 
 	pending := &account.Account{Kind: account.Adult, Email: "pending@example.test", Name: "Pending"}
-	must(t, e.svc.Accounts.Repo().Create(pending))
+	must(t, e.svc.Accounts.Repo().Create(pending, nil))
 	p.signInAs(map[string]any{"sub": "user-3", "email": "pending@example.test", "email_verified": true})
 	if got := e.ssoError(b, prov.Id); got != "not_allowed" {
 		t.Fatalf("pending, by email: %s", got)
@@ -513,11 +514,11 @@ func TestSSORedirectURIScheme(t *testing.T) {
 		return to.Query().Get("redirect_uri"), w.Header().Get("Set-Cookie")
 	}
 	uri, cookie := redirect("127.0.0.1:51000")
-	if uri != "https://media.example.com/api/v1/auth/sso/callback" || !strings.Contains(cookie, "Secure") {
+	if uri != "https://media.example.com/api/v2/auth/sso/callback" || !strings.Contains(cookie, "Secure") {
 		t.Fatalf("from a local proxy: %s %s", uri, cookie)
 	}
 	uri, cookie = redirect("192.0.2.10:51000")
-	if uri != "http://media.example.com/api/v1/auth/sso/callback" || strings.Contains(cookie, "Secure") {
+	if uri != "http://media.example.com/api/v2/auth/sso/callback" || strings.Contains(cookie, "Secure") {
 		t.Fatalf("from elsewhere: %s %s", uri, cookie)
 	}
 }

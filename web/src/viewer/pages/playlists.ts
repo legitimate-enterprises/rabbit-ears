@@ -130,7 +130,7 @@ export async function playlistTiles(ctx: Ctx, kind: Kind) {
 }
 
 /** Every row of the playlist's play order. */
-const playOrder = (ctx: Ctx, playlistId: number) =>
+const playOrder = (ctx: Ctx, playlistId: string) =>
   paged((offset) =>
     ok(
       ctx.api.GET("/profiles/{profileId}/playlists/{playlistId}/play-order", {
@@ -140,7 +140,7 @@ const playOrder = (ctx: Ctx, playlistId: number) =>
   );
 
 /** Row n of the play order, the row playing. */
-export const playRows = (ctx: Ctx, playlistId: number, n: number) =>
+export const playRows = (ctx: Ctx, playlistId: string, n: number) =>
   ok(
     ctx.api.GET("/profiles/{profileId}/playlists/{playlistId}/play-order", {
       params: { path: { ...path(ctx), playlistId }, query: { limit: 1, offset: n } },
@@ -208,7 +208,7 @@ function describe(e: Entry): { title: string; sub: string; art: HTMLElement; hre
  */
 export async function entryRows(
   ctx: Ctx,
-  playlistId: number,
+  playlistId: string,
   on: (e: Entry, href: string, order: Row[]) => void,
   canEdit = true,
   changed?: () => void,
@@ -288,7 +288,7 @@ export async function entryRows(
 }
 
 export async function playlist(ctx: Ctx, [id]: string[]) {
-  const playlistId = Number(id);
+  const playlistId = id;
   const p = { params: { path: { ...path(ctx), playlistId } } };
   const pl = await ok(ctx.api.GET("/profiles/{profileId}/playlists/{playlistId}", p));
   const href = `#/playlist/${pl.id}`;
@@ -438,7 +438,7 @@ export function confirmDelete(heading: string, note: string, act: () => Promise<
 }
 
 /** A button that opens a dialog of choices from list, or a new one made by make, and adds to the pick. Adults only. */
-export function addButton<T extends { id: number; name: string }>(
+export function addButton<T extends { id: string; name: string }>(
   ctx: Ctx,
   label: string,
   noun: string,
@@ -497,7 +497,7 @@ export function addButton<T extends { id: number; name: string }>(
   return b;
 }
 
-type What = number | { collectionId: number };
+type What = string | { collectionId: string };
 
 /**
  * Adds a collection as one entry, or a title with the edition edition() names; without one, a
@@ -505,21 +505,21 @@ type What = number | { collectionId: number };
  */
 async function addEntry(
   ctx: Ctx,
-  playlistId: number,
+  playlistId: string,
   what: What,
-  edition?: () => number | undefined,
+  edition?: () => string | undefined,
 ) {
-  const add = (editionId?: number) =>
+  const add = (editionId?: string) =>
     ok(
       ctx.api.POST("/profiles/{profileId}/playlists/{playlistId}/entries", {
         params: { path: { ...path(ctx), playlistId } },
-        body: typeof what === "number" ? { itemId: what, editionId } : what,
+        body: typeof what === "string" ? { itemId: what, editionId } : what,
       }),
     );
   try {
     return await add(edition?.());
   } catch (x) {
-    if (typeof what !== "number" || !needsEdition(x)) throw x;
+    if (typeof what !== "string" || !needsEdition(x)) throw x;
     const it = await ok(ctx.api.GET("/items/{itemId}", { params: { path: { itemId: what } } }));
     const id = await askEdition(it.editions ?? []);
     // An empty message keeps the dialog open without an error line.
@@ -529,7 +529,7 @@ async function addEntry(
 }
 
 /** Add to playlist: pick one of the playlists of kind the profile edits, or name a new one; put adds to it. */
-const playlistButton = (ctx: Ctx, kind: Kind, put: (playlistId: number) => Promise<unknown>) =>
+const playlistButton = (ctx: Ctx, kind: Kind, put: (playlistId: string) => Promise<unknown>) =>
   addButton(
     ctx,
     "Add to playlist",
@@ -540,8 +540,8 @@ const playlistButton = (ctx: Ctx, kind: Kind, put: (playlistId: number) => Promi
   );
 
 /** Add to station: pick one of the adult's own stations of kind, or name a new one; put adds to the station's playlist. */
-function stationButton(ctx: Ctx, kind: Kind, put: (playlistId: number) => Promise<unknown>) {
-  const made = new Set<number>();
+function stationButton(ctx: Ctx, kind: Kind, put: (playlistId: string) => Promise<unknown>) {
+  const made = new Set<string>();
   return addButton(
     ctx,
     "Add to station",
@@ -557,14 +557,14 @@ export const addToPlaylist = (
   ctx: Ctx,
   what: What,
   kind: Kind,
-  edition?: () => number | undefined,
+  edition?: () => string | undefined,
 ) => playlistButton(ctx, kind, (id) => addEntry(ctx, id, what, edition));
 
 export const addToStation = (
   ctx: Ctx,
   what: What,
   kind: Kind,
-  edition?: () => number | undefined,
+  edition?: () => string | undefined,
 ) => stationButton(ctx, kind, (id) => addEntry(ctx, id, what, edition));
 
 const ownStations = async (ctx: Ctx, kind: Kind) =>
@@ -577,7 +577,7 @@ const createStation = (ctx: Ctx, name: string, kind: Kind) =>
   ok(ctx.api.POST("/stations", { body: { name, kind, order: "playlist" } }));
 
 /** Appends every item in ids in one request; a title of several editions takes its default. */
-const addAll = (ctx: Ctx, playlistId: number, ids: number[]) =>
+const addAll = (ctx: Ctx, playlistId: string, ids: string[]) =>
   ok(
     ctx.api.POST("/profiles/{profileId}/playlists/{playlistId}/entries/batch", {
       params: { path: { ...path(ctx), playlistId } },
@@ -585,17 +585,17 @@ const addAll = (ctx: Ctx, playlistId: number, ids: number[]) =>
     }),
   );
 
-export const addAllToPlaylist = (ctx: Ctx, ids: () => number[], kind: Kind) =>
+export const addAllToPlaylist = (ctx: Ctx, ids: () => string[], kind: Kind) =>
   playlistButton(ctx, kind, (id) => addAll(ctx, id, ids()));
 
-export const addAllToStation = (ctx: Ctx, ids: () => number[], kind: Kind) =>
+export const addAllToStation = (ctx: Ctx, ids: () => string[], kind: Kind) =>
   stationButton(ctx, kind, (id) => addAll(ctx, id, ids()));
 
 /**
  * Reschedule now? once the owner has saved a station or changed what it plays: Now ends the
  * schedule after what is on, Later keeps it. Either answer runs then.
  */
-export function askReschedule(ctx: Ctx, stationId: number, then = () => {}) {
+export function askReschedule(ctx: Ctx, stationId: string, then = () => {}) {
   const e = errorLine();
   const later = () => (d.close(), then());
   const d = dialog(

@@ -11,11 +11,13 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/occasion"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/service"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 func toOccasion(o *occasion.Occasion) api.Occasion {
 	v := api.Occasion{Id: o.ID, Name: o.Name, DaysBefore: o.DaysBefore, DaysAfter: o.DaysAfter, KeywordIds: append([]int64{}, o.Keywords...),
-		Phrases: append([]string{}, o.Phrases...), Colors: colorsOf(o)}
+		Phrases: append([]string{}, o.Phrases...), Colors: colorsOf(o), CreatedAt: o.CreatedAt, ModifiedAt: o.ModifiedAt,
+		CreatedBy: o.CreatedBy, ModifiedBy: o.ModifiedBy}
 	if o.Holiday != "" {
 		v.Holiday = &o.Holiday
 	} else {
@@ -86,15 +88,15 @@ func (s *Server) ListOccasions(_ context.Context, r api.ListOccasionsRequestObje
 
 // CreateOccasion adds an occasion, one anchored to a holiday starting with
 // the holiday's phrases and colors where the input gives none.
-func (s *Server) CreateOccasion(_ context.Context, r api.CreateOccasionRequestObject) (api.CreateOccasionResponseObject, error) {
-	var o occasion.Occasion
+func (s *Server) CreateOccasion(ctx context.Context, r api.CreateOccasionRequestObject) (api.CreateOccasionResponseObject, error) {
+	o := occasion.Occasion{ID: or(r.Body.Id, uid.ID{})}
 	if h, ok := occasion.HolidayByKey(or(r.Body.Holiday, "")); ok {
 		o.Phrases, o.Colors = occasion.BuiltInPhrases(h.Key), h.Colors
 	}
 	if err := occasionFrom(r.Body, &o); err != nil {
 		return nil, err
 	}
-	if err := s.svc.Occasions.Repo().Create(&o); err != nil {
+	if err := s.svc.Occasions.Repo().Create(&o, actor(ctx)); err != nil {
 		return nil, err
 	}
 	return api.CreateOccasion201JSONResponse(toOccasion(&o)), nil
@@ -111,7 +113,10 @@ func (s *Server) GetOccasion(_ context.Context, r api.GetOccasionRequestObject) 
 
 // ReplaceOccasion rewrites an occasion; its hand additions and removals
 // stay, and so do its phrases or colors when the input leaves them out.
-func (s *Server) ReplaceOccasion(_ context.Context, r api.ReplaceOccasionRequestObject) (api.ReplaceOccasionResponseObject, error) {
+func (s *Server) ReplaceOccasion(ctx context.Context, r api.ReplaceOccasionRequestObject) (api.ReplaceOccasionResponseObject, error) {
+	if err := sameID(r.Body.Id, r.OccasionId); err != nil {
+		return nil, err
+	}
 	o, err := s.svc.Occasions.Repo().Get(r.OccasionId)
 	if err != nil {
 		return nil, err
@@ -119,7 +124,7 @@ func (s *Server) ReplaceOccasion(_ context.Context, r api.ReplaceOccasionRequest
 	if err := occasionFrom(r.Body, o); err != nil {
 		return nil, err
 	}
-	if err := s.svc.Occasions.Repo().Update(o); err != nil {
+	if err := s.svc.Occasions.Repo().Update(o, actor(ctx)); err != nil {
 		return nil, err
 	}
 	return api.ReplaceOccasion200JSONResponse(toOccasion(o)), nil
@@ -137,13 +142,13 @@ func (s *Server) ListOccasionMembers(_ context.Context, r api.ListOccasionMember
 		return nil, err
 	}
 	limit, offset := paging(r.Params.Limit, r.Params.Offset)
-	rows, err := s.svc.Items.Repo().List(item.Filter{OccasionID: r.OccasionId, Catalog: true, Limit: limit + 1, Offset: offset})
+	rows, err := s.svc.Items.Repo().List(item.Filter{OccasionID: &r.OccasionId, Catalog: true, Limit: limit + 1, Offset: offset})
 	if err != nil {
 		return nil, err
 	}
 	out := api.ListOccasionMembers200JSONResponse{Items: []api.OccasionMember{}}
 	rows, out.NextOffset = window(rows, limit, offset)
-	ids := make([]int64, len(rows))
+	ids := make([]uid.ID, len(rows))
 	for i, it := range rows {
 		ids[i] = it.ID
 	}
@@ -166,7 +171,7 @@ func (s *Server) ListOccasionMembers(_ context.Context, r api.ListOccasionMember
 }
 
 // occasionItem resolves an occasion and an item, each or not found.
-func (s *Server) occasionItem(occasionID, itemID int64) (*item.Item, error) {
+func (s *Server) occasionItem(occasionID, itemID uid.ID) (*item.Item, error) {
 	if _, err := s.svc.Occasions.Repo().Get(occasionID); err != nil {
 		return nil, err
 	}
@@ -208,7 +213,7 @@ func (s *Server) ListActiveOccasions(ctx context.Context, r api.ListActiveOccasi
 		return nil, err
 	}
 	y, m, d := r.Params.Date.Date()
-	rows, err := s.svc.Occasions.Active(time.Date(y, m, d, 0, 0, 0, 0, time.UTC), service.BrowseAudienceFor(who), or(r.Params.ItemId, 0))
+	rows, err := s.svc.Occasions.Active(time.Date(y, m, d, 0, 0, 0, 0, time.UTC), service.BrowseAudienceFor(who), r.Params.ItemId)
 	if err != nil {
 		return nil, err
 	}

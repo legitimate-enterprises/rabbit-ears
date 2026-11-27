@@ -10,6 +10,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/collection"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/service"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // Collections: TMDB's, seen server-wide, and each household's custom ones,
@@ -20,18 +21,18 @@ import (
 
 // seenCollection finds a collection the device's household and active
 // profile may see, else not found.
-func (s *Server) seenCollection(ctx context.Context, id int64) (*collection.View, error) {
+func (s *Server) seenCollection(ctx context.Context, id uid.ID) (*collection.View, error) {
 	return s.svc.Collections.Repo().Seen(caller(ctx).device.HouseholdID, id, audience(ctx))
 }
 
 // shownCollection is seenCollection for browsing, which an adult hiding
 // kids' content browses without it.
-func (s *Server) shownCollection(ctx context.Context, id int64) (*collection.View, error) {
+func (s *Server) shownCollection(ctx context.Context, id uid.ID) (*collection.View, error) {
 	return s.svc.Collections.Repo().Seen(caller(ctx).device.HouseholdID, id, browse(ctx))
 }
 
 // collectionToWrite is seenCollection for a write, which a kid may not make.
-func (s *Server) collectionToWrite(ctx context.Context, id int64) (*collection.View, error) {
+func (s *Server) collectionToWrite(ctx context.Context, id uid.ID) (*collection.View, error) {
 	v, err := s.seenCollection(ctx, id)
 	if err == nil && !caller(ctx).manages() {
 		return nil, errForbidden
@@ -52,7 +53,8 @@ func collectionError(err error) error {
 
 func toCollection(v *collection.View) api.Collection {
 	return api.Collection{Id: v.ID, Source: api.CollectionSource(v.Source), Name: v.Name, Overview: optStr(v.Overview),
-		HouseholdId: v.HouseholdID, TmdbId: v.TMDBID, MovieCount: v.MovieCount, CustomOrder: &v.CustomOrder, CreatedAt: v.CreatedAt, UpdatedAt: v.UpdatedAt}
+		HouseholdId: v.HouseholdID, TmdbId: v.TMDBID, MovieCount: v.MovieCount, CustomOrder: &v.CustomOrder, CreatedAt: v.CreatedAt, ModifiedAt: v.ModifiedAt,
+		CreatedBy: v.CreatedBy, ModifiedBy: v.ModifiedBy}
 }
 
 // ListCollections pages by name the collections the active profile may see.
@@ -82,8 +84,8 @@ func (s *Server) CreateCollection(ctx context.Context, r api.CreateCollectionReq
 		return nil, err
 	}
 	household := caller(ctx).device.HouseholdID
-	c := &collection.Collection{HouseholdID: &household, Name: name}
-	if err := s.svc.Collections.Repo().Create(c); err != nil {
+	c := &collection.Collection{ID: or(r.Body.Id, uid.ID{}), HouseholdID: &household, Name: name}
+	if err := s.svc.Collections.Repo().Create(c, actor(ctx)); err != nil {
 		return nil, err
 	}
 	return api.CreateCollection201JSONResponse(toCollection(&collection.View{Collection: *c})), nil
@@ -100,6 +102,9 @@ func (s *Server) GetCollection(ctx context.Context, r api.GetCollectionRequestOb
 
 // ReplaceCollection renames a custom collection.
 func (s *Server) ReplaceCollection(ctx context.Context, r api.ReplaceCollectionRequestObject) (api.ReplaceCollectionResponseObject, error) {
+	if err := sameID(r.Body.Id, r.CollectionId); err != nil {
+		return nil, err
+	}
 	v, err := s.collectionToWrite(ctx, r.CollectionId)
 	if err != nil {
 		return nil, err
@@ -108,7 +113,7 @@ func (s *Server) ReplaceCollection(ctx context.Context, r api.ReplaceCollectionR
 	if err != nil {
 		return nil, err
 	}
-	if err := s.svc.Collections.Rename(&v.Collection, name); err != nil {
+	if err := s.svc.Collections.Rename(&v.Collection, name, actor(ctx)); err != nil {
 		return nil, collectionError(err)
 	}
 	return api.ReplaceCollection200JSONResponse(toCollection(v)), nil
@@ -219,7 +224,7 @@ func (s *Server) GetCollectionArtwork(ctx context.Context, r api.GetCollectionAr
 
 // movieCollections names the collections a movie is in that the active
 // profile may see.
-func (s *Server) movieCollections(ctx context.Context, movieID int64) (*[]api.Collection, error) {
+func (s *Server) movieCollections(ctx context.Context, movieID uid.ID) (*[]api.Collection, error) {
 	vs, err := s.svc.Collections.Repo().ForMovie(caller(ctx).device.HouseholdID, movieID, browse(ctx))
 	out := mapAll(vs, toCollection)
 	return &out, err

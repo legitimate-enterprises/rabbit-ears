@@ -7,6 +7,7 @@ import (
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/account"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/playlist"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // The arithmetic here is in the location of the times it is given, which
@@ -15,8 +16,12 @@ import (
 
 // Range is one time range of a day, in minutes after local midnight. A To
 // at or before From runs past midnight into the next day, so a range
-// belongs to the day it starts on.
-type Range struct{ From, To int }
+// belongs to the day it starts on. ID is its stored row's, zero until
+// written.
+type Range struct {
+	ID       uid.ID
+	From, To int
+}
 
 // Schedule limits when programs may start: on Days (every day when empty),
 // within Times (all day when empty). Both empty is continuous.
@@ -36,7 +41,7 @@ func (s Schedule) at(t time.Time) (bool, time.Time) {
 	}
 	times := s.Times
 	if len(times) == 0 {
-		times = []Range{{0, 0}}
+		times = []Range{{From: 0, To: 0}}
 	}
 	var next time.Time
 	y, m, d := t.Date()
@@ -137,13 +142,14 @@ func (s Schedule) Start(timing string, t, until time.Time) (time.Time, bool) {
 	}
 }
 
-// Key names one row of a play order across reads.
-type Key struct{ EntryID, ItemID int64 }
+// Key names one row of a play order across reads. It is a map key, so a
+// program with no entry left has a zero EntryID, stored as NULL.
+type Key struct{ EntryID, ItemID uid.ID }
 
 // Row is one row of a play order.
 type Row struct {
 	Key
-	EditionID int64
+	EditionID uid.ID
 	RuntimeMs int64
 }
 

@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // CutGapMs is how far apart, in milliseconds, the runtimes of two untagged
@@ -17,8 +19,10 @@ const CutGapMs = 3 * 60 * 1000
 
 // Edition is one cut of a title (an item).
 type Edition struct {
-	ID     int64
-	ItemID int64
+	ID         uid.ID
+	ItemID     uid.ID
+	CreatedAt  time.Time
+	ModifiedAt time.Time
 	// Tag is the {edition-Name} of its files; "" for an untagged cut.
 	Tag       string
 	RuntimeMs *int64
@@ -35,7 +39,7 @@ type Edition struct {
 
 // Copy is one file of an edition and its first video track's size.
 type Copy struct {
-	MediaFileID int64
+	MediaFileID uid.ID
 	Width       *int
 	Height      *int
 	HDRFormat   string
@@ -83,8 +87,8 @@ func New(d db.DBTX) *Repo { return &Repo{d} }
 
 // all lists every edition of an item, files or not, in id order with its
 // runtime falling back to its largest file's, and fills Name and Default.
-func all(d db.DBTX, itemID int64) ([]*Edition, error) {
-	rows, err := d.Query(`SELECT e.id, e.item_id, COALESCE(e.tag, ''), COALESCE(e.runtime_ms, (SELECT f.duration_ms FROM edition_file ef
+func all(d db.DBTX, itemID uid.ID) ([]*Edition, error) {
+	rows, err := d.Query(`SELECT e.id, e.item_id, e.created_at, e.modified_at, COALESCE(e.tag, ''), COALESCE(e.runtime_ms, (SELECT f.duration_ms FROM edition_file ef
 			JOIN media_file f ON f.id = ef.media_file_id WHERE ef.edition_id = e.id ORDER BY f.size_bytes DESC, f.id LIMIT 1)),
 			(SELECT COUNT(*) FROM edition_file ef WHERE ef.edition_id = e.id),
 			(SELECT COUNT(*) FROM edition_file ef JOIN media_file f ON f.id = ef.media_file_id
@@ -98,9 +102,11 @@ func all(d db.DBTX, itemID int64) ([]*Edition, error) {
 	for rows.Next() {
 		var e Edition
 		var rt sql.NullInt64
-		if err := rows.Scan(&e.ID, &e.ItemID, &e.Tag, &rt, &e.Files, &e.onDisk); err != nil {
+		var created, modified int64
+		if err := rows.Scan(&e.ID, &e.ItemID, &created, &modified, &e.Tag, &rt, &e.Files, &e.onDisk); err != nil {
 			return nil, db.Wrap(err)
 		}
+		e.CreatedAt, e.ModifiedAt = db.FromMs(created), db.FromMs(modified)
 		if rt.Valid {
 			e.RuntimeMs = &rt.Int64
 		}
@@ -140,7 +146,7 @@ func all(d db.DBTX, itemID int64) ([]*Edition, error) {
 
 // ForItem lists the editions of an item that have files, the default first,
 // then by name.
-func (r *Repo) ForItem(itemID int64) ([]*Edition, error) {
+func (r *Repo) ForItem(itemID uid.ID) ([]*Edition, error) {
 	es, err := all(r.d, itemID)
 	if err != nil {
 		return nil, err
@@ -161,8 +167,8 @@ func (r *Repo) ForItem(itemID int64) ([]*Edition, error) {
 }
 
 // Get returns one edition, with or without files, or db.ErrNotFound.
-func (r *Repo) Get(id int64) (*Edition, error) {
-	var itemID int64
+func (r *Repo) Get(id uid.ID) (*Edition, error) {
+	var itemID uid.ID
 	if err := r.d.QueryRow(`SELECT item_id FROM edition WHERE id = ?`, id).Scan(&itemID); err != nil {
 		return nil, db.Wrap(err)
 	}
@@ -180,7 +186,7 @@ func (r *Repo) Get(id int64) (*Edition, error) {
 
 // Default returns the item's default edition, or db.ErrNotFound when no
 // edition of it has a file.
-func (r *Repo) Default(itemID int64) (*Edition, error) {
+func (r *Repo) Default(itemID uid.ID) (*Edition, error) {
 	es, err := all(r.d, itemID)
 	if err != nil {
 		return nil, err
@@ -194,20 +200,20 @@ func (r *Repo) Default(itemID int64) (*Edition, error) {
 }
 
 // Of returns the edition of the item that holds the file, or db.ErrNotFound.
-func (r *Repo) Of(itemID, fileID int64) (int64, error) {
-	var id int64
+func (r *Repo) Of(itemID, fileID uid.ID) (uid.ID, error) {
+	var id uid.ID
 	err := r.d.QueryRow(`SELECT edition_id FROM item_file WHERE item_id = ? AND media_file_id = ?`, itemID, fileID).Scan(&id)
 	return id, db.Wrap(err)
 }
 
 // ItemIDs lists the titles a file belongs to, in id order.
-func (r *Repo) ItemIDs(fileID int64) ([]int64, error) {
+func (r *Repo) ItemIDs(fileID uid.ID) ([]uid.ID, error) {
 	rows, err := r.d.Query(`SELECT DISTINCT item_id FROM item_file WHERE media_file_id = ? ORDER BY item_id`, fileID)
-	return db.Collect(rows, err, db.Column[int64])
+	return db.Collect(rows, err, db.Column[uid.ID])
 }
 
 // Copies lists an edition's files, the tallest picture first.
-func (r *Repo) Copies(editionID int64) ([]Copy, error) {
+func (r *Repo) Copies(editionID uid.ID) ([]Copy, error) {
 	rows, err := r.d.Query(`SELECT f.id, t.width, t.height, COALESCE(t.hdr_format, ''), f.missing_at IS NOT NULL FROM edition_file ef
 		JOIN media_file f ON f.id = ef.media_file_id
 		LEFT JOIN track t ON t.id = (SELECT v.id FROM track v WHERE v.media_file_id = f.id AND v.kind = 'video' ORDER BY v.stream_index LIMIT 1)
@@ -223,7 +229,7 @@ func (r *Repo) Copies(editionID int64) ([]Copy, error) {
 	})
 }
 
-// pick is the edition of es a file goes in, 0 for a new one. A tag matches
+// pick is the edition of es a file goes in, nil for a new one. A tag matches
 // its edition case-insensitively. Without cuts an untagged file joins the
 // first untagged edition; with cuts, the untagged edition whose runtime is
 // nearest and within CutGapMs, one of unknown runtime matching any, and a
@@ -256,8 +262,8 @@ func pick(es []*Edition, tag string, durationMs *int64, cuts bool) *Edition {
 // Place files a file under the item's edition for its tag and duration
 // (see pick), making the edition when there is none, and takes it out of
 // the item's other editions. It returns the edition's id.
-func (r *Repo) Place(fileID, itemID int64, tag string, durationMs *int64, cuts bool) (int64, error) {
-	var id int64
+func (r *Repo) Place(fileID, itemID uid.ID, tag string, durationMs *int64, cuts bool) (uid.ID, error) {
+	var id uid.ID
 	err := db.InTx(r.d, func(d db.DBTX) error {
 		es, err := all(d, itemID)
 		if err != nil {
@@ -268,14 +274,16 @@ func (r *Repo) Place(fileID, itemID int64, tag string, durationMs *int64, cuts b
 			if durationMs != nil {
 				runtime = *durationMs
 			}
-			res, err := d.Exec(`INSERT INTO edition (item_id, tag, runtime_ms) VALUES (?,?,?)`, itemID, db.NullStr(tag), runtime)
-			if err != nil {
+			id = uid.New()
+			now := db.Ms(time.Now())
+			if _, err := d.Exec(`INSERT INTO edition (id, item_id, tag, runtime_ms, created_at, modified_at) VALUES (?,?,?,?,?,?)`,
+				id, itemID, db.NullStr(tag), runtime, now, now); err != nil {
 				return db.Wrap(err)
 			}
-			id, _ = res.LastInsertId()
 		} else {
 			id = e.ID
-			if _, err := d.Exec(`UPDATE edition SET runtime_ms = ? WHERE id = ? AND runtime_ms IS NULL`, durationMs, id); err != nil {
+			if _, err := d.Exec(`UPDATE edition SET runtime_ms = ?, modified_at = ? WHERE id = ? AND runtime_ms IS NULL`,
+				durationMs, db.Ms(time.Now()), id); err != nil {
 				return db.Wrap(err)
 			}
 		}
@@ -293,7 +301,7 @@ func (r *Repo) Place(fileID, itemID int64, tag string, durationMs *int64, cuts b
 
 // Unlink takes a file out of every edition of the item. A file left in no
 // edition is deleted.
-func (r *Repo) Unlink(fileID, itemID int64) error {
+func (r *Repo) Unlink(fileID, itemID uid.ID) error {
 	_, err := r.d.Exec(`DELETE FROM edition_file WHERE media_file_id = ? AND edition_id IN (SELECT id FROM edition WHERE item_id = ?)`,
 		fileID, itemID)
 	return db.Wrap(err)
@@ -306,7 +314,8 @@ func (r *Repo) Unlink(fileID, itemID int64) error {
 // winning; per account the more recently played watch state is kept,
 // watched if either was. from's metadata, genres and credits go with it:
 // into holds the same match's.
-func (r *Repo) Fold(into, from int64) error {
+func (r *Repo) Fold(into, from uid.ID) error {
+	now := db.Ms(time.Now())
 	return db.InTx(r.d, func(d db.DBTX) error {
 		es, err := all(d, from)
 		if err != nil {
@@ -319,7 +328,7 @@ func (r *Repo) Fold(into, from int64) error {
 			}
 			t := pick(targets, e.Tag, e.RuntimeMs, true)
 			if t == nil {
-				if _, err := d.Exec(`UPDATE edition SET item_id = ? WHERE id = ?`, into, e.ID); err != nil {
+				if _, err := d.Exec(`UPDATE edition SET item_id = ?, modified_at = ? WHERE id = ?`, into, now, e.ID); err != nil {
 					return db.Wrap(err)
 				}
 				continue
@@ -340,9 +349,9 @@ func (r *Repo) Fold(into, from int64) error {
 		}
 		for _, q := range []string{
 			`UPDATE watch_state AS k SET position_ms = g.position_ms, play_count = g.play_count, last_played_at = g.last_played_at,
-				updated_at = g.updated_at, edition_id = g.edition_id, watched = max(k.watched, g.watched)
+				changed_at = g.changed_at, edition_id = g.edition_id, watched = max(k.watched, g.watched)
 				FROM watch_state g WHERE k.item_id = ?1 AND g.item_id = ?2 AND g.account_id = k.account_id
-				AND COALESCE(g.last_played_at, g.updated_at) > COALESCE(k.last_played_at, k.updated_at)`,
+				AND COALESCE(g.last_played_at, g.changed_at) > COALESCE(k.last_played_at, k.changed_at)`,
 			`UPDATE watch_state AS k SET watched = 1 FROM watch_state g
 				WHERE k.item_id = ?1 AND g.item_id = ?2 AND g.account_id = k.account_id AND g.watched = 1`,
 			`UPDATE OR IGNORE watch_state SET item_id = ?1 WHERE item_id = ?2`,
@@ -352,13 +361,13 @@ func (r *Repo) Fold(into, from int64) error {
 			`UPDATE station_program SET item_id = ?1 WHERE item_id = ?2`,
 			`UPDATE station_loop SET item_id = ?1 WHERE item_id = ?2`,
 			`UPDATE playback_session SET item_id = ?1 WHERE item_id = ?2`,
-			`UPDATE watch_together SET item_id = ?1 WHERE item_id = ?2`,
+			`UPDATE watch_together SET item_id = ?1, modified_at = ?3 WHERE item_id = ?2`,
 			`UPDATE download SET item_id = ?1 WHERE item_id = ?2`,
 			`UPDATE cover SET item_id = ?1 WHERE item_id = ?2`,
-			`UPDATE log_entry SET item_id = ?1 WHERE item_id = ?2`,
+			`UPDATE log_entry SET item_id = ?1, modified_at = ?3 WHERE item_id = ?2`,
 			`DELETE FROM item WHERE id = ?2`,
 		} {
-			if _, err := d.Exec(q, into, from); err != nil {
+			if _, err := d.Exec(q, into, from, now); err != nil {
 				return db.Wrap(err)
 			}
 		}

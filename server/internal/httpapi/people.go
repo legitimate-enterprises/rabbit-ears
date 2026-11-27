@@ -8,12 +8,13 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/api"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/genre"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/person"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // ListGenres pages genres by name; a kid sees only genres of items they may see.
 func (s *Server) ListGenres(ctx context.Context, r api.ListGenresRequestObject) (api.ListGenresResponseObject, error) {
 	limit, offset := paging(r.Params.Limit, r.Params.Offset)
-	rows, err := s.svc.Genres.Repo().List(genre.Filter{LibraryID: or(r.Params.LibraryId, 0), Audience: browse(ctx), Limit: limit + 1, Offset: offset})
+	rows, err := s.svc.Genres.Repo().List(genre.Filter{LibraryID: r.Params.LibraryId, Audience: browse(ctx), Limit: limit + 1, Offset: offset})
 	if err != nil {
 		return nil, err
 	}
@@ -67,13 +68,13 @@ func (s *Server) ListPeople(ctx context.Context, r api.ListPeopleRequestObject) 
 	return api.ListPeople200JSONResponse{Items: mapAll(rows, toPerson), NextOffset: next}, nil
 }
 
-func personFrom(in *api.PersonInput, id int64) *person.Person {
+func personFrom(in *api.PersonInput, id uid.ID) *person.Person {
 	return &person.Person{ID: id, Name: in.Name, TMDBID: in.TmdbId, ProfilePath: or(in.ProfilePath, "")}
 }
 
 // CreatePerson adds a person by hand.
 func (s *Server) CreatePerson(_ context.Context, r api.CreatePersonRequestObject) (api.CreatePersonResponseObject, error) {
-	p := personFrom(r.Body, 0)
+	p := personFrom(r.Body, uid.ID{})
 	if err := s.svc.People.Repo().Create(p); err != nil {
 		return nil, err
 	}
@@ -81,7 +82,7 @@ func (s *Server) CreatePerson(_ context.Context, r api.CreatePersonRequestObject
 }
 
 // seenPerson returns a person only if the active profile may see them.
-func (s *Server) seenPerson(ctx context.Context, id int64) (*person.Person, error) {
+func (s *Server) seenPerson(ctx context.Context, id uid.ID) (*person.Person, error) {
 	if ok, err := s.svc.People.Repo().Seen(id, browse(ctx)); err != nil || !ok {
 		return nil, orNotFound(err)
 	}

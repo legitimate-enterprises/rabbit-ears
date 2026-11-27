@@ -19,6 +19,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/logstore"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/mediafile"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/probe"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // Tags a title's local fields are read from, first found first.
@@ -187,7 +188,7 @@ func (s *Scanner) localFile(it *item.Item) (*mediafile.File, error) {
 	return special, nil
 }
 
-func (s *Scanner) availableFile(itemID int64) (*mediafile.File, error) {
+func (s *Scanner) availableFile(itemID uid.ID) (*mediafile.File, error) {
 	files, err := s.Files.FilesForItem(itemID)
 	if err != nil {
 		return nil, err

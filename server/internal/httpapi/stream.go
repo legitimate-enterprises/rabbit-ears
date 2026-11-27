@@ -17,6 +17,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/session"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/thumbs"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/transcode"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // streams serves media bytes outside the spec: the session's stream key in
@@ -54,7 +55,7 @@ func (h *streams) live(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, service.ErrNotTuned):
 		http.NotFound(w, r)
 	case err != nil:
-		logstore.Log("playback").Warn(fmt.Sprintf("Session %d: no station playlist", sess.ID), "session_id", sess.ID, "err", err)
+		logstore.Log("playback").Warn(fmt.Sprintf("Session %s: no station playlist", sess.ID), "session_id", sess.ID, "err", err)
 		http.Error(w, "stream unavailable", http.StatusServiceUnavailable)
 	default:
 		w.Header().Set("Content-Type", playlistType)
@@ -78,7 +79,7 @@ func (h *streams) piece(w http.ResponseWriter, r *http.Request) {
 		return
 	case err != nil:
 		if r.Context().Err() == nil {
-			logstore.Log("playback").Error(fmt.Sprintf("Session %d: station stream failed", sess.ID), "session_id", sess.ID, "err", err)
+			logstore.Log("playback").Error(fmt.Sprintf("Session %s: station stream failed", sess.ID), "session_id", sess.ID, "err", err)
 		}
 		http.Error(w, "stream unavailable", http.StatusServiceUnavailable)
 		return
@@ -144,7 +145,7 @@ func (h *streams) file(w http.ResponseWriter, r *http.Request, s *streamReq) {
 		}
 		w.Header().Set("Content-Type", t)
 	}
-	http.ServeContent(w, r, "", s.file.ModifiedAt, f)
+	http.ServeContent(w, r, "", s.file.FileModifiedAt, f)
 }
 
 const playlistType = "application/vnd.apple.mpegurl"
@@ -318,7 +319,7 @@ func (h *streams) rung(w http.ResponseWriter, r *http.Request, s *streamReq) {
 
 // subtitle serves a text track as a WebVTT sidecar.
 func (h *streams) subtitle(w http.ResponseWriter, r *http.Request, s *streamReq) {
-	id, err := strconv.ParseInt(strings.TrimSuffix(r.PathValue("name"), ".vtt"), 10, 64)
+	id, err := uid.Parse(strings.TrimSuffix(r.PathValue("name"), ".vtt"))
 	t := trackByID(s.media.Tracks, &id)
 	if err != nil || t == nil || t.Kind != mediafile.Subtitle || t.SubtitleIsText == nil || !*t.SubtitleIsText {
 		http.NotFound(w, r)

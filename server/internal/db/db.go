@@ -12,6 +12,8 @@ import (
 
 	"modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
+
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 var (
@@ -151,22 +153,6 @@ func FromNullInt(n sql.NullInt64) *int {
 	return &v
 }
 
-// NullID encodes an optional id; nil stores NULL.
-func NullID(p *int64) any {
-	if p == nil {
-		return nil
-	}
-	return *p
-}
-
-// NullZeroID stores the zero id as NULL.
-func NullZeroID(id int64) any {
-	if id == 0 {
-		return nil
-	}
-	return id
-}
-
 // DataDir is the folder the server makes its artwork, thumbnails, seek
 // previews and caches in. A path under it is stored relative to it, so the
 // database does not depend on where the folder is.
@@ -216,7 +202,7 @@ func InTx(d DBTX, fn func(DBTX) error) error {
 
 // In returns "(?, ?, ...)" and its arguments for an IN over ids, which must
 // not be empty.
-func In(ids []int64) (string, []any) {
+func In(ids []uid.ID) (string, []any) {
 	args := make([]any, len(ids))
 	for i, id := range ids {
 		args[i] = id

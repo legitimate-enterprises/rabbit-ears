@@ -10,6 +10,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/library"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/review"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 func must(t *testing.T, err error) {
@@ -25,7 +26,7 @@ func must(t *testing.T, err error) {
 func TestRaiseSettleAndSweep(t *testing.T) {
 	d := dbtest.OpenPreferLocal(t)
 	l := &library.Library{Name: "L", Kind: library.TV, ScanHour: 3}
-	must(t, library.New(d).Create(l))
+	must(t, library.New(d).Create(l, nil))
 	items := item.New(d)
 	show := &item.Item{LibraryID: l.ID, Kind: item.Show, Path: "/tv/The Office", ParsedTitle: "The Office"}
 	must(t, items.Create(show))
@@ -51,7 +52,7 @@ func TestRaiseSettleAndSweep(t *testing.T) {
 	}
 
 	yes, no := true, false
-	all, err := r.List(review.Filter{LibraryID: l.ID})
+	all, err := r.List(review.Filter{LibraryID: &l.ID})
 	must(t, err)
 	open, err := r.List(review.Filter{Dismissed: &no})
 	must(t, err)
@@ -70,7 +71,7 @@ func TestRaiseSettleAndSweep(t *testing.T) {
 	if _, err := r.Get(rv.ID); !errors.Is(err, db.ErrNotFound) {
 		t.Fatalf("settled review stays: %v", err)
 	}
-	must(t, r.Sweep(l.ID, review.Unrecognized, []int64{loose.ID}))
+	must(t, r.Sweep(l.ID, review.Unrecognized, []uid.ID{loose.ID}))
 	if _, err := r.Get(loose.ID); err != nil {
 		t.Fatalf("a kept review is swept: %v", err)
 	}

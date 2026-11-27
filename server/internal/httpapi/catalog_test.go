@@ -8,6 +8,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/api"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/mediafile"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 func TestLibrariesCRUDAndPaging(t *testing.T) {
@@ -17,6 +18,10 @@ func TestLibrariesCRUDAndPaging(t *testing.T) {
 	if lib.ScanHour != 3 || !lib.WatchFiles || len(lib.Folders) != 0 {
 		t.Fatalf("defaults not applied: %+v", lib)
 	}
+	if lib.CreatedBy == nil || *lib.CreatedBy != e.admin.account.ID || lib.ModifiedBy == nil || *lib.ModifiedBy != e.admin.account.ID ||
+		!lib.ModifiedAt.Equal(lib.CreatedAt) {
+		t.Fatalf("audit fields: %+v", lib)
+	}
 	id := "/libraries/" + itoa(lib.Id)
 	e.expect(409, "POST", "/libraries", e.admin.token, map[string]any{"name": "Films", "kind": "tv"}, nil)
 
@@ -24,9 +29,10 @@ func TestLibrariesCRUDAndPaging(t *testing.T) {
 	e.expect(201, "POST", id+"/folders", e.admin.token, map[string]any{"path": "/media/films"}, &f)
 	e.expect(409, "POST", id+"/folders", e.admin.token, map[string]any{"path": "/media/films"}, nil)
 	e.expect(400, "POST", id+"/folders", e.admin.token, map[string]any{"path": "relative"}, nil)
-	e.expect(404, "POST", "/libraries/999/folders", e.admin.token, map[string]any{"path": "/x"}, nil)
+	e.expect(404, "POST", "/libraries/"+itoa(uid.N(999))+"/folders", e.admin.token, map[string]any{"path": "/x"}, nil)
 
-	e.expect(200, "PUT", id, e.admin.token, map[string]any{"name": "Movies", "kind": "movies", "scanHour": 5, "watchFiles": false}, &lib)
+	e.expect(400, "PUT", id, e.admin.token, map[string]any{"id": uid.N(999), "name": "Movies", "kind": "movies"}, nil)
+	e.expect(200, "PUT", id, e.admin.token, map[string]any{"id": lib.Id, "name": "Movies", "kind": "movies", "scanHour": 5, "watchFiles": false}, &lib)
 	if lib.Name != "Movies" || lib.ScanHour != 5 || lib.WatchFiles {
 		t.Fatalf("%+v", lib)
 	}
@@ -43,7 +49,7 @@ func TestLibrariesCRUDAndPaging(t *testing.T) {
 	e.expect(403, "GET", id+"/folders/"+itoa(f.Id), e.plain.token, nil, nil)
 	e.expect(200, "GET", id+"/folders/"+itoa(f.Id), e.admin.token, nil, nil)
 	e.expect(400, "PUT", id, e.admin.token, map[string]any{"name": "Movies", "kind": "movies", "scanHour": 24}, nil)
-	e.expect(404, "DELETE", id+"/folders/999", e.admin.token, nil, nil)
+	e.expect(404, "DELETE", id+"/folders/"+itoa(uid.N(999)), e.admin.token, nil, nil)
 	e.expect(204, "DELETE", id+"/folders/"+itoa(f.Id), e.admin.token, nil, nil)
 
 	for _, n := range []string{"B", "C"} {
@@ -63,6 +69,28 @@ func TestLibrariesCRUDAndPaging(t *testing.T) {
 	e.expect(204, "DELETE", id, e.admin.token, nil, nil)
 	e.expect(404, "GET", id, e.admin.token, nil, nil)
 	e.expect(404, "DELETE", id, e.admin.token, nil, nil)
+	e.expect(400, "GET", "/libraries/999", e.admin.token, nil, nil)
+}
+
+// A create may name its own id; a taken one is a conflict.
+func TestLibraryAndFolderTakeAClientID(t *testing.T) {
+	e := newEnv(t)
+	lid, fid := uid.New(), uid.New()
+	var lib api.Library
+	e.expect(201, "POST", "/libraries", e.admin.token, map[string]any{"id": lid, "name": "Films", "kind": "movies"}, &lib)
+	if lib.Id != lid {
+		t.Fatalf("id %s, want %s", lib.Id, lid)
+	}
+	e.expect(409, "POST", "/libraries", e.admin.token, map[string]any{"id": lid, "name": "Other", "kind": "tv"}, nil)
+	e.expect(400, "POST", "/libraries", e.admin.token, map[string]any{"id": "01890a5d-ac96-474b-bcce-b302099a8057", "name": "V4", "kind": "tv"}, nil)
+	var f api.Folder
+	path := "/libraries/" + itoa(lid) + "/folders"
+	e.expect(201, "POST", path, e.admin.token, map[string]any{"id": fid, "path": "/media/films"}, &f)
+	if f.Id != fid || f.CreatedBy == nil || *f.CreatedBy != e.admin.account.ID {
+		t.Fatalf("%+v", f)
+	}
+	e.expect(409, "POST", path, e.admin.token, map[string]any{"id": fid, "path": "/media/other"}, nil)
+	e.expect(400, "PUT", path+"/"+itoa(fid), e.admin.token, map[string]any{"id": uid.N(1), "path": "/media/x"}, nil)
 }
 
 // A folder's path can change; every change to a library's folders asks for
@@ -106,7 +134,7 @@ func TestLibraryFolderChangesRequestAScan(t *testing.T) {
 	e.expect(400, "PUT", folder, e.admin.token, map[string]any{"path": "relative"}, nil)
 	e.expect(400, "PUT", folder, e.admin.token, map[string]any{"path": "/"}, nil)
 	e.expect(404, "PUT", "/libraries/"+itoa(other)+"/folders/"+itoa(f.Id), e.admin.token, map[string]any{"path": "/media/x"}, nil)
-	e.expect(404, "PUT", id+"/folders/999", e.admin.token, map[string]any{"path": "/media/x"}, nil)
+	e.expect(404, "PUT", id+"/folders/"+itoa(uid.N(999)), e.admin.token, map[string]any{"path": "/media/x"}, nil)
 	e.expect(403, "PUT", folder, e.plain.token, map[string]any{"path": "/media/x"}, nil)
 	e.expect(401, "PUT", folder, "", map[string]any{"path": "/media/x"}, nil)
 
@@ -119,13 +147,13 @@ func TestLibraryFolderChangesRequestAScan(t *testing.T) {
 	}
 }
 
-func (e *env) library(kind string) int64 {
+func (e *env) library(kind string) uid.ID {
 	var lib api.Library
 	e.expect(201, "POST", "/libraries", e.admin.token, map[string]any{"name": "L" + kind, "kind": kind}, &lib)
 	return lib.Id
 }
 
-func (e *env) movie(lib int64, title string) int64 {
+func (e *env) movie(lib uid.ID, title string) uid.ID {
 	var it api.Item
 	e.expect(201, "POST", "/items", e.admin.token, map[string]any{"libraryId": lib, "kind": "movie", "parsedTitle": title}, &it)
 	return it.Id
@@ -139,7 +167,7 @@ func TestItemsCRUDMetadataAndFilters(t *testing.T) {
 	e.expect(201, "POST", "/items", e.admin.token, map[string]any{"libraryId": tv, "parentId": show.Id, "kind": "season", "parsedTitle": "Show", "seasonNumber": 1}, &season)
 	e.expect(201, "POST", "/items", e.admin.token, map[string]any{"libraryId": tv, "parentId": season.Id, "kind": "episode", "parsedTitle": "Show", "episodeNumber": 1}, &ep)
 	e.expect(409, "POST", "/items", e.admin.token, map[string]any{"libraryId": tv, "parentId": season.Id, "kind": "episode", "parsedTitle": "Show", "episodeNumber": 1}, nil)
-	e.expect(400, "POST", "/items", e.admin.token, map[string]any{"libraryId": 999, "kind": "movie", "parsedTitle": "X"}, nil)
+	e.expect(400, "POST", "/items", e.admin.token, map[string]any{"libraryId": uid.N(999), "kind": "movie", "parsedTitle": "X"}, nil)
 	e.expect(400, "POST", "/items", e.admin.token, map[string]any{"libraryId": tv, "kind": "season", "parsedTitle": "No parent"}, nil)
 
 	var page api.ItemPage
@@ -195,7 +223,7 @@ func TestItemsCRUDMetadataAndFilters(t *testing.T) {
 func TestMediaFilesCRUD(t *testing.T) {
 	e := newEnv(t)
 	m := e.movie(e.library("movies"), "Film")
-	body := map[string]any{"itemId": m, "path": "/films/film.mkv", "sizeBytes": 1000, "modifiedAt": "2026-01-02T03:04:05Z", "container": "matroska"}
+	body := map[string]any{"itemId": m, "path": "/films/film.mkv", "sizeBytes": 1000, "fileModifiedAt": "2026-01-02T03:04:05Z", "container": "matroska"}
 	var f api.MediaFile
 	e.expect(201, "POST", "/media-files", e.admin.token, body, &f)
 	if f.Tracks == nil || len(f.Tracks) != 0 || f.Container == nil || *f.Container != "matroska" {
@@ -239,9 +267,9 @@ func TestLibraryStats(t *testing.T) {
 	}
 	items, files := e.svc.Items.Repo(), e.svc.MediaFiles.Repo()
 	for i, size := range []int64{1_000, 4_000_000_000} {
-		m := &item.Item{LibraryID: lib.Id, Kind: item.Movie, ParsedTitle: "M" + itoa(int64(i))}
+		m := &item.Item{LibraryID: lib.Id, Kind: item.Movie, ParsedTitle: "M" + itoa(i)}
 		must(t, items.Create(m))
-		must(t, files.CreateFile(&mediafile.File{ItemID: m.ID, Path: "/films/" + itoa(int64(i)) + ".mkv", SizeBytes: size}))
+		must(t, files.CreateFile(&mediafile.File{ItemID: &m.ID, Path: "/films/" + itoa(i) + ".mkv", SizeBytes: size}))
 		if i == 0 {
 			must(t, items.SetMetadata(&item.Metadata{ItemID: m.ID, Status: item.Matched}))
 		}
@@ -263,8 +291,8 @@ func TestLibraryStats(t *testing.T) {
 func TestItemsFilterByUHD(t *testing.T) {
 	e := newEnv(t)
 	movies, tv := e.library("movies"), e.library("tv")
-	addFile := func(id int64, w, h int) {
-		f := &mediafile.File{ItemID: id, Path: "/m/" + itoa(id), SizeBytes: 1, ModifiedAt: time.Now()}
+	addFile := func(id uid.ID, w, h int) {
+		f := &mediafile.File{ItemID: &id, Path: "/m/" + itoa(id), SizeBytes: 1, FileModifiedAt: time.Now()}
 		must(t, e.svc.MediaFiles.Repo().CreateFile(f))
 		must(t, e.svc.MediaFiles.Repo().ReplaceTracks(f.ID, []*mediafile.Track{{MediaFileID: f.ID, Kind: mediafile.Video, Codec: "hevc", Width: &w, Height: &h}}))
 	}
@@ -275,7 +303,7 @@ func TestItemsFilterByUHD(t *testing.T) {
 	addFile(ep, 3840, 2160)
 	var page api.ItemPage
 	e.expect(200, "GET", "/items?resolution=uhd", e.plain.token, nil, &page)
-	var got []int64
+	var got []uid.ID
 	for _, it := range page.Items {
 		got = append(got, it.Id)
 	}
@@ -293,31 +321,31 @@ func TestItemsFilterByUHD(t *testing.T) {
 func TestItemsSortByAdded(t *testing.T) {
 	e := newEnv(t)
 	c := e.catalog()
-	for at, id := range []int64{c.pg, c.g, c.r, c.unrated} {
+	for at, id := range []uid.ID{c.pg, c.g, c.r, c.unrated} {
 		_, err := e.db.Exec(`UPDATE item SET added_at = ? WHERE id = ?`, (at+1)*1000, id)
 		must(t, err)
 	}
-	order := func(token, query string) []int64 {
+	order := func(token, query string) []uid.ID {
 		var page api.ItemPage
 		e.expect(200, "GET", "/items?"+query, token, nil, &page)
-		var out []int64
+		var out []uid.ID
 		for _, it := range page.Items {
 			out = append(out, it.Id)
 		}
 		return out
 	}
-	if got := order(e.plain.token, "kind=movie&sort=added"); !slices.Equal(got, []int64{c.unrated, c.r, c.g, c.pg}) {
+	if got := order(e.plain.token, "kind=movie&sort=added"); !slices.Equal(got, []uid.ID{c.unrated, c.r, c.g, c.pg}) {
 		t.Fatalf("newest first: %v", got)
 	}
-	if got := order(e.plain.token, "kind=movie&sort=added&limit=1&offset=1"); !slices.Equal(got, []int64{c.r}) {
+	if got := order(e.plain.token, "kind=movie&sort=added&limit=1&offset=1"); !slices.Equal(got, []uid.ID{c.r}) {
 		t.Fatalf("paged: %v", got)
 	}
-	if got := order(e.plain.token, "kind=movie&sort=title"); !slices.Equal(got, []int64{c.g, c.pg, c.r, c.unrated}) {
+	if got := order(e.plain.token, "kind=movie&sort=title"); !slices.Equal(got, []uid.ID{c.g, c.pg, c.r, c.unrated}) {
 		t.Fatalf("by title: %v", got)
 	}
 	e.expect(400, "GET", "/items?sort=newest", e.plain.token, nil, nil)
 	k := e.kid(e.plain, "Kid")
-	if got := order(e.kidDevice(e.plain, k.Id), "kind=movie&sort=added"); !slices.Equal(got, []int64{c.g, c.pg}) {
+	if got := order(e.kidDevice(e.plain, k.Id), "kind=movie&sort=added"); !slices.Equal(got, []uid.ID{c.g, c.pg}) {
 		t.Fatalf("a kid's newest are within the ceiling: %v", got)
 	}
 }

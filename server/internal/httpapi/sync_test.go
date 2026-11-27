@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/api"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // synced is an env whose snapshots are kept for the test.
@@ -36,7 +37,7 @@ func (e *env) syncGet(path, token string) *http.Response {
 
 // snapshot downloads token's household's snapshot and returns its bytes and
 // replica_meta's version and household.
-func (e *env) snapshot(token string) ([]byte, int64, int64) {
+func (e *env) snapshot(token string) ([]byte, int64, uid.ID) {
 	e.t.Helper()
 	res := e.syncGet("/sync/snapshot?schema=1", token)
 	defer func() { _ = res.Body.Close() }()
@@ -50,7 +51,8 @@ func (e *env) snapshot(token string) ([]byte, int64, int64) {
 	r, err := sql.Open("sqlite", "file:"+p+"?mode=ro")
 	must(e.t, err)
 	defer func() { _ = r.Close() }()
-	var v, h int64
+	var v int64
+	var h uid.ID
 	must(e.t, r.QueryRow(`SELECT version, household_id FROM replica_meta`).Scan(&v, &h))
 	return body, v, h
 }
@@ -105,7 +107,7 @@ func TestSyncSnapshotThenChanges(t *testing.T) {
 	}
 	first, v, h := e.snapshot(tok)
 	if h != e.plain.household.ID {
-		t.Errorf("snapshot of household %d", h)
+		t.Errorf("snapshot of household %s", h)
 	}
 	since := fmt.Sprintf("/sync/changes?schema=1&since=%d", v)
 	e.expect(200, "GET", since, tok, nil, &c)
@@ -122,7 +124,7 @@ func TestSyncSnapshotThenChanges(t *testing.T) {
 		t.Fatalf("after a rename: %+v", c)
 	}
 	acc := (*c.Tables)[0]
-	if acc.Columns[0] != "id" || acc.Rows[0][0] != float64(e.plain.account.ID) || acc.Rows[0][slices.Index(acc.Columns, "name")] != "Renamed" {
+	if acc.Columns[0] != "id" || acc.Rows[0][0] != e.plain.account.ID.String() || acc.Rows[0][slices.Index(acc.Columns, "name")] != "Renamed" {
 		t.Errorf("account row %v %v", acc.Columns, acc.Rows)
 	}
 	if _, w, _ := e.snapshot(tok); w <= v {
@@ -133,7 +135,7 @@ func TestSyncSnapshotThenChanges(t *testing.T) {
 func (e *env) renameProfile(u user, name string) {
 	e.t.Helper()
 	u.account.Name = name
-	must(e.t, e.svc.Accounts.Repo().Update(u.account))
+	must(e.t, e.svc.Accounts.Repo().Update(u.account, nil))
 }
 
 func TestSyncResponsesNameTheArtworkGeneration(t *testing.T) {

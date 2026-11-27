@@ -3,26 +3,25 @@ package occasion_test
 import (
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 	"unicode/utf8"
 
-	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db/dbtest"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/occasion"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 func TestPhrases(t *testing.T) {
 	r := occasion.New(dbtest.Open(t))
 	o := &occasion.Occasion{Name: "Sevens", Month: 7, Day: 7, Phrases: []string{"Lucky", "Seven Up", "lucky"}}
-	must(t, r.Create(o))
+	must(t, r.Create(o, nil))
 	if got, err := r.Get(o.ID); err != nil || !reflect.DeepEqual(got.Phrases, []string{"Lucky", "Seven Up"}) {
 		t.Fatalf("in the order given, once each ignoring case: %+v %v", got, err)
 	}
 	o.Phrases = []string{"Jackpot", "Lucky"}
-	must(t, r.Update(o))
+	must(t, r.Update(o, nil))
 	all, err := r.List(-1, 0)
 	must(t, err)
 	for _, x := range all {
@@ -31,7 +30,7 @@ func TestPhrases(t *testing.T) {
 		}
 	}
 	o.Phrases = nil
-	must(t, r.Update(o))
+	must(t, r.Update(o, nil))
 	if got, _ := r.Get(o.ID); got.Phrases != nil {
 		t.Fatalf("%+v", got)
 	}
@@ -68,12 +67,12 @@ func TestBuiltInPhrases(t *testing.T) {
 func TestColors(t *testing.T) {
 	r := occasion.New(dbtest.Open(t))
 	o := &occasion.Occasion{Name: "Sevens", Month: 7, Day: 7, Colors: []string{"#000000", "#ABCDEF", "#123456"}}
-	must(t, r.Create(o))
+	must(t, r.Create(o, nil))
 	if got, err := r.Get(o.ID); err != nil || !reflect.DeepEqual(got.Colors, o.Colors) {
 		t.Fatalf("%+v %v", got, err)
 	}
 	o.Colors = nil
-	must(t, r.Update(o))
+	must(t, r.Update(o, nil))
 	if got, _ := r.Get(o.ID); got.Colors != nil {
 		t.Fatalf("an update clears the colors: %+v", got)
 	}
@@ -88,17 +87,14 @@ func TestColors(t *testing.T) {
 	}
 }
 
-// Holiday occasions made before phrases and colors existed get their
-// holiday's built-ins once; the others get none, and a list emptied later
-// stays empty.
+// Holiday occasions waiting in occasion_seed get their holiday's built-ins
+// once; the others get none, and a list emptied later stays empty.
 func TestSeedBuiltIns(t *testing.T) {
-	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	d := dbtest.Open(t)
+	_, err := d.Exec(`INSERT INTO occasion (id, name, holiday, month, day, days_before, days_after, created_at, modified_at)
+		VALUES (?1, 'Eggs', 'easter', NULL, NULL, 1, 1, 0, 0), (?2, 'Sevens', NULL, 7, 7, 0, 0, 0, 0);
+		INSERT INTO occasion_seed (occasion_id) VALUES (?1)`, uid.N(1), uid.N(2))
 	must(t, err)
-	t.Cleanup(func() { _ = d.Close() })
-	must(t, db.MigrateTo(d, 55))
-	_, err = d.Exec(`INSERT INTO occasion (name, holiday, month, day, days_before, days_after) VALUES ('Eggs', 'easter', NULL, NULL, 1, 1), ('Sevens', NULL, 7, 7, 0, 0)`)
-	must(t, err)
-	must(t, db.Migrate(d))
 	r := occasion.New(d)
 	must(t, r.SeedBuiltIns())
 	all, err := r.List(-1, 0)
@@ -122,7 +118,7 @@ func TestSeedBuiltIns(t *testing.T) {
 	}
 	christmas := all[0]
 	christmas.Phrases, christmas.Colors = nil, nil
-	must(t, r.Update(christmas))
+	must(t, r.Update(christmas, nil))
 	must(t, r.SeedBuiltIns())
 	if o, _ := r.Get(christmas.ID); o.Phrases != nil || o.Colors != nil {
 		t.Fatalf("seeding is once: %+v", o)

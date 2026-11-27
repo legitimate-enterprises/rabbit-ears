@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +23,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/playlist"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/session"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/transcode"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/watchstate"
 )
 
@@ -50,7 +50,7 @@ type DownloadService struct {
 	mu   sync.Mutex
 	// current is the conversion being made, cancel stops it and progress
 	// is its share done.
-	current  int64
+	current  *uid.ID
 	cancel   context.CancelFunc
 	progress float64
 	// settled is closed, and forgotten, when a conversion ends or goes, or
@@ -59,7 +59,7 @@ type DownloadService struct {
 	// served is the turn in which each device last had a conversion made,
 	// turns counting them. Only the worker touches them; a restart forgets
 	// them.
-	served map[int64]int64
+	served map[uid.ID]int64
 	turns  int64
 }
 
@@ -68,7 +68,7 @@ type DownloadService struct {
 func NewDownloadService(repo *download.Repo, editions *edition.Repo, files *mediafile.Repo, watch *watchstate.Repo,
 	p *PlaybackService) *DownloadService {
 	return &DownloadService{repo: repo, editions: editions, files: files, watch: watch, playback: p, TTL: DownloadTTL, wake: make(chan struct{}, 1),
-		served: map[int64]int64{}}
+		served: map[uid.ID]int64{}}
 }
 
 // Repo exposes the repository.
@@ -87,8 +87,8 @@ type DownloadTitle struct {
 
 // Titles is what the device described by snap would download of each row
 // at quality q, each title once, in order, with accountID's progress.
-func (s *DownloadService) Titles(rows []playlist.Row, accountID int64, snap playback.Snapshot, sel playback.Selection, q string) ([]*DownloadTitle, error) {
-	seen := map[int64]bool{}
+func (s *DownloadService) Titles(rows []playlist.Row, accountID uid.ID, snap playback.Snapshot, sel playback.Selection, q string) ([]*DownloadTitle, error) {
+	seen := map[uid.ID]bool{}
 	var out []*DownloadTitle
 	for _, r := range rows {
 		if seen[r.ItemID] {
@@ -105,23 +105,23 @@ func (s *DownloadService) Titles(rows []playlist.Row, accountID int64, snap play
 }
 
 // Title is what the device would download of the row's title.
-func (s *DownloadService) Title(r playlist.Row, accountID int64, snap playback.Snapshot, sel playback.Selection, q string) (*DownloadTitle, error) {
+func (s *DownloadService) Title(r playlist.Row, accountID uid.ID, snap playback.Snapshot, sel playback.Selection, q string) (*DownloadTitle, error) {
 	t := &DownloadTitle{Row: r}
 	if r.Kind != item.Song {
 		switch w, err := s.watch.Get(accountID, r.ItemID); {
 		case err == nil:
 			t.Watched = w.Watched
-			if w.EditionID == nil || *w.EditionID == r.EditionID {
+			if w.EditionID == nil || r.EditionID != nil && *w.EditionID == *r.EditionID {
 				t.PositionMs = w.PositionMs
 			}
 		case !errors.Is(err, db.ErrNotFound):
 			return nil, err
 		}
 	}
-	if r.EditionID == 0 {
+	if r.EditionID == nil {
 		return t, nil
 	}
-	files, err := s.files.FilesForEdition(r.EditionID)
+	files, err := s.files.FilesForEdition(*r.EditionID)
 	if err != nil {
 		return nil, err
 	}
@@ -148,11 +148,11 @@ func (s *DownloadService) Title(r playlist.Row, accountID int64, snap playback.S
 }
 
 // Row is the row of an item as a download target: the item itself playing
-// editionID, or its default for 0.
-func (s *DownloadService) Row(it *item.Item, editionID int64) (playlist.Row, error) {
+// editionID, or its default for nil.
+func (s *DownloadService) Row(it *item.Item, editionID *uid.ID) (playlist.Row, error) {
 	r := playlist.Row{ItemID: it.ID, Kind: it.Kind, LibraryID: it.LibraryID, EditionID: editionID}
-	if editionID != 0 {
-		ed, err := s.editions.Get(editionID)
+	if editionID != nil {
+		ed, err := s.editions.Get(*editionID)
 		if err == nil && ed.ItemID != it.ID {
 			err = db.ErrNotFound
 		}
@@ -160,7 +160,7 @@ func (s *DownloadService) Row(it *item.Item, editionID int64) (playlist.Row, err
 	}
 	switch ed, err := s.editions.Default(it.ID); {
 	case err == nil:
-		r.EditionID = ed.ID
+		r.EditionID = ref(ed.ID)
 	case !errors.Is(err, db.ErrNotFound):
 		return r, err
 	}
@@ -172,21 +172,23 @@ func (s *DownloadService) Row(it *item.Item, editionID int64) (playlist.Row, err
 var ErrNotDownloadable = errors.New("the title has no file on disk this device can keep")
 
 // Create claims t's file for a profile of a device: the file itself, at
-// once, or its conversion, queued. Asked again, it returns the same claim.
-func (s *DownloadService) Create(deviceID, accountID int64, t *DownloadTitle) (*download.Download, error) {
+// once, or its conversion, queued. Asked again, it returns the same claim;
+// a new claim takes id when given.
+func (s *DownloadService) Create(deviceID, accountID uid.ID, t *DownloadTitle, id, by *uid.ID) (*download.Download, error) {
 	if t.Plan == nil {
 		return nil, ErrNotDownloadable
 	}
-	d := &download.Download{DeviceID: deviceID, AccountID: accountID, ItemID: t.ItemID, MediaFileID: t.File.ID, Quality: t.Plan.Quality}
-	if t.EditionID != 0 {
-		d.EditionID = &t.EditionID
+	d := &download.Download{DeviceID: deviceID, AccountID: accountID, ItemID: t.ItemID, EditionID: t.EditionID, MediaFileID: t.File.ID,
+		Quality: t.Plan.Quality}
+	if id != nil {
+		d.ID = *id
 	}
 	var c *download.Conversion
 	if !t.Plan.Original {
-		c = &download.Conversion{MediaFileID: t.File.ID, SourceModifiedAt: t.File.ModifiedAt, Entry: t.Plan.Entry, Container: t.Plan.Container,
+		c = &download.Conversion{MediaFileID: t.File.ID, SourceModifiedAt: t.File.FileModifiedAt, Entry: t.Plan.Entry, Container: t.Plan.Container,
 			PredictedBytes: t.Plan.Bytes}
 	}
-	found, err := s.repo.Claim(d, c)
+	found, err := s.repo.Claim(d, c, by)
 	// Woken once the claim is stored, the worker never finds the
 	// conversion unclaimed.
 	if err == nil && c != nil && c.Status == download.Queued {
@@ -205,12 +207,12 @@ func (s *DownloadService) Release(d *download.Download) error {
 	if d.ConversionID == nil {
 		return nil
 	}
-	return s.ReleaseConversions([]int64{*d.ConversionID})
+	return s.ReleaseConversions([]uid.ID{*d.ConversionID})
 }
 
 // ReleaseConversions stops and removes those of ids no download claims any
 // more.
-func (s *DownloadService) ReleaseConversions(ids []int64) error {
+func (s *DownloadService) ReleaseConversions(ids []uid.ID) error {
 	defer s.settle()
 	for _, id := range ids {
 		if _, err := s.dropUnclaimed(id); err != nil {
@@ -222,7 +224,7 @@ func (s *DownloadService) ReleaseConversions(ids []int64) error {
 
 // DeleteConversion stops a conversion if it is being made and removes it,
 // its file and the downloads that claim it.
-func (s *DownloadService) DeleteConversion(id int64) error {
+func (s *DownloadService) DeleteConversion(id uid.ID) error {
 	defer s.settle()
 	c, err := s.repo.Conversion(id)
 	if err != nil {
@@ -237,7 +239,7 @@ func (s *DownloadService) DeleteConversion(id int64) error {
 
 // dropUnclaimed is DeleteConversion for a conversion no download claims,
 // reporting whether it went; a claim made since the caller looked keeps it.
-func (s *DownloadService) dropUnclaimed(id int64) (bool, error) {
+func (s *DownloadService) dropUnclaimed(id uid.ID) (bool, error) {
 	c, err := s.repo.Conversion(id)
 	if err != nil {
 		return false, err
@@ -250,10 +252,10 @@ func (s *DownloadService) dropUnclaimed(id int64) (bool, error) {
 }
 
 // stop cancels conversion id if it is being made.
-func (s *DownloadService) stop(id int64) {
+func (s *DownloadService) stop(id uid.ID) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.current == id && s.cancel != nil {
+	if s.current != nil && *s.current == id && s.cancel != nil {
 		s.cancel()
 	}
 }
@@ -267,7 +269,7 @@ func (s *DownloadService) Progress(c *download.Conversion) float64 {
 	case download.Converting:
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		if s.current == c.ID {
+		if s.current != nil && *s.current == c.ID {
 			return s.progress
 		}
 	}
@@ -295,7 +297,7 @@ func (s *DownloadService) ExpiresAt(d *download.Download, c *download.Conversion
 func (s *DownloadService) Path(c *download.Conversion) string { return s.path(c) }
 
 func (s *DownloadService) path(c *download.Conversion) string {
-	return filepath.Join(s.Dir, fmt.Sprintf("%d.%s", c.ID, c.Container))
+	return filepath.Join(s.Dir, c.ID.String()+"."+c.Container)
 }
 
 func removeFile(p string) error {
@@ -389,7 +391,7 @@ func (s *DownloadService) next() (*download.Conversion, error) {
 			return nil, db.ErrNotFound
 		}
 		t := slices.MinFunc(turns, func(a, b download.Turn) int {
-			return cmp.Or(cmp.Compare(s.served[a.DeviceID], s.served[b.DeviceID]), cmp.Compare(a.ClaimID, b.ClaimID))
+			return cmp.Or(cmp.Compare(s.served[a.DeviceID], s.served[b.DeviceID]), a.ClaimedAt.Compare(b.ClaimedAt), a.ClaimID.Compare(b.ClaimID))
 		})
 		c, err := s.repo.Conversion(t.ConversionID)
 		if errors.Is(err, db.ErrNotFound) {
@@ -422,8 +424,8 @@ func (s *DownloadService) convert(ctx context.Context, c *download.Conversion) {
 		return
 	}
 	job, itemID, durationMs, err := s.job(c)
-	if itemID != 0 {
-		log = log.With("item_id", itemID)
+	if itemID != nil {
+		log = log.With("item_id", *itemID)
 	}
 	if err == nil {
 		err = s.repo.Start(c.ID, time.Now())
@@ -435,11 +437,11 @@ func (s *DownloadService) convert(ctx context.Context, c *download.Conversion) {
 	cctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	s.mu.Lock()
-	s.current, s.cancel, s.progress = c.ID, cancel, 0
+	s.current, s.cancel, s.progress = &c.ID, cancel, 0
 	s.mu.Unlock()
 	defer func() {
 		s.mu.Lock()
-		s.current, s.cancel = 0, nil
+		s.current, s.cancel = nil, nil
 		s.mu.Unlock()
 	}()
 	busy := s.playback.Engine.Busy
@@ -479,20 +481,21 @@ func (s *DownloadService) convert(ctx context.Context, c *download.Conversion) {
 }
 
 func (s *DownloadService) failed(c *download.Conversion, cause error, log *slog.Logger) {
-	log.Warn(fmt.Sprintf("Conversion %d failed", c.ID), "err", cause)
+	log.Warn(fmt.Sprintf("Conversion %s failed", c.ID), "err", cause)
 	if err := s.repo.Fail(c.ID, cause.Error(), time.Now()); err != nil && !errors.Is(err, db.ErrNotFound) {
 		log.Error("Conversion failure not recorded", "err", err)
 	}
 }
 
 // job is the encoder's job for c, from its source as it is now, with the
-// source's item; a source changed since c was asked for is an error.
-func (s *DownloadService) job(c *download.Conversion) (transcode.Job, int64, int64, error) {
+// source's item, nil for none; a source changed since c was asked for is an
+// error.
+func (s *DownloadService) job(c *download.Conversion) (transcode.Job, *uid.ID, int64, error) {
 	f, m, err := s.playback.Media(c.MediaFileID)
 	if err != nil {
-		return transcode.Job{}, 0, 0, err
+		return transcode.Job{}, nil, 0, err
 	}
-	if !f.ModifiedAt.Equal(c.SourceModifiedAt) {
+	if !f.FileModifiedAt.Equal(c.SourceModifiedAt) {
 		return transcode.Job{}, f.ItemID, 0, errors.New("the source file changed")
 	}
 	if _, err := os.Stat(f.Path); err != nil {
@@ -545,8 +548,8 @@ func (s *DownloadService) Clean(now time.Time) error {
 	current := s.current
 	s.mu.Unlock()
 	for _, e := range entries {
-		id, err := strconv.ParseInt(strings.SplitN(e.Name(), ".", 2)[0], 10, 64)
-		if err == nil && id == current {
+		id, err := uid.Parse(strings.SplitN(e.Name(), ".", 2)[0])
+		if err == nil && current != nil && id == *current {
 			continue
 		}
 		if err == nil {

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // Occasion is anchored to a Holiday key, or to Month and Day when Holiday
@@ -17,7 +18,9 @@ import (
 // after it. Keywords are TMDB keyword ids. Phrases title its Home row in
 // place of Name; Colors are none or three #RRGGBB.
 type Occasion struct {
-	ID                    int64
+	ID                    uid.ID
+	CreatedAt, ModifiedAt time.Time
+	CreatedBy, ModifiedBy *uid.ID
 	Name                  string
 	Holiday               string
 	Month, Day            int
@@ -141,15 +144,18 @@ type Repo struct{ d db.DBTX }
 // New returns a repository over d.
 func New(d db.DBTX) *Repo { return &Repo{d} }
 
-const cols = `id, name, holiday, month, day, days_before, days_after, color1, color2, color3`
+const cols = `id, name, holiday, month, day, days_before, days_after, color1, color2, color3, created_at, modified_at, created_by, modified_by`
 
 func scan(s db.Scanner) (*Occasion, error) {
 	var o Occasion
 	var holiday, c1, c2, c3 sql.NullString
 	var month, day sql.NullInt64
-	if err := s.Scan(&o.ID, &o.Name, &holiday, &month, &day, &o.DaysBefore, &o.DaysAfter, &c1, &c2, &c3); err != nil {
+	var created, modified int64
+	if err := s.Scan(&o.ID, &o.Name, &holiday, &month, &day, &o.DaysBefore, &o.DaysAfter, &c1, &c2, &c3,
+		&created, &modified, &o.CreatedBy, &o.ModifiedBy); err != nil {
 		return nil, db.Wrap(err)
 	}
+	o.CreatedAt, o.ModifiedAt = db.FromMs(created), db.FromMs(modified)
 	o.Holiday, o.Month, o.Day = holiday.String, int(month.Int64), int(day.Int64)
 	if c1.Valid {
 		o.Colors = []string{c1.String, c2.String, c3.String}
@@ -167,32 +173,41 @@ func fields(o *Occasion) []any {
 	return append([]any{o.Name, db.NullStr(o.Holiday), nullZero(o.Month), nullZero(o.Day), o.DaysBefore, o.DaysAfter}, c...)
 }
 
-// Create inserts o with its keywords and phrases and fills its ID.
-func (r *Repo) Create(o *Occasion) error {
+func now() time.Time { return time.Now().UTC().Truncate(time.Millisecond) }
+
+// Create inserts o with its keywords and phrases, filling a zero ID and the
+// audit fields.
+func (r *Repo) Create(o *Occasion, by *uid.ID) error {
+	if o.ID.IsZero() {
+		o.ID = uid.New()
+	}
+	o.CreatedAt = now()
+	o.ModifiedAt, o.CreatedBy, o.ModifiedBy = o.CreatedAt, by, by
 	return db.InTx(r.d, func(tx db.DBTX) error {
-		res, err := tx.Exec(`INSERT INTO occasion (name, holiday, month, day, days_before, days_after, color1, color2, color3)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, fields(o)...)
-		if err != nil {
+		if _, err := tx.Exec(`INSERT INTO occasion (name, holiday, month, day, days_before, days_after, color1, color2, color3,
+			id, created_at, modified_at, created_by, modified_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			append(fields(o), o.ID, db.Ms(o.CreatedAt), db.Ms(o.ModifiedAt), by, by)...); err != nil {
 			return db.Wrap(err)
 		}
-		o.ID, _ = res.LastInsertId()
 		return setLists(tx, o)
 	})
 }
 
 // Update rewrites an occasion and replaces its keywords and phrases.
-func (r *Repo) Update(o *Occasion) error {
+func (r *Repo) Update(o *Occasion, by *uid.ID) error {
+	o.ModifiedAt, o.ModifiedBy = now(), by
 	return db.InTx(r.d, func(tx db.DBTX) error {
 		if err := db.ExecOne(tx, `UPDATE occasion SET name = ?, holiday = ?, month = ?, day = ?, days_before = ?, days_after = ?,
-			color1 = ?, color2 = ?, color3 = ? WHERE id = ?`, append(fields(o), o.ID)...); err != nil {
+			color1 = ?, color2 = ?, color3 = ?, modified_at = ?, modified_by = ? WHERE id = ?`,
+			append(fields(o), db.Ms(o.ModifiedAt), by, o.ID)...); err != nil {
 			return err
 		}
 		return setLists(tx, o)
 	})
 }
 
-// SeedBuiltIns gives each holiday occasion that migration 56 left waiting
-// its holiday's built-in phrases and colors, once.
+// SeedBuiltIns gives each holiday occasion the schema seeds waiting in
+// occasion_seed its holiday's built-in phrases and colors, once.
 func (r *Repo) SeedBuiltIns() error {
 	return db.InTx(r.d, func(tx db.DBTX) error {
 		rows, err := tx.Query(`SELECT ` + cols + ` FROM occasion WHERE id IN (SELECT occasion_id FROM occasion_seed)`)
@@ -203,7 +218,8 @@ func (r *Repo) SeedBuiltIns() error {
 		for _, o := range waiting {
 			h, _ := HolidayByKey(o.Holiday)
 			o.Colors, o.Phrases = h.Colors, BuiltInPhrases(o.Holiday)
-			if err := db.ExecOne(tx, `UPDATE occasion SET color1 = ?, color2 = ?, color3 = ? WHERE id = ?`, append(fields(o)[6:], o.ID)...); err != nil {
+			if err := db.ExecOne(tx, `UPDATE occasion SET color1 = ?, color2 = ?, color3 = ?, modified_at = ?, modified_by = NULL WHERE id = ?`,
+				append(fields(o)[6:], db.Ms(now()), o.ID)...); err != nil {
 				return err
 			}
 			if err := setPhrases(tx, o); err != nil {
@@ -257,13 +273,13 @@ func setKeywords(tx db.DBTX, o *Occasion) error {
 
 // Delete removes an occasion with its keywords, phrases and hand-picked
 // members.
-func (r *Repo) Delete(id int64) error {
+func (r *Repo) Delete(id uid.ID) error {
 	return db.ExecOne(r.d, `DELETE FROM occasion WHERE id = ?`, id)
 }
 
 // Get returns one occasion with its keywords and phrases, or
 // db.ErrNotFound.
-func (r *Repo) Get(id int64) (*Occasion, error) {
+func (r *Repo) Get(id uid.ID) (*Occasion, error) {
 	o, err := scan(r.d.QueryRow(`SELECT `+cols+` FROM occasion WHERE id = ?`, id))
 	if err != nil {
 		return nil, err
@@ -286,8 +302,8 @@ func (r *Repo) withLists(os []*Occasion) error {
 	if len(os) == 0 {
 		return nil
 	}
-	byID := map[int64]*Occasion{}
-	ids := make([]int64, len(os))
+	byID := map[uid.ID]*Occasion{}
+	ids := make([]uid.ID, len(os))
 	for i, o := range os {
 		byID[o.ID], ids[i], o.Keywords, o.Phrases = o, o.ID, nil, nil
 	}
@@ -298,7 +314,7 @@ func (r *Repo) withLists(os []*Occasion) error {
 	}
 	defer func() { _ = phrases.Close() }()
 	for phrases.Next() {
-		var id int64
+		var id uid.ID
 		var p string
 		if err := phrases.Scan(&id, &p); err != nil {
 			return db.Wrap(err)
@@ -314,7 +330,8 @@ func (r *Repo) withLists(os []*Occasion) error {
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
-		var id, k int64
+		var id uid.ID
+		var k int64
 		if err := rows.Scan(&id, &k); err != nil {
 			return db.Wrap(err)
 		}
@@ -325,7 +342,7 @@ func (r *Repo) withLists(os []*Occasion) error {
 
 // AddMember adds a movie or show to an occasion by hand, clearing any hand
 // removal of it.
-func (r *Repo) AddMember(occasionID, itemID int64) error {
+func (r *Repo) AddMember(occasionID, itemID uid.ID) error {
 	return db.InTx(r.d, func(tx db.DBTX) error {
 		if _, err := tx.Exec(`DELETE FROM occasion_exclusion WHERE occasion_id = ? AND item_id = ?`, occasionID, itemID); err != nil {
 			return db.Wrap(err)
@@ -337,7 +354,7 @@ func (r *Repo) AddMember(occasionID, itemID int64) error {
 
 // RemoveMember removes an item from an occasion by hand: a hand addition
 // is dropped, and the item stays out whatever keywords it later carries.
-func (r *Repo) RemoveMember(occasionID, itemID int64) error {
+func (r *Repo) RemoveMember(occasionID, itemID uid.ID) error {
 	return db.InTx(r.d, func(tx db.DBTX) error {
 		if _, err := tx.Exec(`DELETE FROM occasion_item WHERE occasion_id = ? AND item_id = ?`, occasionID, itemID); err != nil {
 			return db.Wrap(err)
@@ -349,15 +366,15 @@ func (r *Repo) RemoveMember(occasionID, itemID int64) error {
 
 // Keyworded reports which of the ids carry one of the occasion's keywords
 // the metadata settings show.
-func (r *Repo) Keyworded(occasionID int64, ids []int64) (map[int64]bool, error) {
-	out := map[int64]bool{}
+func (r *Repo) Keyworded(occasionID uid.ID, ids []uid.ID) (map[uid.ID]bool, error) {
+	out := map[uid.ID]bool{}
 	if len(ids) == 0 {
 		return out, nil
 	}
 	in, args := db.In(ids)
 	rows, err := r.d.Query(`SELECT DISTINCT ik.item_id FROM item_keyword_shown ik JOIN occasion_keyword ok ON ok.keyword_id = ik.keyword_id
 		WHERE ok.occasion_id = ? AND ik.item_id IN `+in, append([]any{occasionID}, args...)...)
-	keyworded, err := db.Collect(rows, err, db.Column[int64])
+	keyworded, err := db.Collect(rows, err, db.Column[uid.ID])
 	if err != nil {
 		return nil, err
 	}

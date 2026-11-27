@@ -9,6 +9,7 @@ import {
   rungTelemetry,
 } from "./quality";
 import type { Stream } from "./playback";
+import { uid } from "../api/uid";
 
 const rung = (height: number, bitrate: number, over = {}) => ({
   width: Math.round((height * 16) / 9),
@@ -19,7 +20,7 @@ const rung = (height: number, bitrate: number, over = {}) => ({
 });
 const stream = (over = {}): Stream =>
   ({
-    sessionId: 7,
+    sessionId: uid(7),
     negotiated: { verdict: "video_transcode", width: 1920, height: 1080, bitrate: 8_000_000 },
     rungs: [
       rung(2160, 38_000_000, { verdict: "remux" }),

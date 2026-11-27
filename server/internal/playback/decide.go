@@ -14,6 +14,7 @@ import (
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/mediafile"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/session"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // VideoDecoder is one codec the client decodes, with its limits.
@@ -73,8 +74,8 @@ func (s Snapshot) TS() bool { return len(s.Segments) > 0 && !has(s.Segments, "fm
 // Selection is the viewer's track choice; nil audio picks the default
 // track, nil subtitle picks the forced track if any.
 type Selection struct {
-	AudioTrackID    *int64
-	SubtitleTrackID *int64
+	AudioTrackID    *uid.ID
+	SubtitleTrackID *uid.ID
 }
 
 // Media is what the scan stored about one file.
@@ -229,7 +230,7 @@ func VideoTrack(m Media) *mediafile.Track {
 
 // AudioTrack is the audio track a decision picks and its stream plays: the
 // one with id, else the first default-flagged one, else the first.
-func AudioTrack(m Media, id *int64) *mediafile.Track {
+func AudioTrack(m Media, id *uid.ID) *mediafile.Track {
 	var audios []*mediafile.Track
 	for _, t := range m.Tracks {
 		if t.Kind == mediafile.Audio {
@@ -270,7 +271,7 @@ func bitrateCap(n Network) int64 {
 	return c
 }
 
-func pickAudio(audios []*mediafile.Track, want *int64) *mediafile.Track {
+func pickAudio(audios []*mediafile.Track, want *uid.ID) *mediafile.Track {
 	for _, t := range audios {
 		if want != nil && t.ID == *want {
 			return t
@@ -289,7 +290,7 @@ func pickAudio(audios []*mediafile.Track, want *int64) *mediafile.Track {
 
 // pickSubtitle honors the viewer's choice, else the forced track, preferring
 // one in the audio's language.
-func pickSubtitle(subs []*mediafile.Track, want *int64, audio *mediafile.Track) *mediafile.Track {
+func pickSubtitle(subs []*mediafile.Track, want *uid.ID, audio *mediafile.Track) *mediafile.Track {
 	var forced *mediafile.Track
 	for _, t := range subs {
 		if want != nil && t.ID == *want {

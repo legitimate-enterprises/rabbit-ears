@@ -2,6 +2,7 @@ import { h } from "../../admin/dom";
 import { ok } from "../../admin/api";
 import { bytes } from "../../admin/format";
 import type { Schemas } from "../../api/client";
+import { tint } from "../../api/uid";
 import {
   epCode,
   inProgress,
@@ -53,7 +54,7 @@ const kv = (rows: [string, string | Node | undefined][]) =>
 const seasonName = (se: Item) => (se.seasonNumber === 0 ? "Specials" : `Season ${se.seasonNumber}`);
 const synopsis = (i: Item) => (i.metadata?.overview ? h("p.synopsis", i.metadata.overview) : null);
 
-async function put(ctx: Ctx, id: number, watched: boolean) {
+async function put(ctx: Ctx, id: string, watched: boolean) {
   await ok(
     ctx.api.PUT("/profiles/{profileId}/watch-state/{itemId}", {
       params: { path: { profileId: ctx.profile.id, itemId: id } },
@@ -61,17 +62,17 @@ async function put(ctx: Ctx, id: number, watched: boolean) {
     }),
   );
 }
-async function files(ctx: Ctx, id: number): Promise<File[]> {
+async function files(ctx: Ctx, id: string): Promise<File[]> {
   return (await ok(ctx.api.GET("/media-files", { params: { query: { itemId: id } } })))
     .items as File[];
 }
 const lang = (t: Schemas["Track"]) => t.title || t.language || "Unknown";
-const credits = (ctx: Ctx, itemId: number) =>
+const credits = (ctx: Ctx, itemId: string) =>
   ok(ctx.api.GET("/items/{itemId}/credits", { params: { path: { itemId } } }));
 const genres = (i: Item) => i.genres?.map((g) => g.name).join(", ");
 // What relates is extra to the page: a read that fails leaves it out.
 type Related = Omit<Schemas["ItemRelated"], "similar">;
-const related = (ctx: Ctx, itemId: number): Promise<Related> =>
+const related = (ctx: Ctx, itemId: string): Promise<Related> =>
   ok(ctx.api.GET("/items/{itemId}/related", { params: { path: { itemId } } })).catch(() => ({
     collections: [],
   }));
@@ -132,7 +133,7 @@ const collectionRows = (r: Related) =>
   );
 
 // The same snapshot play starts with, so the line names the verdict play would get.
-async function videoLine(ctx: Ctx, itemId: number, f?: File) {
+async function videoLine(ctx: Ctx, itemId: string, f?: File) {
   const v = f?.tracks.find((t) => t.kind === "video");
   if (!f || !v) return undefined;
   const verdict = await ok(
@@ -208,12 +209,12 @@ async function more(
 
 export async function movie(ctx: Ctx, [id]: string[]): Promise<HTMLElement[]> {
   const [m, fs, w, cr, rel, seasonal] = await Promise.all([
-    ok(ctx.api.GET("/items/{itemId}", { params: { path: { itemId: Number(id) } } })),
-    files(ctx, Number(id)),
-    watchState(ctx, Number(id)),
-    credits(ctx, Number(id)),
-    related(ctx, Number(id)),
-    occasionRows(ctx, Number(id)),
+    ok(ctx.api.GET("/items/{itemId}", { params: { path: { itemId: id } } })),
+    files(ctx, id),
+    watchState(ctx, id),
+    credits(ctx, id),
+    related(ctx, id),
+    occasionRows(ctx, id),
   ]);
   const eds = m.editions ?? [];
   let editionId = eds.length > 1 ? preselect(eds, w)?.id : undefined;
@@ -228,7 +229,7 @@ export async function movie(ctx: Ctx, [id]: string[]): Promise<HTMLElement[]> {
   const label = play.lastChild as Text;
   const update = () => {
     const q = new URLSearchParams();
-    if (editionId) q.set("edition", String(editionId));
+    if (editionId) q.set("edition", editionId);
     if (audioId) q.set("audio", audioId);
     play.setAttribute("href", `#/play/${m.id}${q.size ? `?${q}` : ""}`);
     label.data = resumes(eds, w, editionId) ? "Resume" : "Play";
@@ -277,7 +278,7 @@ export async function movie(ctx: Ctx, [id]: string[]): Promise<HTMLElement[]> {
     hdr.hidden = !v?.hdrFormat;
   };
   tags();
-  const choose = async (id: number) => {
+  const choose = async (id: string) => {
     editionId = id;
     audioId = undefined;
     update();
@@ -291,7 +292,7 @@ export async function movie(ctx: Ctx, [id]: string[]): Promise<HTMLElement[]> {
   const edPick = editionId
     ? (h(
         "select.in",
-        { onchange: () => void choose(Number(edPick!.value)) },
+        { onchange: () => void choose(edPick!.value) },
         ...eds.map((e) =>
           h("option", { value: e.id, selected: e.id === editionId }, editionLabel(e)),
         ),
@@ -349,11 +350,11 @@ export async function movie(ctx: Ctx, [id]: string[]): Promise<HTMLElement[]> {
 
 export async function show(ctx: Ctx, [id]: string[]): Promise<HTMLElement[]> {
   const [s, t, ws, cr, seasonal] = await Promise.all([
-    itemOf(ctx, Number(id), "show"),
-    seasonsOf(ctx, Number(id)),
-    watchStates(ctx, Number(id)),
-    credits(ctx, Number(id)),
-    occasionRows(ctx, Number(id)),
+    itemOf(ctx, id, "show"),
+    seasonsOf(ctx, id),
+    watchStates(ctx, id),
+    credits(ctx, id),
+    occasionRows(ctx, id),
   ]);
   const eps = [...t.episodes.values()].flat();
   const next = nextEpisode(eps, ws);
@@ -417,7 +418,7 @@ export async function show(ctx: Ctx, [id]: string[]): Promise<HTMLElement[]> {
             h(
               "div.art.p",
               {
-                style: `background:var(--c${se.id % 10})`,
+                style: `background:var(--c${tint(se.id, 10)})`,
                 "data-art": artKey(se),
                 "data-ph": "show",
               },
@@ -432,7 +433,7 @@ export async function show(ctx: Ctx, [id]: string[]): Promise<HTMLElement[]> {
   ].filter((e): e is HTMLElement => !!e);
 }
 
-function episodeRow(e: Item, ws: Map<number, WatchState>, current?: boolean) {
+function episodeRow(e: Item, ws: Map<string, WatchState>, current?: boolean) {
   const w = ws.get(e.id);
   const rt = e.metadata?.runtimeMinutes;
   return h(
@@ -441,7 +442,7 @@ function episodeRow(e: Item, ws: Map<number, WatchState>, current?: boolean) {
     h(
       "div.art.thumb200",
       {
-        style: `background:var(--c${e.id % 10})`,
+        style: `background:var(--c${tint(e.id, 10)})`,
         "data-art": artKey(e),
         "data-ph": "show",
       },
@@ -466,9 +467,9 @@ function episodeRow(e: Item, ws: Map<number, WatchState>, current?: boolean) {
 
 export async function season(ctx: Ctx, [id]: string[]): Promise<HTMLElement[]> {
   const [se, eps, ws] = await Promise.all([
-    itemOf(ctx, Number(id), "season"),
-    episodesOf(ctx, Number(id)),
-    watchStates(ctx, Number(id)),
+    itemOf(ctx, id, "season"),
+    episodesOf(ctx, id),
+    watchStates(ctx, id),
   ]);
   const sh = await itemOf(ctx, se.parentId!, "show");
   const next = nextEpisode(eps, ws);
@@ -519,9 +520,9 @@ export async function season(ctx: Ctx, [id]: string[]): Promise<HTMLElement[]> {
 
 export async function episode(ctx: Ctx, [id]: string[]): Promise<HTMLElement[]> {
   const [e, fs, rel] = await Promise.all([
-    itemOf(ctx, Number(id), "episode"),
-    files(ctx, Number(id)),
-    related(ctx, Number(id)),
+    itemOf(ctx, id, "episode"),
+    files(ctx, id),
+    related(ctx, id),
   ]);
   const se = await itemOf(ctx, e.parentId!, "season");
   const [sh, t] = await Promise.all([
@@ -534,7 +535,7 @@ export async function episode(ctx: Ctx, [id]: string[]): Promise<HTMLElement[]> 
     eps.findIndex((x) => x.id === e.id) + 1,
     eps.findIndex((x) => x.id === e.id) + 3,
   );
-  const ws = new Map<number, WatchState>();
+  const ws = new Map<string, WatchState>();
   await Promise.all(
     [e, ...upNext].map(async (x) => {
       const s = await watchState(ctx, x.id);
@@ -562,7 +563,7 @@ export async function episode(ctx: Ctx, [id]: string[]): Promise<HTMLElement[]> 
       h(
         "div.art.still",
         {
-          style: `background:var(--c${e.id % 10})`,
+          style: `background:var(--c${tint(e.id, 10)})`,
           "aria-hidden": "true",
           "data-art": artKey(e),
           "data-ph": "show",
@@ -624,7 +625,7 @@ const day = (iso: string) =>
   new Date(iso).toLocaleDateString(undefined, { dateStyle: "medium", timeZone: "UTC" });
 
 export async function video(ctx: Ctx, [id]: string[]): Promise<HTMLElement[]> {
-  const videoId = Number(id);
+  const videoId = id;
   const [v, fs] = await Promise.all([
     ok(ctx.api.GET("/youtube/videos/{videoId}", { params: { path: { videoId } } })),
     files(ctx, videoId).catch(() => [] as File[]),
@@ -655,7 +656,7 @@ export async function video(ctx: Ctx, [id]: string[]): Promise<HTMLElement[]> {
       "div.detail",
       h("div.art.v480", {
         "aria-hidden": "true",
-        style: `background:var(--c${v.id % 10})`,
+        style: `background:var(--c${tint(v.id, 10)})`,
         "data-art": `${v.id}/poster`,
         "data-ph": "video",
       }),
@@ -666,7 +667,7 @@ export async function video(ctx: Ctx, [id]: string[]): Promise<HTMLElement[]> {
           { href: `#/channel/${v.channelId}` },
           h("div.art", {
             "aria-hidden": "true",
-            style: `background:var(--c${v.channelId % 10})`,
+            style: `background:var(--c${tint(v.channelId, 10)})`,
             "data-art": `${v.channelId}/poster`,
             "data-ph": "channel",
           }),

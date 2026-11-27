@@ -2,13 +2,12 @@ import { expect, test, type APIRequestContext } from "@playwright/test";
 import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fixtures, seed, signIn } from "./support";
+import { api, fixtures, seed, signIn } from "./support";
 
-const api = "/api/v1";
 type Headers = { Authorization: string };
 
 /** Runs a library's scan now and waits for that run to finish. */
-async function scan(request: APIRequestContext, headers: Headers, libraryId: number) {
+async function scan(request: APIRequestContext, headers: Headers, libraryId: string) {
   let before: string | undefined;
   await expect(async () => {
     const tasks = (await (await request.get(`${api}/tasks`, { headers })).json()).items;

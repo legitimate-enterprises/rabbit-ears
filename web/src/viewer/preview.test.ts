@@ -1,13 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { chapterAt, scrub } from "./preview";
+import { uid } from "../api/uid";
 
 const frames = {
   intervalMs: 10_000,
   count: 12,
   width: 320,
   height: 180,
-  frameUrl: "/api/v1/streams/k/0/previews/{n}.jpg",
-  bifUrl: "/api/v1/streams/k/0/previews.bif",
+  frameUrl: "/api/v2/streams/k/0/previews/{n}.jpg",
+  bifUrl: "/api/v2/streams/k/0/previews.bif",
 };
 const bar = { left: 100, width: 1000 };
 const DURATION = 115_000;
@@ -17,7 +18,7 @@ describe("scrub", () => {
     const s = scrub(frames, 100 + 500, bar, DURATION, 260);
     expect(s.ms).toBe(57_500);
     expect(s.index).toBe(6);
-    expect(s.url).toBe("/api/v1/streams/k/0/previews/6.jpg");
+    expect(s.url).toBe("/api/v2/streams/k/0/previews/6.jpg");
   });
   it("clamps to the first and last frame", () => {
     expect(scrub(frames, 0, bar, DURATION, 260).index).toBe(0);
@@ -38,8 +39,8 @@ describe("scrub", () => {
 
 describe("chapterAt", () => {
   const chapters = [
-    { id: 1, position: 0, startMs: 0, endMs: 60_000, title: "Cold open" },
-    { id: 2, position: 1, startMs: 60_000, endMs: 120_000 },
+    { id: uid(1), position: 0, startMs: 0, endMs: 60_000, title: "Cold open" },
+    { id: uid(2), position: 1, startMs: 60_000, endMs: 120_000 },
   ];
   it("names the chapter that holds the time, numbering untitled ones", () => {
     expect(chapterAt(chapters, 30_000)).toBe("Cold open");

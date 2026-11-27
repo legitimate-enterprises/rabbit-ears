@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createApi } from "../admin/api";
 import { releasable, watchArt } from "./artwork";
+import { uid } from "../api/uid";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -10,7 +11,7 @@ it("paints artwork into tiles as they appear, with the device token", async () =
   const seen: string[] = [];
   const fetch = async (req: Request) => {
     seen.push(`${new URL(req.url, "http://x").pathname} ${req.headers.get("authorization")}`);
-    return req.url.includes("/items/1/")
+    return req.url.includes(`/items/${uid(1)}/`)
       ? new Response(new Blob(["jpg"]), { headers: { "content-type": "image/jpeg" } })
       : new Response(JSON.stringify({ code: "not_found", message: "x" }), { status: 404 });
   };
@@ -21,13 +22,13 @@ it("paints artwork into tiles as they appear, with the device token", async () =
     el.dataset.art = key;
     return el;
   };
-  const [hit, miss] = [tile("1/poster"), tile("2/backdrop")];
+  const [hit, miss] = [tile(`${uid(1)}/poster`), tile(`${uid(2)}/backdrop`)];
   root.append(hit, miss);
   await vi.waitFor(() => expect(hit.style.backgroundImage).toBe(`url("blob:poster")`));
   expect(miss.style.backgroundImage).toBe("");
   expect(seen).toEqual([
-    "/api/v1/items/1/artwork/poster Bearer t",
-    "/api/v1/items/2/artwork/backdrop Bearer t",
+    `/api/v2/items/${uid(1)}/artwork/poster Bearer t`,
+    `/api/v2/items/${uid(2)}/artwork/backdrop Bearer t`,
   ]);
 });
 
@@ -41,10 +42,10 @@ it("fetches a collection's artwork from the collection endpoint", async () => {
   const root = document.body.appendChild(document.createElement("div"));
   watchArt(root, createApi({ token: "t", fetch }));
   const el = document.createElement("div");
-  el.dataset.art = "collection/7/poster";
+  el.dataset.art = `collection/${uid(7)}/poster`;
   root.append(el);
   await vi.waitFor(() => expect(el.style.backgroundImage).toBe(`url("blob:collection")`));
-  expect(seen).toEqual(["/api/v1/collections/7/artwork/poster"]);
+  expect(seen).toEqual([`/api/v2/collections/${uid(7)}/artwork/poster`]);
 });
 
 it("fetches a tile's artwork only once it comes near the viewport", async () => {
@@ -69,14 +70,14 @@ it("fetches a tile's artwork only once it comes near the viewport", async () => 
   const root = document.body.appendChild(document.createElement("div"));
   watchArt(root, createApi({ token: "t", fetch }));
   const [a, b] = [document.createElement("div"), document.createElement("div")];
-  a.dataset.art = "1/poster";
-  b.dataset.art = "2/poster";
+  a.dataset.art = `${uid(1)}/poster`;
+  b.dataset.art = `${uid(2)}/poster`;
   root.append(a, b);
   await new Promise((r) => setTimeout(r, 0));
   expect(seen).toEqual([]);
   near([{ target: a, isIntersecting: true }]);
   await vi.waitFor(() => expect(a.style.backgroundImage).toBe(`url("blob:near")`));
-  expect(seen).toEqual(["/api/v1/items/1/artwork/poster"]);
+  expect(seen).toEqual([`/api/v2/items/${uid(1)}/artwork/poster`]);
 });
 
 it("asks again for artwork whose fetch failed, not for artwork that is not there", async () => {
@@ -86,7 +87,7 @@ it("asks again for artwork whose fetch failed, not for artwork that is not there
   const fetch = async (req: Request) => {
     const p = new URL(req.url, "http://x").pathname;
     seen.push(p);
-    if (p.includes("/items/2/"))
+    if (p.includes(`/items/${uid(2)}/`))
       return new Response(JSON.stringify({ code: "not_found", message: "x" }), { status: 404 });
     if (down) throw new TypeError("Failed to fetch");
     return new Response(new Blob(["jpg"]), { headers: { "content-type": "image/jpeg" } });
@@ -98,18 +99,18 @@ it("asks again for artwork whose fetch failed, not for artwork that is not there
     el.dataset.art = key;
     return root.appendChild(el);
   };
-  tile("1/poster");
-  tile("2/poster");
+  tile(`${uid(1)}/poster`);
+  tile(`${uid(2)}/poster`);
   await vi.waitFor(() => expect(seen).toHaveLength(2));
   await new Promise((r) => setTimeout(r, 0));
   down = false;
-  const later = tile("1/poster");
-  tile("2/poster");
+  const later = tile(`${uid(1)}/poster`);
+  tile(`${uid(2)}/poster`);
   await vi.waitFor(() => expect(later.style.backgroundImage).toBe(`url("blob:again")`));
   expect(seen).toEqual([
-    "/api/v1/items/1/artwork/poster",
-    "/api/v1/items/2/artwork/poster",
-    "/api/v1/items/1/artwork/poster",
+    `/api/v2/items/${uid(1)}/artwork/poster`,
+    `/api/v2/items/${uid(2)}/artwork/poster`,
+    `/api/v2/items/${uid(1)}/artwork/poster`,
   ]);
 });
 
@@ -136,10 +137,10 @@ it("keeps the image of a tile still in the document when artwork is released", a
     el.dataset.art = key;
     return root.appendChild(el);
   };
-  const kept = tile("0/poster");
+  const kept = tile(`${uid(0)}/poster`);
   await vi.waitFor(() => expect(kept.style.backgroundImage).toBe(`url("blob:1")`));
   for (let i = 1; i <= 300; i++) tile(`${i}/poster`).remove();
-  const last = tile("301/poster");
+  const last = tile(`${uid(301)}/poster`);
   await vi.waitFor(() => expect(last.style.backgroundImage).not.toBe(""));
   expect(revoked.length).toBeGreaterThan(0);
   expect(revoked).not.toContain("blob:1");

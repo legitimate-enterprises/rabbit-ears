@@ -11,7 +11,7 @@ export class Queue {
   /** What the queue plays from, as "In Rainbows", and where that lives. */
   from = "";
   fromHref = "#/music";
-  playlistId?: number;
+  playlistId?: string;
   shuffle = false;
   repeat = false;
 
@@ -25,7 +25,7 @@ export class Queue {
     return this.upNext.reduce((t, s) => t + (s.durationMs ?? 0), 0);
   }
 
-  load(songs: Song[], start: number, from: string, fromHref: string, playlistId?: number) {
+  load(songs: Song[], start: number, from: string, fromHref: string, playlistId?: string) {
     Object.assign(this, { songs: [...songs], index: start, from, fromHref, playlistId });
     if (!this.shuffle) return;
     // The picked song leads, so every other song is up next.

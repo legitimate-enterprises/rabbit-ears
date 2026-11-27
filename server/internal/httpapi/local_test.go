@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/api"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/httpapi"
 )
 
 // visitor is where the public proxy says a request came from.
@@ -79,7 +80,7 @@ func TestConfirmedLocalCheckPlaysAsAtHome(t *testing.T) {
 	if got := e.through(visitor, "POST", "/local-checks", e.plain.token, nil, &c); got != 201 {
 		t.Fatalf("open = %d", got)
 	}
-	port := strings.TrimSuffix(e.url, "/api/v1")
+	port := strings.TrimSuffix(e.url, httpapi.BasePath)
 	port = port[strings.LastIndex(port, ":"):]
 	for _, a := range c.Addresses {
 		if u, err := url.Parse(a); err != nil || u.Scheme != "http" || !strings.HasSuffix(u.Host, port) || u.Path != "" {

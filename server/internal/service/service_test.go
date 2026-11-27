@@ -11,7 +11,7 @@ import (
 func TestServicesWireOverOneDatabase(t *testing.T) {
 	s := service.New(dbtest.Open(t))
 	l := &library.Library{Name: "Films", Kind: library.Movies}
-	if err := s.Libraries.Repo().Create(l); err != nil {
+	if err := s.Libraries.Repo().Create(l, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := s.Libraries.Repo().Get(l.ID); err != nil || got.Name != "Films" {

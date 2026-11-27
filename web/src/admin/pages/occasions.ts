@@ -17,9 +17,7 @@ export async function occasions(ctx: Ctx): Promise<HTMLElement[]> {
   const [which] = ctx.path;
   if (which === undefined) return list(ctx);
   if (which === "new") return occasionEdit(ctx);
-  const id = Number(which);
-  if (!Number.isInteger(id) || id < 1) throw new Error("No such occasion.");
-  return occasionEdit(ctx, id);
+  return occasionEdit(ctx, which);
 }
 
 const fixedDay = (month: number, day: number) =>

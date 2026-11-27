@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/api"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // sharedSetup is plain's movies playlist holding a G and an R film, each
@@ -12,9 +13,9 @@ import (
 // profile.
 type sharedSetup struct {
 	pl         api.Playlist
-	g, r       int64
+	g, r       uid.ID
 	owner      string
-	under      func(profile int64) string
+	under      func(profile uid.ID) string
 	sharesPath string
 }
 
@@ -25,21 +26,21 @@ func (e *env) sharedSetup() sharedSetup {
 	e.file(s.g, 60000)
 	e.file(s.r, 60000)
 	e.expect(201, "POST", "/profiles/"+itoa(e.plain.account.ID)+"/playlists", e.plain.token, map[string]any{"name": "Family", "kind": "movies"}, &s.pl)
-	s.under = func(profile int64) string { return "/profiles/" + itoa(profile) + "/playlists/" + itoa(s.pl.Id) }
+	s.under = func(profile uid.ID) string { return "/profiles/" + itoa(profile) + "/playlists/" + itoa(s.pl.Id) }
 	s.owner = s.under(e.plain.account.ID)
 	s.sharesPath = s.owner + "/shares"
-	for _, id := range []int64{s.g, s.r} {
+	for _, id := range []uid.ID{s.g, s.r} {
 		e.expect(201, "POST", s.owner+"/entries", e.plain.token, map[string]any{"itemId": id}, nil)
 	}
 	return s
 }
 
-func (e *env) share(s sharedSetup, profile int64, access string) {
+func (e *env) share(s sharedSetup, profile uid.ID, access string) {
 	e.t.Helper()
 	e.expect(201, "POST", s.sharesPath, e.plain.token, map[string]any{"profileId": profile, "access": access}, nil)
 }
 
-func listed(t *testing.T, page api.PlaylistPage, id int64) *api.Playlist {
+func listed(t *testing.T, page api.PlaylistPage, id uid.ID) *api.Playlist {
 	t.Helper()
 	for i := range page.Items {
 		if page.Items[i].Id == id {
@@ -63,7 +64,7 @@ func TestPlaylistSharesCRUD(t *testing.T) {
 	}
 	e.expect(409, "POST", s.sharesPath, tok, map[string]any{"profileId": other, "access": "write"}, nil)
 	e.expect(400, "POST", s.sharesPath, tok, map[string]any{"profileId": e.plain.account.ID, "access": "read"}, nil)
-	e.expect(400, "POST", s.sharesPath, tok, map[string]any{"profileId": 999999, "access": "read"}, nil)
+	e.expect(400, "POST", s.sharesPath, tok, map[string]any{"profileId": uid.N(999999), "access": "read"}, nil)
 	e.expect(400, "POST", s.sharesPath, tok, map[string]any{"profileId": other, "access": "owner"}, nil)
 
 	var page api.PlaylistSharePage
@@ -177,7 +178,7 @@ func TestSharedPlaylistReadWrite(t *testing.T) {
 	}
 	var page api.PlaylistEntryPage
 	e.expect(200, "GET", s.owner+"/entries", e.plain.token, nil, &page)
-	if !slices.Equal(entryIDs(page), []int64{s.g, s.r, s.g}) {
+	if !slices.Equal(entryIDs(page), []uid.ID{s.g, s.r, s.g}) {
 		t.Fatalf("the owner sees the writer's edits: %v", entryIDs(page))
 	}
 	e.expect(204, "DELETE", mine+"/entries/"+itoa(en.Id), tok, nil, nil)
@@ -244,7 +245,7 @@ func TestPlaylistSharedWithKids(t *testing.T) {
 	}
 	var entries api.PlaylistEntryPage
 	e.expect(200, "GET", mine+"/entries", tok, nil, &entries)
-	if !slices.Equal(entryIDs(entries), []int64{s.g}) {
+	if !slices.Equal(entryIDs(entries), []uid.ID{s.g}) {
 		t.Fatalf("a kid gets only the entries their filters allow: %v", entryIDs(entries))
 	}
 	var all api.PlaylistEntryPage
@@ -252,7 +253,7 @@ func TestPlaylistSharedWithKids(t *testing.T) {
 	e.expect(404, "GET", mine+"/entries/"+itoa(all.Items[1].Id), tok, nil, nil)
 	var order api.PlaylistPlayOrderPage
 	e.expect(200, "GET", mine+"/play-order", tok, nil, &order)
-	if items, _ := playIDs(order); !slices.Equal(items, []int64{s.g}) {
+	if items, _ := playIDs(order); !slices.Equal(items, []uid.ID{s.g}) {
 		t.Fatalf("%v", items)
 	}
 	e.expect(403, "POST", mine+"/entries", tok, map[string]any{"itemId": s.g}, nil)
@@ -286,12 +287,12 @@ func TestPlaylistArtItemFollowsTheKidsFilter(t *testing.T) {
 
 // labeled checks that a share sheet row of profile id is labeled with
 // household want and shows the profile's color.
-func (e *env) labeled(id int64, household *int64, color *string, want int64) {
+func (e *env) labeled(id uid.ID, household *uid.ID, color *string, want uid.ID) {
 	e.t.Helper()
 	a, err := e.svc.Accounts.Repo().Get(id)
 	must(e.t, err)
 	if household == nil || *household != want || color == nil || *color != a.ShownColor() {
-		e.t.Fatalf("profile %d labeled %v in %v, want %d in %s", id, household, color, want, a.ShownColor())
+		e.t.Fatalf("profile %s labeled %v in %v, want %s in %s", id, household, color, want, a.ShownColor())
 	}
 }
 
@@ -303,11 +304,11 @@ func TestShareCandidates(t *testing.T) {
 	e.addAdult("pending@example.test", 7)
 	stranger := e.adult("stranger@example.test", false)
 	tv, _ := e.secondDevice(e.plain, "TV", "tvos")
-	candidates := func(token string) map[int64]api.ShareCandidate {
+	candidates := func(token string) map[uid.ID]api.ShareCandidate {
 		t.Helper()
 		var page api.ShareCandidatePage
 		e.expect(200, "GET", "/profiles/"+itoa(e.plain.account.ID)+"/share-candidates", token, nil, &page)
-		got := map[int64]api.ShareCandidate{}
+		got := map[uid.ID]api.ShareCandidate{}
 		for _, c := range page.Items {
 			got[c.ProfileId] = c
 		}
@@ -337,8 +338,8 @@ func TestShareCandidates(t *testing.T) {
 	pid := partner.Me.Account.Id
 	e.joins(e.admin.household.ID, pid)
 	got = candidates(e.plain.token)
-	names := map[int64]string{e.plain.household.ID: e.plain.household.Name, e.admin.household.ID: e.admin.household.Name}
-	for id, want := range map[int64]int64{pid: e.plain.household.ID, k.Id: e.plain.household.ID, theirKid.Id: e.admin.household.ID,
+	names := map[uid.ID]string{e.plain.household.ID: e.plain.household.Name, e.admin.household.ID: e.admin.household.Name}
+	for id, want := range map[uid.ID]uid.ID{pid: e.plain.household.ID, k.Id: e.plain.household.ID, theirKid.Id: e.admin.household.ID,
 		e.admin.account.ID: e.admin.household.ID} {
 		c := got[id]
 		e.labeled(id, c.HouseholdId, c.Color, want)
@@ -377,9 +378,12 @@ func TestDeletingASharedPlaylist(t *testing.T) {
 
 // link is an admin letting two adults of different households see each
 // other, on TVs too when tv is set.
-func (e *env) link(a, b int64, tv bool) {
+func (e *env) link(a, b uid.ID, tv bool) {
 	e.t.Helper()
-	_, err := e.db.Exec(`INSERT INTO adult_link (a_id, b_id, tv, created_at) VALUES (?,?,?,0)`, min(a, b), max(a, b), tv)
+	if a.Compare(b) > 0 {
+		a, b = b, a
+	}
+	_, err := e.db.Exec(`INSERT INTO adult_link (a_id, b_id, tv, created_at) VALUES (?,?,?,0)`, a, b, tv)
 	must(e.t, err)
 }
 
@@ -459,7 +463,7 @@ func TestPlaylistSaysWhetherItIsShared(t *testing.T) {
 	s := e.sharedSetup()
 	partner := e.householdAdult(e.plain, "Partner", "partner@example.test")
 	pid, ptok := partner.Me.Account.Id, partner.Token
-	shared := func(profile int64, token string, want bool) {
+	shared := func(profile uid.ID, token string, want bool) {
 		t.Helper()
 		var p api.Playlist
 		e.expect(200, "GET", s.under(profile), token, nil, &p)
@@ -467,7 +471,7 @@ func TestPlaylistSaysWhetherItIsShared(t *testing.T) {
 		e.expect(200, "GET", "/profiles/"+itoa(profile)+"/playlists", token, nil, &page)
 		got := listed(t, page, s.pl.Id)
 		if p.Shared == nil || *p.Shared != want || got == nil || got.Shared == nil || *got.Shared != want {
-			t.Fatalf("shared for %d: %v, listed %+v; want %v, always sent", profile, p.Shared, got, want)
+			t.Fatalf("shared for %s: %v, listed %+v; want %v, always sent", profile, p.Shared, got, want)
 		}
 	}
 	if s.pl.Shared == nil || *s.pl.Shared {
@@ -485,7 +489,7 @@ func TestPlaylistSaysWhetherItIsShared(t *testing.T) {
 }
 
 // joins puts the profile into another household as well.
-func (e *env) joins(household, profile int64) {
+func (e *env) joins(household, profile uid.ID) {
 	e.t.Helper()
 	_, err := e.db.Exec(`INSERT INTO household_member (household_id, account_id, created_at) VALUES (?,?,0)`, household, profile)
 	must(e.t, err)
@@ -504,7 +508,7 @@ func TestPlaylistHouseholdSharesCRUD(t *testing.T) {
 	}
 	e.expect(409, "POST", path, tok, map[string]any{"householdId": home.ID, "access": "write"}, nil)
 	e.expect(400, "POST", path, tok, map[string]any{"householdId": e.admin.household.ID, "access": "read"}, nil)
-	e.expect(400, "POST", path, tok, map[string]any{"householdId": 999999, "access": "read"}, nil)
+	e.expect(400, "POST", path, tok, map[string]any{"householdId": uid.N(999999), "access": "read"}, nil)
 	e.expect(400, "POST", path, tok, map[string]any{"householdId": home.ID, "access": "owner"}, nil)
 	// A household the owner was shared into is theirs to share with too.
 	e.joins(e.admin.household.ID, e.plain.account.ID)
@@ -568,7 +572,7 @@ func TestPlaylistSharedWithAHousehold(t *testing.T) {
 	}
 	var entries api.PlaylistEntryPage
 	e.expect(200, "GET", s.under(k.Id)+"/entries", ktok, nil, &entries)
-	if !slices.Equal(entryIDs(entries), []int64{s.g}) {
+	if !slices.Equal(entryIDs(entries), []uid.ID{s.g}) {
 		t.Fatalf("%v", entryIDs(entries))
 	}
 

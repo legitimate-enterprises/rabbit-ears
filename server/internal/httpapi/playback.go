@@ -16,6 +16,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/playlist"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/service"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/session"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/watchstate"
 )
 
@@ -114,7 +115,7 @@ func (s *Server) StartPlayback(ctx context.Context, r api.StartPlaybackRequestOb
 	}
 	// Music plays on while its listener waits in a Watch together.
 	if it.Kind != item.Song {
-		if err := s.svc.Together.LeaveDevice(sess.DeviceID, it.ID); err != nil {
+		if err := s.svc.Together.LeaveDevice(sess.DeviceID, &it.ID); err != nil {
 			return nil, err
 		}
 	}
@@ -131,7 +132,7 @@ func (s *Server) StartPlayback(ctx context.Context, r api.StartPlaybackRequestOb
 // playFile is the edition of an item that playback uses, editionID or else
 // the default, and the file of it on disk that the device plays best. An
 // edition of another item is not found.
-func (s *Server) playFile(itemID int64, editionID *int64, snap playback.Snapshot, sel playback.Selection) (*edition.Edition, *mediafile.File, error) {
+func (s *Server) playFile(itemID uid.ID, editionID *uid.ID, snap playback.Snapshot, sel playback.Selection) (*edition.Edition, *mediafile.File, error) {
 	eds := s.svc.Editions.Repo()
 	var ed *edition.Edition
 	var err error
@@ -249,7 +250,7 @@ func audioDetails(e *session.PlanEntry, media playback.Media) *api.AudioDetails 
 // owned returns an open session of the calling device, and to a kid only
 // their own, as a kid starts only their own; any other session is not
 // found, whoever owns it.
-func (s *Server) owned(ctx context.Context, id int64) (*session.Session, error) {
+func (s *Server) owned(ctx context.Context, id uid.ID) (*session.Session, error) {
 	v, err := s.svc.Sessions.Repo().Get(id)
 	if err != nil {
 		return nil, err
@@ -261,7 +262,7 @@ func (s *Server) owned(ctx context.Context, id int64) (*session.Session, error) 
 	return v, nil
 }
 
-func trackByID(ts []*mediafile.Track, id *int64) *mediafile.Track {
+func trackByID(ts []*mediafile.Track, id *uid.ID) *mediafile.Track {
 	for _, t := range ts {
 		if id != nil && t.ID == *id {
 			return t
@@ -346,14 +347,14 @@ func (s *Server) stream(v *session.Session) (api.PlaybackStream, error) {
 	}
 	if t := trackByID(media.Tracks, e.SubtitleTrackID); t != nil && e.SubtitleAction == session.SubtitleSidecar {
 		st.Sidecars = append(st.Sidecars, api.Sidecar{TrackId: t.ID, Language: optStr(t.Language), Title: optStr(t.Title),
-			Format: api.Webvtt, Forced: t.IsForced, Url: fmt.Sprintf("%s/subtitles/%d.vtt", base, t.ID)})
+			Format: api.Webvtt, Forced: t.IsForced, Url: fmt.Sprintf("%s/subtitles/%s.vtt", base, t.ID)})
 	}
 	return st, nil
 }
 
 // update re-decides after a mid-playback change and answers continue or a
 // new stream at the session's position.
-func (s *Server) update(ctx context.Context, id int64, change func(*playback.Snapshot, *playback.Selection)) (api.PlaybackUpdate, error) {
+func (s *Server) update(ctx context.Context, id uid.ID, change func(*playback.Snapshot, *playback.Selection)) (api.PlaybackUpdate, error) {
 	v, err := s.owned(ctx, id)
 	if err != nil {
 		return api.PlaybackUpdate{}, err
@@ -484,16 +485,15 @@ func (s *Server) recordPosition(v *session.Session, positionMs int64) error {
 	if !song {
 		s.svc.Playback.Engine.Playhead(v.ID, positionMs)
 	}
-	ed, err := s.svc.Editions.Repo().Of(v.ItemID, v.MediaFileID)
-	if err != nil && !errors.Is(err, db.ErrNotFound) {
+	var ed *uid.ID
+	if id, err := s.svc.Editions.Repo().Of(v.ItemID, v.MediaFileID); err == nil {
+		ed = &id
+	} else if !errors.Is(err, db.ErrNotFound) {
 		return err
 	}
 	change := func(w *watchstate.State) {
 		w.Progress(positionMs, f.DurationMs)
-		w.EditionID = &ed
-		if ed == 0 {
-			w.EditionID = nil
-		}
+		w.EditionID = ed
 	}
 	if song {
 		// A song's play reloads no screen anywhere, so its state is saved untold.
@@ -506,7 +506,7 @@ func (s *Server) recordPosition(v *session.Session, positionMs int64) error {
 
 // profileSession is a session of the active profile, open or ended, on any
 // device of the household; another profile's is not found.
-func (s *Server) profileSession(ctx context.Context, id int64) (*session.Session, error) {
+func (s *Server) profileSession(ctx context.Context, id uid.ID) (*session.Session, error) {
 	v, err := s.svc.Sessions.Repo().Get(id)
 	if err == nil && v.AccountID != caller(ctx).profile.ID {
 		err = errNotFound
@@ -521,7 +521,7 @@ func (s *Server) toPlaybackSession(ctx context.Context, v *session.Session) (api
 		return api.PlaybackSession{}, err
 	}
 	out := api.PlaybackSession{Id: v.ID, ItemId: v.ItemID, DeviceId: d.ID, DeviceName: d.Name, Platform: api.Platform(d.Platform),
-		ThisDevice: d.ID == caller(ctx).device.ID, PositionMs: v.PositionMs, UpdatedAt: v.UpdatedAt, EndedAt: v.EndedAt}
+		ThisDevice: d.ID == caller(ctx).device.ID, PositionMs: v.PositionMs, CreatedAt: v.CreatedAt, ModifiedAt: v.ModifiedAt, EndedAt: v.EndedAt}
 	if v.MovedTo != nil {
 		to, err := devices.Get(*v.MovedTo)
 		if err != nil {

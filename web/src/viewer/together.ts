@@ -24,22 +24,22 @@ const SAMPLES = 3;
 const HELD_MS = 1000;
 
 /** Whether this device takes part: the profile's other device may, in one this device is not in. */
-const isMember = (wt: Together, me: number) =>
+const isMember = (wt: Together, me: string) =>
   wt.members.some((m) => m.accountId === me && m.thisDevice !== false);
 /** Who the profile watches with: the other profile by name, or its own other device by that device's name. */
-export const otherName = (wt: Together, me: number) =>
+export const otherName = (wt: Together, me: string) =>
   wt.members.find((m) => m.accountId !== me)?.name ??
   wt.members.find((m) => m.thisDevice === false)?.deviceName ??
   "";
 
 /** The open Watch together on itemId that the profile is in. */
-export async function findTogether(api: Api, itemId: number, me: number) {
+export async function findTogether(api: Api, itemId: string, me: string) {
   const p = await ok(api.GET("/watch-together", { params: { query: { itemId } } }));
   return p.items.find((w) => w.status !== "ended" && isMember(w, me));
 }
 
 /** One poll; with after, held by the server until the version passes it. rttMs tells it how soon this client can act on a change. */
-const get = (api: Api, watchTogetherId: number, after?: number, rttMs?: number) =>
+const get = (api: Api, watchTogetherId: string, after?: number, rttMs?: number) =>
   ok(
     api.GET("/watch-together/{watchTogetherId}", {
       params: {
@@ -236,7 +236,7 @@ export class Sync {
  */
 export async function watchTogether(
   ctx: Ctx,
-  item: { id: number; title: string },
+  item: { id: string; title: string },
   play: HTMLElement,
   /** Told on every redraw whether the viewer is opening or inside one. */
   inside?: (yes: boolean) => void,

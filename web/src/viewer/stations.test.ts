@@ -16,6 +16,7 @@ import {
   tuneIn,
   untilMs,
 } from "./stations";
+import { uid } from "../api/uid";
 
 const ts = "2026-01-01T00:00:00Z";
 // Local wall-clock instants, so the expectations hold in any time zone.
@@ -24,57 +25,67 @@ const local = (d: number, h: number, m = 0) => new Date(2026, 10, d, h, m).toISO
 const NOW = new Date(2026, 10, 15, 15, 20).getTime();
 
 const movie = (id: number, name: string, startsAt: string, extra = {}) => ({
-  itemId: id,
-  editionId: id * 10,
+  itemId: uid(id),
+  editionId: uid(id * 10),
   kind: "movie" as const,
   startsAt,
   endsAt: startsAt,
   durationMs: 6_000_000,
-  item: { id, libraryId: 1, kind: "movie" as const, parsedTitle: name, addedAt: ts, updatedAt: ts },
+  item: {
+    id: uid(id),
+    libraryId: uid(1),
+    kind: "movie" as const,
+    parsedTitle: name,
+    addedAt: ts,
+    createdAt: ts,
+    modifiedAt: ts,
+  },
   ...extra,
 });
 const episode = (id: number, show: string, s: number, e: number, startsAt: string) => ({
-  itemId: id,
-  editionId: id * 10,
+  itemId: uid(id),
+  editionId: uid(id * 10),
   kind: "episode" as const,
   startsAt,
   endsAt: startsAt,
   durationMs: 1_800_000,
   item: {
-    id,
-    libraryId: 1,
+    id: uid(id),
+    libraryId: uid(1),
     kind: "episode" as const,
     parsedTitle: "Pilot",
     seasonNumber: s,
     episodeNumber: e,
     addedAt: ts,
-    updatedAt: ts,
+    createdAt: ts,
+    modifiedAt: ts,
   },
   show: {
-    id: 3,
-    libraryId: 1,
+    id: uid(3),
+    libraryId: uid(1),
     kind: "show" as const,
     parsedTitle: show,
     addedAt: ts,
-    updatedAt: ts,
+    createdAt: ts,
+    modifiedAt: ts,
   },
 });
 const song = (id: number, title: string, startsAt: string) => ({
-  itemId: id,
-  editionId: id * 10,
+  itemId: uid(id),
+  editionId: uid(id * 10),
   kind: "song" as const,
   startsAt,
   endsAt: startsAt,
   durationMs: 200_000,
   song: {
-    id,
+    id: uid(id),
     title,
-    artistId: 4,
+    artistId: uid(4),
     artistName: "The Hollow Pines",
-    libraryId: 3,
-    albumArtistId: 4,
+    libraryId: uid(3),
+    albumArtistId: uid(4),
     lossless: true,
-    albumId: 5,
+    albumId: uid(5),
     albumTitle: "Low Country",
     durationMs: 200_000,
     addedAt: ts,
@@ -191,25 +202,27 @@ describe("artFor", () => {
   it("is the art of what is on, else what is next, else none", () => {
     const next = movie(2, "Next", ts);
     expect(artFor({ status: "on_air", now: movie(1, "On", ts), next, upNext: [next] })).toBe(
-      "1/backdrop",
+      `${uid(1)}/backdrop`,
     );
-    expect(artFor({ status: "between_programs", next, upNext: [next] })).toBe("2/backdrop");
+    expect(artFor({ status: "between_programs", next, upNext: [next] })).toBe(`${uid(2)}/backdrop`);
     expect(
       artFor({
         status: "between_programs",
         next: episode(7, "S", 1, 1, ts),
         upNext: [episode(7, "S", 1, 1, ts)],
       }),
-    ).toBe("7/poster");
-    expect(artFor({ status: "on_air", now: song(1, "Song", ts), upNext: [] })).toBe("5/poster");
+    ).toBe(`${uid(7)}/poster`);
+    expect(artFor({ status: "on_air", now: song(1, "Song", ts), upNext: [] })).toBe(
+      `${uid(5)}/poster`,
+    );
     expect(artFor({ status: "off_schedule", upNext: [] })).toBeUndefined();
   });
   it("gives way to the station's own image", () => {
     const onAir = { status: "on_air" as const, now: movie(1, "On", ts), upNext: [] };
-    expect(stationKey({ onAir, imageUrl: "/api/v1/stations/3/image?v=4" })).toBe(
-      "image:/api/v1/stations/3/image?v=4",
+    expect(stationKey({ onAir, imageUrl: `/api/v2/stations/${uid(3)}/image?v=4` })).toBe(
+      `image:/api/v2/stations/${uid(3)}/image?v=4`,
     );
-    expect(stationKey({ onAir })).toBe("1/backdrop");
+    expect(stationKey({ onAir })).toBe(`${uid(1)}/backdrop`);
   });
 });
 
@@ -228,22 +241,22 @@ describe("tuneIn", () => {
   const json = (b: unknown, status: number) =>
     new Response(JSON.stringify(b), { status, headers: { "content-type": "application/json" } });
   const station = (onAir: unknown) => ({
-    id: 4,
+    id: uid(4),
     name: "The Big Screen",
     kind: "movies",
-    ownerId: 1,
-    householdId: 1,
-    playlistId: 9,
+    ownerId: uid(1),
+    householdId: uid(1),
+    playlistId: uid(9),
     order: "playlist",
     visibility: "household",
     days: [],
     times: [],
     onAir,
     createdAt: ts,
-    updatedAt: ts,
+    modifiedAt: ts,
   });
   const stream = {
-    sessionId: 7,
+    sessionId: uid(7),
     entry: { position: 0, verdict: "direct_play", videoAction: "copy", audioAction: "copy" },
     streamUrl: "/s",
     streamKind: "file",
@@ -257,15 +270,15 @@ describe("tuneIn", () => {
     const fetch = async (req: Request) => {
       const key = `${req.method} ${new URL(req.url).pathname}`;
       sent.push({ key, body: req.method === "POST" ? await req.json() : undefined });
-      if (key === "POST /api/v1/stations/4/playback") return playback();
-      if (key === "GET /api/v1/stations/4") {
+      if (key === `POST /api/v2/stations/${uid(4)}/playback`) return playback();
+      if (key === `GET /api/v2/stations/${uid(4)}`) {
         const r = json(station(onAir), 200);
         if (date) r.headers.set("Date", date);
         return r;
       }
       return json({ code: "not_found", message: key }, 404);
     };
-    return { api: createApi({ baseUrl: "http://x/api/v1", fetch }), sent };
+    return { api: createApi({ baseUrl: "http://x/api/v2", fetch }), sent };
   };
   const snapshot = async () => ({ decoder: {} }) as never;
 
@@ -274,11 +287,11 @@ describe("tuneIn", () => {
     const { api: a, sent } = api(() =>
       json({ stream, onAir: { status: "on_air", now, upNext: [] } }, 201),
     );
-    const t = await tuneIn(a, 4, snapshot);
+    const t = await tuneIn(a, uid(4), snapshot);
     expect(t.state).toBe("on_air");
     if (t.state !== "on_air") return;
-    expect(t.pb.stream.sessionId).toBe(7);
-    expect(t.onAir.now?.itemId).toBe(1);
+    expect(t.pb.stream.sessionId).toBe(uid(7));
+    expect(t.onAir.now?.itemId).toBe(uid(1));
     expect(sent[0].body).toEqual({ snapshot: { decoder: {} }, live: true });
   });
 
@@ -287,10 +300,10 @@ describe("tuneIn", () => {
     const { api: a } = api(() =>
       json({ stream, onAir: { status: "between_programs", next, upNext: [next] } }, 201),
     );
-    const t = await tuneIn(a, 4, snapshot);
+    const t = await tuneIn(a, uid(4), snapshot);
     expect(t.state).toBe("on_air");
     expect(t.onAir.now).toBeUndefined();
-    expect(t.onAir.next?.itemId).toBe(2);
+    expect(t.onAir.next?.itemId).toBe(uid(2));
   });
 
   it("off air between programs shows what is next and asks again at resumesAt", async () => {
@@ -299,9 +312,9 @@ describe("tuneIn", () => {
       () => json({ code: "off_air", message: "off", resumesAt: next.startsAt }, 409),
       { status: "between_programs", next, upNext: [next] },
     );
-    const t = await tuneIn(a, 4, snapshot);
+    const t = await tuneIn(a, uid(4), snapshot);
     expect(t).toMatchObject({ state: "between_programs", resumesAt: next.startsAt });
-    expect(t.onAir.next?.itemId).toBe(2);
+    expect(t.onAir.next?.itemId).toBe(uid(2));
   });
 
   it("off air outside the schedule is off schedule", async () => {
@@ -313,7 +326,7 @@ describe("tuneIn", () => {
         upNext: [movie(2, "Next", local(20, 22))],
       },
     );
-    expect((await tuneIn(a, 4, snapshot)).state).toBe("off_schedule");
+    expect((await tuneIn(a, uid(4), snapshot)).state).toBe("off_schedule");
   });
 
   it("off air with nothing scheduled asks again never", async () => {
@@ -321,7 +334,7 @@ describe("tuneIn", () => {
       status: "off_schedule",
       upNext: [],
     });
-    const t = await tuneIn(a, 4, snapshot);
+    const t = await tuneIn(a, uid(4), snapshot);
     expect(t.state).toBe("off_schedule");
     expect(t.state !== "on_air" && t.resumesAt).toBeUndefined();
   });
@@ -332,7 +345,7 @@ describe("tuneIn", () => {
       () => json({ code: "off_air", message: "off", resumesAt: now.startsAt }, 409),
       { status: "on_air", now, positionMs: 0, upNext: [] },
     );
-    const t = await tuneIn(a, 4, snapshot);
+    const t = await tuneIn(a, uid(4), snapshot);
     expect(t.state).toBe("between_programs");
     expect(t.onAir).toEqual({ status: "between_programs", next: now, upNext: [now] });
   });
@@ -347,7 +360,7 @@ describe("tuneIn", () => {
     const { api: a } = api(() =>
       json({ stream, onAir: { status: "on_air", now, positionMs: 60_000, upNext: [] } }, 201),
     );
-    await tuneIn(a, 4, snapshot);
+    await tuneIn(a, uid(4), snapshot);
     expect(untilMs(now.endsAt)).toBeGreaterThan(4500);
   });
 
@@ -359,7 +372,7 @@ describe("tuneIn", () => {
       { status: "between_programs", next, upNext: [next] },
       new Date(at).toUTCString(),
     );
-    await tuneIn(a, 4, snapshot);
+    await tuneIn(a, uid(4), snapshot);
     // Date has whole seconds, so the wait is up to a second long, never short.
     expect(untilMs(next.startsAt)).toBeGreaterThan(4500);
     expect(untilMs(next.startsAt)).toBeLessThanOrEqual(6000);
@@ -367,18 +380,21 @@ describe("tuneIn", () => {
 
   it("passes any other refusal on", async () => {
     const { api: a } = api(() => json({ code: "conflict", message: "nothing plays" }, 409));
-    await expect(tuneIn(a, 4, snapshot)).rejects.toMatchObject({ status: 409, code: "conflict" });
+    await expect(tuneIn(a, uid(4), snapshot)).rejects.toMatchObject({
+      status: 409,
+      code: "conflict",
+    });
   });
 });
 
 describe("editor input", () => {
   const st = {
-    id: 4,
+    id: uid(4),
     name: "Creature Double",
     kind: "movies" as const,
-    ownerId: 1,
-    householdId: 1,
-    playlistId: 9,
+    ownerId: uid(1),
+    householdId: uid(1),
+    playlistId: uid(9),
     order: "random" as const,
     visibility: "private" as const,
     timing: "half_hour" as const,
@@ -386,7 +402,7 @@ describe("editor input", () => {
     times: [{ from: "22:00", to: "02:00" }],
     onAir: { status: "off_schedule" as const, upNext: [] },
     createdAt: ts,
-    updatedAt: ts,
+    modifiedAt: ts,
   };
 
   it("a new station of the kind given starts private, continuous, in order, at the kind's timing", () => {

@@ -11,16 +11,17 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/device"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/devicelink"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/household"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 func TestDecideCollectAndStatus(t *testing.T) {
 	d := dbtest.Open(t)
 	a := &account.Account{Kind: account.Adult, Email: "a@example.test", Name: "A", PasswordHash: "x"}
-	if err := account.New(d).Create(a); err != nil {
+	if err := account.New(d).Create(a, nil); err != nil {
 		t.Fatal(err)
 	}
 	h := &household.Household{Name: "H", AdultID: a.ID}
-	if err := household.New(d).Create(h); err != nil {
+	if err := household.New(d).Create(h, nil); err != nil {
 		t.Fatal(err)
 	}
 	dev := &device.Device{TokenHash: "t", Name: "TV", Platform: "roku", AccountID: a.ID, HouseholdID: h.ID}
@@ -74,7 +75,7 @@ func TestDecideCollectAndStatus(t *testing.T) {
 	if hs, _ := r.ByHousehold(h.ID, 100, 0); len(hs) != 1 {
 		t.Fatalf("%+v", hs)
 	}
-	if err := r.DeleteInHousehold(l.ID, h.ID+1); !errors.Is(err, db.ErrNotFound) {
+	if err := r.DeleteInHousehold(l.ID, uid.N(999)); !errors.Is(err, db.ErrNotFound) {
 		t.Fatalf("deleted from another household: %v", err)
 	}
 	if err := device.New(d).Delete(dev.ID); err != nil {

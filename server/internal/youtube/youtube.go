@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // Repo reads channel and video views and writes video sources.
@@ -20,13 +21,13 @@ func New(d db.DBTX) *Repo { return &Repo{d} }
 // SetSource records a video's publish time and the stamp of the sidecars
 // it was read from, which order its channel under every metadata setting.
 // The video's local row must exist.
-func (r *Repo) SetSource(itemID int64, publishedAt time.Time, stamp int64) error {
+func (r *Repo) SetSource(itemID uid.ID, publishedAt time.Time, stamp int64) error {
 	return db.ExecOne(r.d, `UPDATE item_metadata SET published_at = ?, sidecar_stamp = ? WHERE item_id = ? AND source = 'local'`, db.Ms(publishedAt), stamp, itemID)
 }
 
 // Stamp is the sidecar stamp a video was last read with; -1, which no
 // stamp is, when it was never read.
-func (r *Repo) Stamp(itemID int64) (int64, error) {
+func (r *Repo) Stamp(itemID uid.ID) (int64, error) {
 	s := sql.NullInt64{Int64: -1}
 	err := r.d.QueryRow(`SELECT sidecar_stamp FROM item_metadata WHERE item_id = ? AND source = 'local'`, itemID).Scan(&s)
 	if errors.Is(err, sql.ErrNoRows) || err == nil && !s.Valid {

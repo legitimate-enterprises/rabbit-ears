@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // Summary is what one library scan did. Seasons are structure, not content,
@@ -15,8 +16,8 @@ type Summary struct {
 	Missing                 int            // the library's files not seen on disk
 	ProbeFailed             int
 	LookupFailed            int
-	leaf                    string  // the kind a file stands for: movie, episode, song or video
-	created                 []int64 // movies and songs made in this scan
+	leaf                    string   // the kind a file stands for: movie, episode, song or video
+	created                 []uid.ID // movies and songs made in this scan
 	// moved are the paths this scan found a known file moved to; loose
 	// are the files it could file under no title.
 	moved map[string]bool

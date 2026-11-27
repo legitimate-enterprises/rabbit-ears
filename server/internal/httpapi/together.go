@@ -10,6 +10,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/service"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/together"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // Watch together: two profiles, each on their own device, following one
@@ -81,9 +82,9 @@ func (s *Server) OpenWatchTogether(ctx context.Context, r api.OpenWatchTogetherR
 		pos = ws.PositionMs
 	}
 	// From "Playing on", it opens where the profile's other device is.
-	from := or(r.Body.FromSessionId, 0)
-	if from != 0 {
-		sess, err := s.svc.Sessions.Repo().Get(from)
+	from := r.Body.FromSessionId
+	if from != nil {
+		sess, err := s.svc.Sessions.Repo().Get(*from)
 		if err != nil || sess.AccountID != host.AccountID || sess.DeviceID == host.DeviceID || sess.ItemID != it.ID || sess.EndedAt != nil || sess.Station {
 			return nil, invalid("fromSessionId", "must be the profile's open session on this item on another device")
 		}
@@ -102,7 +103,7 @@ func (s *Server) OpenWatchTogether(ctx context.Context, r api.OpenWatchTogetherR
 func (s *Server) ListWatchTogethers(ctx context.Context, r api.ListWatchTogethersRequestObject) (api.ListWatchTogethersResponseObject, error) {
 	out := api.ListWatchTogethers200JSONResponse{Items: []api.WatchTogether{}}
 	household, me := togetherCaller(ctx)
-	all, err := s.svc.Together.List(household, me.AccountID, or(r.Params.ItemId, 0), audience(ctx))
+	all, err := s.svc.Together.List(household, me.AccountID, r.Params.ItemId, audience(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -120,7 +121,7 @@ func (s *Server) ListWatchTogethers(ctx context.Context, r api.ListWatchTogether
 }
 
 // reportNeeds hands the service what the calling device says it needs.
-func (s *Server) reportNeeds(id int64, me together.Member, rttMs, floorMs *int) {
+func (s *Server) reportNeeds(id uid.ID, me together.Member, rttMs, floorMs *int) {
 	conv := func(n *int) *int64 {
 		if n == nil {
 			return nil

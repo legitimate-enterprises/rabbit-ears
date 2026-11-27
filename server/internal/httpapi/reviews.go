@@ -34,7 +34,7 @@ func text(s string) *string {
 
 // ListIdentityReviews lists reviews newest first.
 func (s *Server) ListIdentityReviews(_ context.Context, r api.ListIdentityReviewsRequestObject) (api.ListIdentityReviewsResponseObject, error) {
-	all, err := s.svc.Reviews.Repo().List(review.Filter{LibraryID: or(r.Params.LibraryId, 0), Reason: string(or(r.Params.Reason, "")),
+	all, err := s.svc.Reviews.Repo().List(review.Filter{LibraryID: r.Params.LibraryId, Reason: string(or(r.Params.Reason, "")),
 		Dismissed: r.Params.Dismissed})
 	if err != nil {
 		return nil, err

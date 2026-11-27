@@ -8,6 +8,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/account"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/genre"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // Music: artists, albums, songs, letters, search and recently played. While
@@ -16,8 +17,8 @@ import (
 func clean(ctx context.Context) bool { return caller(ctx).asKid() }
 
 // musicExtras loads the provider fields and genres of these items.
-func (s *Server) musicExtras(items []*item.Item) (map[int64]*item.Metadata, map[int64][]*genre.Genre, error) {
-	ids := make([]int64, len(items))
+func (s *Server) musicExtras(items []*item.Item) (map[uid.ID]*item.Metadata, map[uid.ID][]*genre.Genre, error) {
+	ids := make([]uid.ID, len(items))
 	for i, it := range items {
 		ids[i] = it.ID
 	}
@@ -92,7 +93,7 @@ func one[T any](rows []T, err error) (T, error) {
 func (s *Server) ListMusicArtists(ctx context.Context, r api.ListMusicArtistsRequestObject) (api.ListMusicArtistsResponseObject, error) {
 	limit, offset := paging(r.Params.Limit, r.Params.Offset)
 	out := api.ListMusicArtists200JSONResponse{Items: []api.MusicArtist{}}
-	f := item.MusicFilter{LibraryID: or(r.Params.LibraryId, 0), GenreID: or(r.Params.GenreId, 0),
+	f := item.MusicFilter{LibraryID: r.Params.LibraryId, GenreID: r.Params.GenreId,
 		Letter: or(r.Params.Letter, ""), Q: or(r.Params.Q, ""), Clean: clean(ctx), Limit: limit + 1, Offset: offset}
 	rows, err := s.svc.Music.Repo().Artists(f)
 	if err != nil {
@@ -108,7 +109,7 @@ func (s *Server) ListMusicArtists(ctx context.Context, r api.ListMusicArtistsReq
 
 // GetMusicArtist returns one artist.
 func (s *Server) GetMusicArtist(ctx context.Context, r api.GetMusicArtistRequestObject) (api.GetMusicArtistResponseObject, error) {
-	row, err := one(s.svc.Music.Repo().Artists(item.MusicFilter{IDs: []int64{r.ArtistId}, Clean: clean(ctx)}))
+	row, err := one(s.svc.Music.Repo().Artists(item.MusicFilter{IDs: []uid.ID{r.ArtistId}, Clean: clean(ctx)}))
 	if err != nil {
 		return nil, err
 	}
@@ -120,9 +121,9 @@ func (s *Server) GetMusicArtist(ctx context.Context, r api.GetMusicArtistRequest
 func (s *Server) ListMusicAlbums(ctx context.Context, r api.ListMusicAlbumsRequestObject) (api.ListMusicAlbumsResponseObject, error) {
 	limit, offset := paging(r.Params.Limit, r.Params.Offset)
 	out := api.ListMusicAlbums200JSONResponse{Items: []api.MusicAlbum{}}
-	f := item.MusicFilter{LibraryID: or(r.Params.LibraryId, 0), ArtistID: or(r.Params.ArtistId, 0),
-		GenreID: or(r.Params.GenreId, 0), Letter: or(r.Params.Letter, ""), Q: or(r.Params.Q, ""), Sort: enumStr(r.Params.Sort),
-		AccountID: caller(ctx).profile.ID, Clean: clean(ctx), Limit: limit + 1, Offset: offset}
+	f := item.MusicFilter{LibraryID: r.Params.LibraryId, ArtistID: r.Params.ArtistId,
+		GenreID: r.Params.GenreId, Letter: or(r.Params.Letter, ""), Q: or(r.Params.Q, ""), Sort: enumStr(r.Params.Sort),
+		AccountID: &caller(ctx).profile.ID, Clean: clean(ctx), Limit: limit + 1, Offset: offset}
 	rows, err := s.svc.Music.Repo().Albums(f)
 	if err != nil {
 		return nil, err
@@ -137,7 +138,7 @@ func (s *Server) ListMusicAlbums(ctx context.Context, r api.ListMusicAlbumsReque
 
 // GetMusicAlbum returns one album.
 func (s *Server) GetMusicAlbum(ctx context.Context, r api.GetMusicAlbumRequestObject) (api.GetMusicAlbumResponseObject, error) {
-	row, err := one(s.svc.Music.Repo().Albums(item.MusicFilter{IDs: []int64{r.AlbumId}, AccountID: caller(ctx).profile.ID, Clean: clean(ctx)}))
+	row, err := one(s.svc.Music.Repo().Albums(item.MusicFilter{IDs: []uid.ID{r.AlbumId}, AccountID: &caller(ctx).profile.ID, Clean: clean(ctx)}))
 	if err != nil {
 		return nil, err
 	}
@@ -149,8 +150,8 @@ func (s *Server) GetMusicAlbum(ctx context.Context, r api.GetMusicAlbumRequestOb
 func (s *Server) ListMusicSongs(ctx context.Context, r api.ListMusicSongsRequestObject) (api.ListMusicSongsResponseObject, error) {
 	limit, offset := paging(r.Params.Limit, r.Params.Offset)
 	out := api.ListMusicSongs200JSONResponse{Items: []api.MusicSong{}}
-	f := item.MusicFilter{LibraryID: or(r.Params.LibraryId, 0), AlbumID: or(r.Params.AlbumId, 0),
-		ArtistID: or(r.Params.ArtistId, 0), GenreID: or(r.Params.GenreId, 0), Q: or(r.Params.Q, ""), Sort: enumStr(r.Params.Sort),
+	f := item.MusicFilter{LibraryID: r.Params.LibraryId, AlbumID: r.Params.AlbumId,
+		ArtistID: r.Params.ArtistId, GenreID: r.Params.GenreId, Q: or(r.Params.Q, ""), Sort: enumStr(r.Params.Sort),
 		Clean: clean(ctx), Limit: limit + 1, Offset: offset}
 	rows, err := s.svc.Music.Repo().Songs(f)
 	if err != nil {
@@ -166,7 +167,7 @@ func (s *Server) ListMusicSongs(ctx context.Context, r api.ListMusicSongsRequest
 
 // GetMusicSong returns one song.
 func (s *Server) GetMusicSong(ctx context.Context, r api.GetMusicSongRequestObject) (api.GetMusicSongResponseObject, error) {
-	row, err := one(s.svc.Music.Repo().Songs(item.MusicFilter{IDs: []int64{r.SongId}, Clean: clean(ctx)}))
+	row, err := one(s.svc.Music.Repo().Songs(item.MusicFilter{IDs: []uid.ID{r.SongId}, Clean: clean(ctx)}))
 	if err != nil {
 		return nil, err
 	}
@@ -180,7 +181,7 @@ func (s *Server) ListMusicLetters(ctx context.Context, r api.ListMusicLettersReq
 	if r.Params.Of == api.Artists {
 		kind = item.Artist
 	}
-	rows, err := s.svc.Music.Repo().Letters(or(r.Params.LibraryId, 0), kind, clean(ctx))
+	rows, err := s.svc.Music.Repo().Letters(r.Params.LibraryId, kind, clean(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -193,7 +194,7 @@ func (s *Server) ListMusicLetters(ctx context.Context, r api.ListMusicLettersReq
 // SearchMusic finds artists, albums and songs, prefix matches first.
 func (s *Server) SearchMusic(ctx context.Context, r api.SearchMusicRequestObject) (api.SearchMusicResponseObject, error) {
 	out := api.SearchMusic200JSONResponse{Artists: []api.MusicArtist{}, Albums: []api.MusicAlbum{}, Songs: []api.MusicSong{}}
-	f := item.MusicFilter{LibraryID: or(r.Params.LibraryId, 0), Q: r.Params.Q, AccountID: caller(ctx).profile.ID, Clean: clean(ctx),
+	f := item.MusicFilter{LibraryID: r.Params.LibraryId, Q: r.Params.Q, AccountID: &caller(ctx).profile.ID, Clean: clean(ctx),
 		Limit: or(r.Params.Limit, 20)}
 	repo := s.svc.Music.Repo()
 	artists, err := repo.Artists(f)
@@ -238,13 +239,13 @@ func (s *Server) ListRecentlyPlayedMusic(ctx context.Context, r api.ListRecently
 		return nil, err
 	}
 	rows, out.NextOffset = window(rows, limit, offset)
-	byKind := map[string][]int64{}
+	byKind := map[string][]uid.ID{}
 	for _, v := range rows {
 		byKind[v.Kind] = append(byKind[v.Kind], v.ID)
 	}
-	albums, artists := map[int64]api.MusicAlbum{}, map[int64]api.MusicArtist{}
+	albums, artists := map[uid.ID]api.MusicAlbum{}, map[uid.ID]api.MusicArtist{}
 	if ids := byKind[item.Album]; len(ids) > 0 {
-		views, err := s.svc.Music.Repo().Albums(item.MusicFilter{IDs: ids, AccountID: r.ProfileId, Clean: kid, Limit: len(ids)})
+		views, err := s.svc.Music.Repo().Albums(item.MusicFilter{IDs: ids, AccountID: &r.ProfileId, Clean: kid, Limit: len(ids)})
 		if err != nil {
 			return nil, err
 		}

@@ -18,19 +18,20 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/library"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/mediafile"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/playlist"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 type fixture struct {
 	r     *playlist.Repo
 	items *item.Repo
-	adult int64
-	lib   int64
-	songs []int64
+	adult uid.ID
+	lib   uid.ID
+	songs []uid.ID
 	d     *sql.DB
 }
 
 // songsAlbumArtist is the artist of the fixture's album.
-func (f fixture) songsAlbumArtist(t *testing.T) *int64 {
+func (f fixture) songsAlbumArtist(t *testing.T) *uid.ID {
 	t.Helper()
 	song, err := f.items.Get(f.songs[0])
 	if err != nil {
@@ -47,11 +48,11 @@ func setup(t *testing.T) fixture {
 	t.Helper()
 	d := dbtest.OpenPreferLocal(t)
 	a := &account.Account{Kind: account.Adult, Email: "a@example.test", Name: "A"}
-	if err := account.New(d).Create(a); err != nil {
+	if err := account.New(d).Create(a, nil); err != nil {
 		t.Fatal(err)
 	}
 	l := &library.Library{Name: "Music", Kind: library.Music}
-	if err := library.New(d).Create(l); err != nil {
+	if err := library.New(d).Create(l, nil); err != nil {
 		t.Fatal(err)
 	}
 	f := fixture{r: playlist.New(d), items: item.New(d), adult: a.ID, lib: l.ID, d: d}
@@ -78,11 +79,11 @@ func TestPlaylistCRUD(t *testing.T) {
 	road := &playlist.Playlist{AccountID: f.adult, Name: "Road trip", Kind: playlist.Music}
 	movies := &playlist.Playlist{AccountID: f.adult, Name: "movie night", Kind: playlist.Movies}
 	for _, p := range []*playlist.Playlist{road, movies} {
-		if err := f.r.Create(p); err != nil || p.ID == 0 {
+		if err := f.r.Create(p, nil); err != nil || p.ID.IsZero() {
 			t.Fatal(err)
 		}
 	}
-	if err := f.r.Create(&playlist.Playlist{AccountID: f.adult, Name: "x", Kind: "podcast"}); err == nil {
+	if err := f.r.Create(&playlist.Playlist{AccountID: f.adult, Name: "x", Kind: "podcast"}, nil); err == nil {
 		t.Fatal("unknown kind accepted")
 	}
 	all, err := f.r.List(f.adult, "", 10, 0)
@@ -93,7 +94,7 @@ func TestPlaylistCRUD(t *testing.T) {
 		t.Fatalf("music only: %v", music)
 	}
 	road.Name = "Sunday drive"
-	if err := f.r.Update(road); err != nil {
+	if err := f.r.Update(road, nil); err != nil {
 		t.Fatal(err)
 	}
 	played := time.Now().UTC().Truncate(time.Millisecond)
@@ -112,18 +113,18 @@ func TestPlaylistCRUD(t *testing.T) {
 	}
 }
 
-func order(t *testing.T, f fixture, playlistID int64) []int64 {
+func order(t *testing.T, f fixture, playlistID uid.ID) []uid.ID {
 	t.Helper()
 	es, err := f.r.Entries(playlistID, item.Audience{}, 100, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var ids []int64
+	var ids []uid.ID
 	for i, e := range es {
 		if e.Position != i {
 			t.Fatalf("position %d at %d", e.Position, i)
 		}
-		ids = append(ids, e.ItemID)
+		ids = append(ids, *e.ItemID)
 	}
 	return ids
 }
@@ -131,14 +132,14 @@ func order(t *testing.T, f fixture, playlistID int64) []int64 {
 func TestEntriesOrder(t *testing.T) {
 	f := setup(t)
 	p := &playlist.Playlist{AccountID: f.adult, Name: "P", Kind: playlist.Music}
-	if err := f.r.Create(p); err != nil {
+	if err := f.r.Create(p, nil); err != nil {
 		t.Fatal(err)
 	}
 	one, two, three, four := f.songs[0], f.songs[1], f.songs[2], f.songs[3]
-	add := func(itemID int64, at *int) *playlist.Entry {
+	add := func(itemID uid.ID, at *int) *playlist.Entry {
 		t.Helper()
-		e := &playlist.Entry{PlaylistID: p.ID, ItemID: itemID}
-		if err := f.r.AddEntry(e, at); err != nil {
+		e := &playlist.Entry{PlaylistID: p.ID, ItemID: &itemID}
+		if err := f.r.AddEntry(e, at, nil); err != nil {
 			t.Fatal(err)
 		}
 		return e
@@ -149,46 +150,47 @@ func TestEntriesOrder(t *testing.T) {
 	e3 := add(three, &zero)
 	add(four, &far)
 	add(one, nil)
-	if got := order(t, f, p.ID); !slices.Equal(got, []int64{three, one, two, four, one}) {
+	if got := order(t, f, p.ID); !slices.Equal(got, []uid.ID{three, one, two, four, one}) {
 		t.Fatalf("after adds %v", got)
 	}
 	if n, _ := f.r.CountEntries(p.ID); n != 5 {
 		t.Fatalf("count %d", n)
 	}
 	two2 := 2
-	if err := f.r.MoveEntry(e3.ID, &two2); err != nil {
+	if err := f.r.MoveEntry(e3.ID, &two2, nil); err != nil {
 		t.Fatal(err)
 	}
-	if got := order(t, f, p.ID); !slices.Equal(got, []int64{one, two, three, four, one}) {
+	if got := order(t, f, p.ID); !slices.Equal(got, []uid.ID{one, two, three, four, one}) {
 		t.Fatalf("after move down %v", got)
 	}
-	if err := f.r.MoveEntry(e3.ID, nil); err != nil {
+	if err := f.r.MoveEntry(e3.ID, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	if got := order(t, f, p.ID); !slices.Equal(got, []int64{one, two, four, one, three}) {
+	if got := order(t, f, p.ID); !slices.Equal(got, []uid.ID{one, two, four, one, three}) {
 		t.Fatalf("after move to end %v", got)
 	}
-	if err := f.r.MoveEntry(e3.ID, &zero); err != nil {
+	if err := f.r.MoveEntry(e3.ID, &zero, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.r.RemoveEntry(e1.ID); err != nil {
 		t.Fatal(err)
 	}
-	if got := order(t, f, p.ID); !slices.Equal(got, []int64{three, two, four, one}) {
+	if got := order(t, f, p.ID); !slices.Equal(got, []uid.ID{three, two, four, one}) {
 		t.Fatalf("after move up and remove %v", got)
 	}
-	if e, err := f.r.Entry(e3.ID); err != nil || e.Position != 0 || e.ItemID != three {
+	if e, err := f.r.Entry(e3.ID); err != nil || e.Position != 0 || *e.ItemID != three {
 		t.Fatalf("%+v %v", e, err)
 	}
 	// A deleted item drops out of every playlist; the next write closes the gap.
 	if err := f.items.Delete(two); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.r.AddEntry(&playlist.Entry{PlaylistID: p.ID, ItemID: two + 100}, nil); !errors.Is(err, db.ErrReference) {
+	missing := uid.New()
+	if err := f.r.AddEntry(&playlist.Entry{PlaylistID: p.ID, ItemID: &missing}, nil, nil); !errors.Is(err, db.ErrReference) {
 		t.Fatalf("missing item: %v", err)
 	}
 	add(one, &zero)
-	if got := order(t, f, p.ID); !slices.Equal(got, []int64{one, three, four, one}) {
+	if got := order(t, f, p.ID); !slices.Equal(got, []uid.ID{one, three, four, one}) {
 		t.Fatalf("after cascade %v", got)
 	}
 }
@@ -199,11 +201,11 @@ func TestEntriesOrder(t *testing.T) {
 func TestEntryWritesTouchOnlyTheEntry(t *testing.T) {
 	f := setup(t)
 	p := &playlist.Playlist{AccountID: f.adult, Name: "P", Kind: playlist.Music}
-	if err := f.r.Create(p); err != nil {
+	if err := f.r.Create(p, nil); err != nil {
 		t.Fatal(err)
 	}
 	for _, q := range []string{
-		`CREATE TEMP TABLE written (id INTEGER)`,
+		`CREATE TEMP TABLE written (id BLOB)`,
 		// The sync triggers' own stamps are not writes of the entry.
 		`CREATE TEMP TRIGGER entry_written AFTER UPDATE ON playlist_entry WHEN OLD.sync_version IS NEW.sync_version
 			BEGIN INSERT INTO written VALUES (NEW.id); END`,
@@ -212,10 +214,10 @@ func TestEntryWritesTouchOnlyTheEntry(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	written := func() []int64 {
+	written := func() []uid.ID {
 		t.Helper()
 		rows, err := f.d.Query(`SELECT id FROM written ORDER BY rowid`)
-		ids, err := db.Collect(rows, err, db.Column[int64])
+		ids, err := db.Collect(rows, err, db.Column[uid.ID])
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -226,25 +228,25 @@ func TestEntryWritesTouchOnlyTheEntry(t *testing.T) {
 	}
 	es := make([]*playlist.Entry, 4)
 	for i, s := range f.songs {
-		es[i] = &playlist.Entry{PlaylistID: p.ID, ItemID: s}
+		es[i] = &playlist.Entry{PlaylistID: p.ID, ItemID: &s}
 	}
-	if err := f.r.AddEntries(es[:3]); err != nil {
+	if err := f.r.AddEntries(es[:3], nil); err != nil {
 		t.Fatal(err)
 	}
 	if es[0].Rank != "a0" || es[2].Rank != "a2" || es[2].Position != 2 {
 		t.Fatalf("batch %+v %+v", es[0], es[2])
 	}
 	one := 1
-	if err := f.r.AddEntry(es[3], &one); err != nil || es[3].Rank != "a0V" || es[3].Position != 1 {
+	if err := f.r.AddEntry(es[3], &one, nil); err != nil || es[3].Rank != "a0V" || es[3].Position != 1 {
 		t.Fatalf("%+v %v", es[3], err)
 	}
-	if err := f.r.MoveEntry(es[0].ID, &one); err != nil {
+	if err := f.r.MoveEntry(es[0].ID, &one, nil); err != nil {
 		t.Fatal(err)
 	}
-	if got := written(); !slices.Equal(got, []int64{es[0].ID}) {
+	if got := written(); !slices.Equal(got, []uid.ID{es[0].ID}) {
 		t.Fatalf("a move wrote %v", got)
 	}
-	if got := order(t, f, p.ID); !slices.Equal(got, []int64{f.songs[3], f.songs[0], f.songs[1], f.songs[2]}) {
+	if got := order(t, f, p.ID); !slices.Equal(got, []uid.ID{f.songs[3], f.songs[0], f.songs[1], f.songs[2]}) {
 		t.Fatalf("after move %v", got)
 	}
 	if err := f.r.RemoveEntry(es[3].ID); err != nil {
@@ -254,24 +256,24 @@ func TestEntryWritesTouchOnlyTheEntry(t *testing.T) {
 		t.Fatalf("a removal wrote %v", got)
 	}
 	// Two devices that ranked apart alike leave a tie, which id breaks.
-	if err := f.r.RankEntry(es[2].ID, "a1"); err != nil {
+	if err := f.r.RankEntry(es[2].ID, "a1", nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.r.RankEntry(es[1].ID, "a1"); err != nil {
+	if err := f.r.RankEntry(es[1].ID, "a1", nil); err != nil {
 		t.Fatal(err)
 	}
 	written()
 	zero := 0
-	if err := f.r.MoveEntry(es[0].ID, &one); err != nil {
+	if err := f.r.MoveEntry(es[0].ID, &one, nil); err != nil {
 		t.Fatal(err)
 	}
-	if got := written(); !slices.Equal(got, []int64{es[0].ID}) {
+	if got := written(); !slices.Equal(got, []uid.ID{es[0].ID}) {
 		t.Fatalf("a move between ties wrote %v", got)
 	}
-	if got := order(t, f, p.ID); !slices.Equal(got, []int64{f.songs[1], f.songs[2], f.songs[0]}) {
+	if got := order(t, f, p.ID); !slices.Equal(got, []uid.ID{f.songs[1], f.songs[2], f.songs[0]}) {
 		t.Fatalf("after a move between ties %v", got)
 	}
-	if err := f.r.MoveEntry(es[0].ID, &zero); err != nil {
+	if err := f.r.MoveEntry(es[0].ID, &zero, nil); err != nil {
 		t.Fatal(err)
 	}
 	if e, err := f.r.Entry(es[0].ID); err != nil || e.Rank >= "a1" || e.Position != 0 {
@@ -284,7 +286,7 @@ func TestEntryWritesTouchOnlyTheEntry(t *testing.T) {
 func TestTotals(t *testing.T) {
 	f := setup(t)
 	p := &playlist.Playlist{AccountID: f.adult, Name: "P", Kind: playlist.Music}
-	if err := f.r.Create(p); err != nil {
+	if err := f.r.Create(p, nil); err != nil {
 		t.Fatal(err)
 	}
 	if n, ms, first, err := f.r.Totals(p.ID, item.Audience{}); err != nil || n != 0 || ms != 0 || first != nil {
@@ -293,12 +295,12 @@ func TestTotals(t *testing.T) {
 	files := mediafile.New(f.d)
 	for i, id := range f.songs[:2] {
 		ms := int64(1000 * (i + 1))
-		if err := files.CreateFile(&mediafile.File{ItemID: id, Path: "/s/" + strconv.Itoa(i), ModifiedAt: time.Now(), DurationMs: &ms}); err != nil {
+		if err := files.CreateFile(&mediafile.File{ItemID: &id, Path: "/s/" + strconv.Itoa(i), FileModifiedAt: time.Now(), DurationMs: &ms}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	for _, id := range []int64{f.songs[1], f.songs[0], f.songs[1], f.songs[2]} {
-		if err := f.r.AddEntry(&playlist.Entry{PlaylistID: p.ID, ItemID: id}, nil); err != nil {
+	for _, id := range []uid.ID{f.songs[1], f.songs[0], f.songs[1], f.songs[2]} {
+		if err := f.r.AddEntry(&playlist.Entry{PlaylistID: p.ID, ItemID: &id}, nil, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -313,7 +315,7 @@ func TestTotals(t *testing.T) {
 func TestPlayOrder(t *testing.T) {
 	f := setup(t)
 	n := func(v int) *int { return &v }
-	mk := func(it *item.Item) int64 {
+	mk := func(it *item.Item) uid.ID {
 		t.Helper()
 		if err := f.items.Create(it); err != nil {
 			t.Fatal(err)
@@ -321,14 +323,14 @@ func TestPlayOrder(t *testing.T) {
 		return it.ID
 	}
 	files := mediafile.New(f.d)
-	timed := func(id, ms int64) {
+	timed := func(id uid.ID, ms int64) {
 		t.Helper()
-		if err := files.CreateFile(&mediafile.File{ItemID: id, Path: "/f/" + strconv.FormatInt(id, 10), ModifiedAt: time.Now(), DurationMs: &ms}); err != nil {
+		if err := files.CreateFile(&mediafile.File{ItemID: &id, Path: "/f/" + id.String(), FileModifiedAt: time.Now(), DurationMs: &ms}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	tv := &library.Library{Name: "TV", Kind: library.TV}
-	if err := library.New(f.d).Create(tv); err != nil {
+	if err := library.New(f.d).Create(tv, nil); err != nil {
 		t.Fatal(err)
 	}
 	show := mk(&item.Item{LibraryID: tv.ID, Kind: item.Show, ParsedTitle: "Show"})
@@ -343,35 +345,35 @@ func TestPlayOrder(t *testing.T) {
 	timed(s1e2, 2000)
 
 	tvp := &playlist.Playlist{AccountID: f.adult, Name: "TV", Kind: playlist.TV}
-	if err := f.r.Create(tvp); err != nil {
+	if err := f.r.Create(tvp, nil); err != nil {
 		t.Fatal(err)
 	}
-	add := func(p *playlist.Playlist, itemID int64) int64 {
+	add := func(p *playlist.Playlist, itemID uid.ID) uid.ID {
 		t.Helper()
-		e := &playlist.Entry{PlaylistID: p.ID, ItemID: itemID}
-		if err := f.r.AddEntry(e, nil); err != nil {
+		e := &playlist.Entry{PlaylistID: p.ID, ItemID: &itemID}
+		if err := f.r.AddEntry(e, nil, nil); err != nil {
 			t.Fatal(err)
 		}
 		return e.ID
 	}
 	eShow, eSeason, eEp := add(tvp, show), add(tvp, s1), add(tvp, s2e1)
-	rows := func(p *playlist.Playlist, limit, offset int) (entries, items []int64) {
+	rows := func(p *playlist.Playlist, limit, offset int) (entries, items []uid.ID) {
 		t.Helper()
 		got, err := f.r.PlayOrder(p.ID, item.Audience{}, limit, offset)
 		if err != nil {
 			t.Fatal(err)
 		}
 		for _, r := range got {
-			entries, items = append(entries, r.EntryID), append(items, r.ItemID)
+			entries, items = append(entries, *r.EntryID), append(items, r.ItemID)
 		}
 		return entries, items
 	}
 	entries, items := rows(tvp, 100, 0)
-	if !slices.Equal(items, []int64{s1e1, s1e2, s2e1, special, s1e1, s1e2, s2e1}) ||
-		!slices.Equal(entries, []int64{eShow, eShow, eShow, eShow, eSeason, eSeason, eEp}) {
+	if !slices.Equal(items, []uid.ID{s1e1, s1e2, s2e1, special, s1e1, s1e2, s2e1}) ||
+		!slices.Equal(entries, []uid.ID{eShow, eShow, eShow, eShow, eSeason, eSeason, eEp}) {
 		t.Fatalf("tv: entries %v items %v", entries, items)
 	}
-	if _, page := rows(tvp, 2, 3); !slices.Equal(page, []int64{special, s1e1}) {
+	if _, page := rows(tvp, 2, 3); !slices.Equal(page, []uid.ID{special, s1e1}) {
 		t.Fatalf("paged %v", page)
 	}
 	if n, ms, first, err := f.r.Totals(tvp.ID, item.Audience{}); err != nil || n != 7 || ms != 6000 || first == nil || *first != show {
@@ -381,17 +383,17 @@ func TestPlayOrder(t *testing.T) {
 	if err != nil || len(all) != 3 {
 		t.Fatalf("every entry's totals %v %v", all, err)
 	}
-	for id, want := range map[int64][2]int64{eShow: {4, 3000}, eSeason: {2, 3000}, eEp: {1, 0}} {
+	for id, want := range map[uid.ID][2]int64{eShow: {4, 3000}, eSeason: {2, 3000}, eEp: {1, 0}} {
 		if n, ms, err := f.r.EntryTotals(id, item.Audience{}); err != nil || int64(n) != want[0] || ms != want[1] {
-			t.Fatalf("entry %d: %d %d %v", id, n, ms, err)
+			t.Fatalf("entry %s: %d %d %v", id, n, ms, err)
 		}
 		if got := all[id]; int64(got.Count) != want[0] || got.DurationMs != want[1] {
-			t.Fatalf("entry %d among all: %+v", id, got)
+			t.Fatalf("entry %s among all: %+v", id, got)
 		}
 	}
 	// A new episode joins the show's and the season's entries with no edit.
 	late := mk(&item.Item{LibraryID: tv.ID, ParentID: &s1, Kind: item.Episode, ParsedTitle: "Show", EpisodeNumber: n(3)})
-	if _, items := rows(tvp, 100, 0); !slices.Equal(items, []int64{s1e1, s1e2, late, s2e1, special, s1e1, s1e2, late, s2e1}) {
+	if _, items := rows(tvp, 100, 0); !slices.Equal(items, []uid.ID{s1e1, s1e2, late, s2e1, special, s1e1, s1e2, late, s2e1}) {
 		t.Fatalf("after a new episode %v", items)
 	}
 
@@ -411,7 +413,7 @@ func TestPlayOrder(t *testing.T) {
 	mk(&item.Item{LibraryID: f.lib, ParentID: &compilation, Kind: item.Song, ParsedTitle: "Not theirs"})
 
 	mp := &playlist.Playlist{AccountID: f.adult, Name: "Music", Kind: playlist.Music}
-	if err := f.r.Create(mp); err != nil {
+	if err := f.r.Create(mp, nil); err != nil {
 		t.Fatal(err)
 	}
 	add(mp, artist)
@@ -419,7 +421,7 @@ func TestPlayOrder(t *testing.T) {
 	add(mp, f.songs[3])
 	_, items = rows(mp, 100, 0)
 	one, two, three, four := f.songs[0], f.songs[1], f.songs[2], f.songs[3]
-	if want := []int64{a, b, c, guest, old, four, one, three, two, a, b, c, four}; !slices.Equal(items, want) {
+	if want := []uid.ID{a, b, c, guest, old, four, one, three, two, a, b, c, four}; !slices.Equal(items, want) {
 		t.Fatalf("music %v, want %v", items, want)
 	}
 }
@@ -429,7 +431,7 @@ func TestPlayOrder(t *testing.T) {
 func TestPlayOrderKeepsToTheAudience(t *testing.T) {
 	f := setup(t)
 	n := func(v int) *int { return &v }
-	mk := func(it *item.Item) int64 {
+	mk := func(it *item.Item) uid.ID {
 		t.Helper()
 		if err := f.items.Create(it); err != nil {
 			t.Fatal(err)
@@ -437,7 +439,7 @@ func TestPlayOrderKeepsToTheAudience(t *testing.T) {
 		return it.ID
 	}
 	tv := &library.Library{Name: "TV", Kind: library.TV}
-	if err := library.New(f.d).Create(tv); err != nil {
+	if err := library.New(f.d).Create(tv, nil); err != nil {
 		t.Fatal(err)
 	}
 	show := mk(&item.Item{LibraryID: tv.ID, Kind: item.Show, ParsedTitle: "Show"})
@@ -446,31 +448,31 @@ func TestPlayOrderKeepsToTheAudience(t *testing.T) {
 	allowed := mk(&item.Item{LibraryID: tv.ID, ParentID: &s1, Kind: item.Episode, ParsedTitle: "Show", EpisodeNumber: n(1)})
 	mk(&item.Item{LibraryID: tv.ID, ParentID: &s2, Kind: item.Episode, ParsedTitle: "Show", EpisodeNumber: n(1)})
 	home := &household.Household{Name: "Home", AdultID: f.adult}
-	if err := household.New(f.d).Create(home); err != nil {
+	if err := household.New(f.d).Create(home, nil); err != nil {
 		t.Fatal(err)
 	}
 	kid := &account.Account{Kind: account.Kid, Name: "Kid", HouseholdID: &home.ID}
-	if err := account.New(f.d).Create(kid); err != nil {
+	if err := account.New(f.d).Create(kid, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.d.Exec(`INSERT INTO account_allow (account_id, item_id) VALUES (?, ?)`, kid.ID, s1); err != nil {
 		t.Fatal(err)
 	}
 	p := &playlist.Playlist{AccountID: f.adult, Name: "TV", Kind: playlist.TV}
-	if err := f.r.Create(p); err != nil {
+	if err := f.r.Create(p, nil); err != nil {
 		t.Fatal(err)
 	}
-	e := &playlist.Entry{PlaylistID: p.ID, ItemID: show}
-	if err := f.r.AddEntry(e, nil); err != nil {
+	e := &playlist.Entry{PlaylistID: p.ID, ItemID: &show}
+	if err := f.r.AddEntry(e, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	// The songs are in a music library, which kids never see.
-	if err := f.r.AddEntry(&playlist.Entry{PlaylistID: p.ID, ItemID: f.songs[0]}, nil); err != nil {
+	if err := f.r.AddEntry(&playlist.Entry{PlaylistID: p.ID, ItemID: &f.songs[0]}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	a := item.Audience{Kid: true, AccountID: kid.ID, AllowList: true}
+	a := item.Audience{Kid: true, AccountID: &kid.ID, AllowList: true}
 	rows, err := f.r.PlayOrder(p.ID, a, 100, 0)
-	if err != nil || len(rows) != 1 || rows[0].ItemID != allowed || rows[0].EntryID != e.ID {
+	if err != nil || len(rows) != 1 || rows[0].ItemID != allowed || *rows[0].EntryID != e.ID {
 		t.Fatalf("kid play order %+v %v", rows, err)
 	}
 	if n, _, _, err := f.r.Totals(p.ID, a); err != nil || n != 1 {
@@ -488,10 +490,10 @@ func TestPlayOrderKeepsToTheAudience(t *testing.T) {
 
 	// A kid is allowed a playlist they may see all of; an adult hiding kids'
 	// content one they may see any of; anyone an empty one.
-	allows := func(p int64, a item.Audience, want bool) {
+	allows := func(p uid.ID, a item.Audience, want bool) {
 		t.Helper()
 		if ok, err := f.r.Allows(p, a); err != nil || ok != want {
-			t.Fatalf("allows %d %+v = %v %v, want %v", p, a, ok, err, want)
+			t.Fatalf("allows %s %+v = %v %v, want %v", p, a, ok, err, want)
 		}
 	}
 	allows(p.ID, a, false)
@@ -502,11 +504,11 @@ func TestPlayOrderKeepsToTheAudience(t *testing.T) {
 	}
 	allows(p.ID, item.Audience{HideKids: true}, true)
 	only := &playlist.Playlist{AccountID: f.adult, Name: "Only", Kind: playlist.TV}
-	if err := f.r.Create(only); err != nil {
+	if err := f.r.Create(only, nil); err != nil {
 		t.Fatal(err)
 	}
 	allows(only.ID, a, true)
-	if err := f.r.AddEntry(&playlist.Entry{PlaylistID: only.ID, ItemID: allowed}, nil); err != nil {
+	if err := f.r.AddEntry(&playlist.Entry{PlaylistID: only.ID, ItemID: &allowed}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	allows(only.ID, a, true)
@@ -519,7 +521,7 @@ func TestPlayOrderKeepsToTheAudience(t *testing.T) {
 func TestPlayOrderEditions(t *testing.T) {
 	f := setup(t)
 	films := &library.Library{Name: "Films", Kind: library.Movies}
-	if err := library.New(f.d).Create(films); err != nil {
+	if err := library.New(f.d).Create(films, nil); err != nil {
 		t.Fatal(err)
 	}
 	m := &item.Item{LibraryID: films.ID, Kind: item.Movie, ParsedTitle: "Lantern"}
@@ -527,10 +529,10 @@ func TestPlayOrderEditions(t *testing.T) {
 		t.Fatal(err)
 	}
 	files, eds := mediafile.New(f.d), edition.New(f.d)
-	file := func(name string, minutes int64, tag string) (int64, int64) {
+	file := func(name string, minutes int64, tag string) (uid.ID, uid.ID) {
 		t.Helper()
 		ms := minutes * 60000
-		fl := &mediafile.File{Path: "/m/" + name, ModifiedAt: time.Now(), DurationMs: &ms}
+		fl := &mediafile.File{Path: "/m/" + name, FileModifiedAt: time.Now(), DurationMs: &ms}
 		if err := files.CreateFile(fl); err != nil {
 			t.Fatal(err)
 		}
@@ -543,16 +545,16 @@ func TestPlayOrderEditions(t *testing.T) {
 	_, std := file("a.mkv", 100, "")
 	extFile, ext := file("b.mkv", 130, "Extended")
 	p := &playlist.Playlist{AccountID: f.adult, Name: "P", Kind: playlist.Movies}
-	if err := f.r.Create(p); err != nil {
+	if err := f.r.Create(p, nil); err != nil {
 		t.Fatal(err)
 	}
-	for _, e := range []*playlist.Entry{{PlaylistID: p.ID, ItemID: m.ID, EditionID: ext}, {PlaylistID: p.ID, ItemID: m.ID}} {
-		if err := f.r.AddEntry(e, nil); err != nil {
+	for _, e := range []*playlist.Entry{{PlaylistID: p.ID, ItemID: &m.ID, EditionID: &ext}, {PlaylistID: p.ID, ItemID: &m.ID}} {
+		if err := f.r.AddEntry(e, nil, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
 	rows, err := f.r.PlayOrder(p.ID, item.Audience{}, 100, 0)
-	if err != nil || len(rows) != 2 || rows[0].EditionID != ext || rows[1].EditionID != std ||
+	if err != nil || len(rows) != 2 || *rows[0].EditionID != ext || *rows[1].EditionID != std ||
 		rows[0].RuntimeMs == nil || *rows[0].RuntimeMs != 130*60000 || *rows[1].RuntimeMs != 100*60000 {
 		t.Fatalf("rows %+v %v", rows, err)
 	}
@@ -563,7 +565,7 @@ func TestPlayOrderEditions(t *testing.T) {
 		t.Fatal(err)
 	}
 	rows, err = f.r.PlayOrder(p.ID, item.Audience{}, 100, 0)
-	if err != nil || len(rows) != 1 || rows[0].EditionID != std {
+	if err != nil || len(rows) != 1 || *rows[0].EditionID != std {
 		t.Fatalf("after the edition's files went %+v %v", rows, err)
 	}
 }
@@ -573,7 +575,7 @@ func TestPlayOrderEditions(t *testing.T) {
 func TestPlayOrderDefaultSkipsMissingFiles(t *testing.T) {
 	f := setup(t)
 	films := &library.Library{Name: "Films", Kind: library.Movies}
-	if err := library.New(f.d).Create(films); err != nil {
+	if err := library.New(f.d).Create(films, nil); err != nil {
 		t.Fatal(err)
 	}
 	m := &item.Item{LibraryID: films.ID, Kind: item.Movie, ParsedTitle: "Lantern"}
@@ -581,10 +583,10 @@ func TestPlayOrderDefaultSkipsMissingFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	files, eds := mediafile.New(f.d), edition.New(f.d)
-	var ed []int64
+	var ed []uid.ID
 	for i, minutes := range []int64{100, 120} {
 		ms := minutes * 60000
-		fl := &mediafile.File{Path: "/m/" + strconv.Itoa(i), ModifiedAt: time.Now(), DurationMs: &ms}
+		fl := &mediafile.File{Path: "/m/" + strconv.Itoa(i), FileModifiedAt: time.Now(), DurationMs: &ms}
 		if err := files.CreateFile(fl); err != nil {
 			t.Fatal(err)
 		}
@@ -600,15 +602,15 @@ func TestPlayOrderDefaultSkipsMissingFiles(t *testing.T) {
 		}
 	}
 	p := &playlist.Playlist{AccountID: f.adult, Name: "P", Kind: playlist.Movies}
-	if err := f.r.Create(p); err != nil {
+	if err := f.r.Create(p, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.r.AddEntry(&playlist.Entry{PlaylistID: p.ID, ItemID: m.ID}, nil); err != nil {
+	if err := f.r.AddEntry(&playlist.Entry{PlaylistID: p.ID, ItemID: &m.ID}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	rows, err := f.r.PlayOrder(p.ID, item.Audience{}, 100, 0)
-	if err != nil || len(rows) != 1 || rows[0].EditionID != ed[1] {
-		t.Fatalf("rows %+v %v, want edition %d", rows, err, ed[1])
+	if err != nil || len(rows) != 1 || *rows[0].EditionID != ed[1] {
+		t.Fatalf("rows %+v %v, want edition %s", rows, err, ed[1])
 	}
 }
 
@@ -618,7 +620,7 @@ func TestPlayOrderDefaultSkipsMissingFiles(t *testing.T) {
 func TestExpand(t *testing.T) {
 	f := setup(t)
 	n := func(v int) *int { return &v }
-	mk := func(it *item.Item) int64 {
+	mk := func(it *item.Item) uid.ID {
 		t.Helper()
 		if err := f.items.Create(it); err != nil {
 			t.Fatal(err)
@@ -628,7 +630,7 @@ func TestExpand(t *testing.T) {
 	tv := &library.Library{Name: "TV", Kind: library.TV}
 	yt := &library.Library{Name: "YouTube", Kind: library.YouTube}
 	for _, l := range []*library.Library{tv, yt} {
-		if err := library.New(f.d).Create(l); err != nil {
+		if err := library.New(f.d).Create(l, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -642,20 +644,20 @@ func TestExpand(t *testing.T) {
 	newer := mk(&item.Item{LibraryID: yt.ID, ParentID: &channel, Kind: item.Video, ParsedTitle: "Newer"})
 	older := mk(&item.Item{LibraryID: yt.ID, ParentID: &channel, Kind: item.Video, ParsedTitle: "Older"})
 	undated := mk(&item.Item{LibraryID: yt.ID, ParentID: &channel, Kind: item.Video, ParsedTitle: "Undated"})
-	for id, at := range map[int64]int64{newer: 2000, older: 1000} {
+	for id, at := range map[uid.ID]int64{newer: 2000, older: 1000} {
 		if _, err := f.d.Exec(`INSERT INTO item_metadata (item_id, provider, status, title, published_at) VALUES (?, 'youtube', 'matched', '', ?)`, id, at); err != nil {
 			t.Fatal(err)
 		}
 	}
 	files := mediafile.New(f.d)
-	for _, id := range []int64{special, e1, e2, newer, older, undated, f.songs[0]} {
-		if err := files.CreateFile(&mediafile.File{ItemID: id, Path: "/f/" + strconv.FormatInt(id, 10), ModifiedAt: time.Now()}); err != nil {
+	for _, id := range []uid.ID{special, e1, e2, newer, older, undated, f.songs[0]} {
+		if err := files.CreateFile(&mediafile.File{ItemID: &id, Path: "/f/" + id.String(), FileModifiedAt: time.Now()}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	expand := func(itemID int64, a item.Audience) (ids []int64, libs []int64) {
+	expand := func(itemID uid.ID, a item.Audience) (ids []uid.ID, libs []uid.ID) {
 		t.Helper()
-		rows, err := f.r.Expand(itemID, 0, 0, a)
+		rows, err := f.r.Expand(&itemID, nil, nil, a)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -664,19 +666,19 @@ func TestExpand(t *testing.T) {
 		}
 		return ids, libs
 	}
-	if got, libs := expand(show, item.Audience{}); !slices.Equal(got, []int64{e1, e2, special}) || libs[0] != tv.ID {
+	if got, libs := expand(show, item.Audience{}); !slices.Equal(got, []uid.ID{e1, e2, special}) || libs[0] != tv.ID {
 		t.Fatalf("show %v %v", got, libs)
 	}
-	if got, _ := expand(channel, item.Audience{}); !slices.Equal(got, []int64{older, newer, undated}) {
+	if got, _ := expand(channel, item.Audience{}); !slices.Equal(got, []uid.ID{older, newer, undated}) {
 		t.Fatalf("channel %v", got)
 	}
-	if got, libs := expand(newer, item.Audience{}); !slices.Equal(got, []int64{newer}) || libs[0] != yt.ID {
+	if got, libs := expand(newer, item.Audience{}); !slices.Equal(got, []uid.ID{newer}) || libs[0] != yt.ID {
 		t.Fatalf("a video %v", got)
 	}
 	if got, _ := expand(channel, item.Audience{Kid: true}); len(got) != 0 {
 		t.Fatalf("a channel not for kids gives a kid nothing: %v", got)
 	}
-	if got, _ := expand(f.songs[0], item.Audience{}); !slices.Equal(got, []int64{f.songs[0]}) {
+	if got, _ := expand(f.songs[0], item.Audience{}); !slices.Equal(got, []uid.ID{f.songs[0]}) {
 		t.Fatalf("a song %v", got)
 	}
 }
@@ -686,10 +688,10 @@ func TestExpand(t *testing.T) {
 func TestRatings(t *testing.T) {
 	f := setup(t)
 	tv := &library.Library{Name: "TV", Kind: library.TV}
-	if err := library.New(f.d).Create(tv); err != nil {
+	if err := library.New(f.d).Create(tv, nil); err != nil {
 		t.Fatal(err)
 	}
-	mk := func(it *item.Item) int64 {
+	mk := func(it *item.Item) uid.ID {
 		t.Helper()
 		if err := f.items.Create(it); err != nil {
 			t.Fatal(err)
@@ -704,14 +706,14 @@ func TestRatings(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := &playlist.Playlist{AccountID: f.adult, Name: "Mixed", Kind: playlist.TV}
-	if err := f.r.Create(p); err != nil {
+	if err := f.r.Create(p, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := f.r.Ratings(p.ID); err != nil || len(got) != 0 {
 		t.Fatalf("empty: %v %v", got, err)
 	}
-	for _, id := range []int64{show, f.songs[0]} {
-		if err := f.r.AddEntry(&playlist.Entry{PlaylistID: p.ID, ItemID: id}, nil); err != nil {
+	for _, id := range []uid.ID{show, f.songs[0]} {
+		if err := f.r.AddEntry(&playlist.Entry{PlaylistID: p.ID, ItemID: &id}, nil, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -724,13 +726,13 @@ func TestRatings(t *testing.T) {
 func TestShares(t *testing.T) {
 	f := setup(t)
 	b := &account.Account{Kind: account.Adult, Email: "b@example.test", Name: "B"}
-	if err := account.New(f.d).Create(b); err != nil {
+	if err := account.New(f.d).Create(b, nil); err != nil {
 		t.Fatal(err)
 	}
 	p := &playlist.Playlist{AccountID: f.adult, Name: "Zed", Kind: playlist.Music}
 	own := &playlist.Playlist{AccountID: b.ID, Name: "Alpha", Kind: playlist.Music}
 	for _, x := range []*playlist.Playlist{p, own} {
-		if err := f.r.Create(x); err != nil {
+		if err := f.r.Create(x, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -783,13 +785,13 @@ func TestHouseholdShares(t *testing.T) {
 	}
 	accounts := account.New(f.d)
 	h := &household.Household{Name: "Home", AdultID: f.adult}
-	must(household.New(f.d).Create(h))
+	must(household.New(f.d).Create(h, nil))
 	kid := &account.Account{Kind: account.Kid, Name: "Kid", HouseholdID: &h.ID}
 	late := &account.Account{Kind: account.Adult, Email: "late@example.test", Name: "Late"}
-	must(accounts.Create(kid))
-	must(accounts.Create(late))
+	must(accounts.Create(kid, nil))
+	must(accounts.Create(late, nil))
 	p := &playlist.Playlist{AccountID: f.adult, Name: "Home", Kind: playlist.Music}
-	must(f.r.Create(p))
+	must(f.r.Create(p, nil))
 
 	sh := &playlist.HouseholdShare{PlaylistID: p.ID, HouseholdID: h.ID, Access: playlist.Write}
 	if err := f.r.CreateHouseholdShare(sh); err != nil || sh.CreatedAt.IsZero() {
@@ -804,16 +806,16 @@ func TestHouseholdShares(t *testing.T) {
 	if all, err := f.r.HouseholdShares(p.ID, 10, 0); err != nil || len(all) != 1 || all[0].HouseholdID != h.ID {
 		t.Fatal(err, all)
 	}
-	access := func(id int64, want string) {
+	access := func(id uid.ID, want string) {
 		t.Helper()
 		if got, err := f.r.Access(p.ID, id); err != nil || got != want {
-			t.Fatalf("access of %d: %q, want %q (%v)", id, got, want, err)
+			t.Fatalf("access of %s: %q, want %q (%v)", id, got, want, err)
 		}
 	}
-	listed := func(id int64, want int) {
+	listed := func(id uid.ID, want int) {
 		t.Helper()
 		if list, err := f.r.List(id, "", 10, 0); err != nil || len(list) != want {
-			t.Fatalf("listed for %d: %v %+v", id, err, list)
+			t.Fatalf("listed for %s: %v %+v", id, err, list)
 		}
 	}
 	access(kid.ID, playlist.Read)
@@ -829,7 +831,7 @@ func TestHouseholdShares(t *testing.T) {
 	must(f.r.CreateShare(&playlist.Share{PlaylistID: p.ID, AccountID: late.ID, Access: playlist.Read}))
 	access(late.ID, playlist.Write)
 	listed(late.ID, 1)
-	if who, err := f.r.Audience(p.ID); err != nil || !slices.Equal(who, []int64{f.adult, kid.ID, late.ID}) {
+	if who, err := f.r.Audience(p.ID); err != nil || !slices.Equal(who, []uid.ID{f.adult, kid.ID, late.ID}) {
 		t.Fatal(err, who)
 	}
 
@@ -849,11 +851,11 @@ func TestHouseholdShares(t *testing.T) {
 func TestExpansionStartsFromTheEntries(t *testing.T) {
 	f := setup(t)
 	p := &playlist.Playlist{AccountID: f.adult, Name: "P", Kind: playlist.Music}
-	if err := f.r.Create(p); err != nil {
+	if err := f.r.Create(p, nil); err != nil {
 		t.Fatal(err)
 	}
-	e := &playlist.Entry{PlaylistID: p.ID, ItemID: f.songs[0]}
-	if err := f.r.AddEntry(e, nil); err != nil {
+	e := &playlist.Entry{PlaylistID: p.ID, ItemID: &f.songs[0]}
+	if err := f.r.AddEntry(e, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	pl := &dbtest.Planner{DBTX: f.d}
@@ -880,5 +882,77 @@ func TestExpansionStartsFromTheEntries(t *testing.T) {
 				t.Errorf("%s in:\n%s", line, plan)
 			}
 		}
+	}
+}
+
+// A create takes the client's id when given, refuses one already taken and
+// mints one otherwise; creates and edits stamp who made them, and marking a
+// playlist played is no edit.
+func TestClientIDsAndActors(t *testing.T) {
+	f := setup(t)
+	other := &account.Account{Kind: account.Adult, Email: "o@example.test", Name: "O"}
+	if err := account.New(f.d).Create(other, nil); err != nil {
+		t.Fatal(err)
+	}
+	by, edit := &f.adult, &other.ID
+	chosen := uid.New()
+	p := &playlist.Playlist{ID: chosen, AccountID: f.adult, Name: "Mine", Kind: playlist.Music}
+	if err := f.r.Create(p, by); err != nil || p.ID != chosen {
+		t.Fatalf("%v %s", err, p.ID)
+	}
+	got, err := f.r.Get(chosen)
+	if err != nil || *got.CreatedBy != f.adult || *got.ModifiedBy != f.adult || !got.CreatedAt.Equal(got.ModifiedAt) {
+		t.Fatalf("%+v %v", got, err)
+	}
+	if err := f.r.Create(&playlist.Playlist{ID: chosen, AccountID: f.adult, Name: "Again", Kind: playlist.Music}, by); !errors.Is(err, db.ErrConflict) {
+		t.Fatalf("a taken id: %v", err)
+	}
+	minted := &playlist.Playlist{AccountID: f.adult, Name: "Minted", Kind: playlist.Music}
+	if err := f.r.Create(minted, nil); err != nil || minted.ID.IsZero() || minted.CreatedBy != nil {
+		t.Fatalf("%+v %v", minted, err)
+	}
+	if _, err := uid.Parse(minted.ID.String()); err != nil {
+		t.Fatal(err)
+	}
+	p.Name = "Ours"
+	if err := f.r.Update(p, edit); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.r.MarkPlayed(p.ID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := f.r.Get(p.ID); err != nil || *got.CreatedBy != f.adult || *got.ModifiedBy != other.ID ||
+		!got.ModifiedAt.Equal(p.ModifiedAt) || got.LastPlayedAt == nil {
+		t.Fatalf("after an edit and a play %+v %v", got, err)
+	}
+
+	song := f.songs[0]
+	entryID := uid.New()
+	e := &playlist.Entry{ID: entryID, PlaylistID: p.ID, ItemID: &song}
+	if err := f.r.AddEntry(e, nil, by); err != nil || e.ID != entryID || *e.CreatedBy != f.adult || *e.ModifiedBy != f.adult {
+		t.Fatalf("%+v %v", e, err)
+	}
+	if err := f.r.AddEntry(&playlist.Entry{ID: entryID, PlaylistID: p.ID, ItemID: &song}, nil, by); !errors.Is(err, db.ErrConflict) {
+		t.Fatalf("a taken entry id: %v", err)
+	}
+	batchID := uid.New()
+	batch := []*playlist.Entry{{ID: batchID, PlaylistID: p.ID, ItemID: &song}, {PlaylistID: p.ID, ItemID: &song}}
+	if err := f.r.AddEntries(batch, by); err != nil || batch[0].ID != batchID || batch[1].ID.IsZero() || *batch[1].CreatedBy != f.adult {
+		t.Fatalf("batch %+v %+v %v", batch[0], batch[1], err)
+	}
+	// A batch with a taken id writes none of its entries.
+	clash := []*playlist.Entry{{PlaylistID: p.ID, ItemID: &song}, {ID: batchID, PlaylistID: p.ID, ItemID: &song}}
+	if err := f.r.AddEntries(clash, by); !errors.Is(err, db.ErrConflict) {
+		t.Fatalf("a batch with a taken id: %v", err)
+	}
+	if n, _ := f.r.CountEntries(p.ID); n != 3 {
+		t.Fatalf("entries after the failed batch %d", n)
+	}
+	zero := 0
+	if err := f.r.MoveEntry(batchID, &zero, edit); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := f.r.Entry(batchID); err != nil || got.Position != 0 || *got.CreatedBy != f.adult || *got.ModifiedBy != other.ID {
+		t.Fatalf("after a move %+v %v", got, err)
 	}
 }

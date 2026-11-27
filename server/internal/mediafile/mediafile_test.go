@@ -18,14 +18,15 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/library"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/mediafile"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/seekpreview"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 func i(n int) *int { return &n }
 
-func setup(t *testing.T) (*mediafile.Repo, int64, int64) {
+func setup(t *testing.T) (*mediafile.Repo, uid.ID, uid.ID) {
 	d := dbtest.Open(t)
 	l := &library.Library{Name: "m", Kind: library.Movies}
-	if err := library.New(d).Create(l); err != nil {
+	if err := library.New(d).Create(l, nil); err != nil {
 		t.Fatal(err)
 	}
 	it := &item.Item{LibraryID: l.ID, Kind: item.Movie, ParsedTitle: "x"}
@@ -38,14 +39,15 @@ func setup(t *testing.T) (*mediafile.Repo, int64, int64) {
 func TestFileCRUDAndQueries(t *testing.T) {
 	r, lib, it := setup(t)
 	mod := time.Date(2026, 1, 1, 12, 0, 0, 0, time.FixedZone("x", 7200))
-	f := &mediafile.File{ItemID: it, Path: "/m/a.mkv", SizeBytes: 100, ModifiedAt: mod}
+	f := &mediafile.File{ItemID: &it, Path: "/m/a.mkv", SizeBytes: 100, FileModifiedAt: mod}
 	if err := r.CreateFile(f); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.CreateFile(&mediafile.File{ItemID: it, Path: "/m/a.mkv"}); !errors.Is(err, db.ErrConflict) {
+	if err := r.CreateFile(&mediafile.File{ItemID: &it, Path: "/m/a.mkv"}); !errors.Is(err, db.ErrConflict) {
 		t.Fatalf("dup path: %v", err)
 	}
-	if err := r.CreateFile(&mediafile.File{ItemID: 999, Path: "/m/z.mkv"}); !errors.Is(err, db.ErrReference) {
+	bad := uid.N(999)
+	if err := r.CreateFile(&mediafile.File{ItemID: &bad, Path: "/m/z.mkv"}); !errors.Is(err, db.ErrReference) {
 		t.Fatalf("bad item: %v", err)
 	}
 	probed := mod.Add(time.Hour)
@@ -55,7 +57,8 @@ func TestFileCRUDAndQueries(t *testing.T) {
 		t.Fatal(err)
 	}
 	g, err := r.File(f.ID)
-	if err != nil || g.Container != "matroska" || *g.DurationMs != dur || !g.ModifiedAt.Equal(mod) || g.ModifiedAt.Location() != time.UTC {
+	if err != nil || g.Container != "matroska" || *g.DurationMs != dur || !g.FileModifiedAt.Equal(mod) || g.FileModifiedAt.Location() != time.UTC ||
+		g.CreatedAt.IsZero() || g.ModifiedAt.Before(g.CreatedAt) || *g.ItemID != it {
 		t.Fatalf("%+v %v", g, err)
 	}
 	if p, err := r.FileByPath("/m/a.mkv"); err != nil || p.ID != f.ID {
@@ -80,10 +83,10 @@ func TestFileCRUDAndQueries(t *testing.T) {
 func TestMissingMark(t *testing.T) {
 	r, _, it := setup(t)
 	probed := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
-	if u, err := r.Unavailable([]int64{it}); err != nil || len(u) != 0 {
+	if u, err := r.Unavailable([]uid.ID{it}); err != nil || len(u) != 0 {
 		t.Fatalf("an item without files is unavailable: %v %v", u, err)
 	}
-	f := &mediafile.File{ItemID: it, Path: "/m/a.mkv", ProbedAt: &probed}
+	f := &mediafile.File{ItemID: &it, Path: "/m/a.mkv", ProbedAt: &probed}
 	if err := r.CreateFile(f); err != nil {
 		t.Fatal(err)
 	}
@@ -106,14 +109,14 @@ func TestMissingMark(t *testing.T) {
 		t.Fatal("a missing file is offered for previews")
 	}
 	// Its item is unavailable until one of the item's files is present.
-	if u, err := r.Unavailable([]int64{it}); err != nil || !u[it] {
+	if u, err := r.Unavailable([]uid.ID{it}); err != nil || !u[it] {
 		t.Fatalf("unavailable %v %v", u, err)
 	}
-	copied := &mediafile.File{ItemID: it, Path: "/m/b.mkv"}
+	copied := &mediafile.File{ItemID: &it, Path: "/m/b.mkv"}
 	if err := r.CreateFile(copied); err != nil {
 		t.Fatal(err)
 	}
-	if u, err := r.Unavailable([]int64{it}); err != nil || len(u) != 0 {
+	if u, err := r.Unavailable([]uid.ID{it}); err != nil || len(u) != 0 {
 		t.Fatalf("unavailable with a copy present: %v %v", u, err)
 	}
 	if err := r.DeleteFile(copied.ID); err != nil {
@@ -132,7 +135,7 @@ func TestMissingMark(t *testing.T) {
 
 func TestTracksRoundTripAndReplace(t *testing.T) {
 	r, _, it := setup(t)
-	f := &mediafile.File{ItemID: it, Path: "/m/a.mkv"}
+	f := &mediafile.File{ItemID: &it, Path: "/m/a.mkv"}
 	if err := r.CreateFile(f); err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +194,7 @@ func TestTracksRoundTripAndReplace(t *testing.T) {
 
 func TestChapters(t *testing.T) {
 	r, _, it := setup(t)
-	f := &mediafile.File{ItemID: it, Path: "/m/a.mkv"}
+	f := &mediafile.File{ItemID: &it, Path: "/m/a.mkv"}
 	_ = r.CreateFile(f)
 	cs := []*mediafile.Chapter{{Position: 0, StartMs: 0, EndMs: 1000, Title: "One"}, {Position: 1, StartMs: 1000, EndMs: 2000}}
 	if err := r.ReplaceChapters(f.ID, cs); err != nil {
@@ -210,7 +213,7 @@ func TestChapters(t *testing.T) {
 	if got, _ := r.Chapters(f.ID); len(got) != 2 {
 		t.Fatal("rollback expected")
 	}
-	if err := r.SetChapterThumbnail(999, "x"); !errors.Is(err, db.ErrNotFound) {
+	if err := r.SetChapterThumbnail(uid.N(999), "x"); !errors.Is(err, db.ErrNotFound) {
 		t.Fatal(err)
 	}
 }
@@ -218,9 +221,9 @@ func TestChapters(t *testing.T) {
 // made gives a file seek preview frames and a chapter thumbnail on disk
 // under the data folder root, as the scan does, and returns the preview and
 // thumbnail folders.
-func made(t *testing.T, d *sql.DB, r *mediafile.Repo, root string, fileID int64) (string, string) {
+func made(t *testing.T, d *sql.DB, r *mediafile.Repo, root string, fileID uid.ID) (string, string) {
 	t.Helper()
-	id := strconv.FormatInt(fileID, 10)
+	id := fileID.String()
 	previews, thumbs := filepath.Join(root, "previews", id), filepath.Join(root, "thumbnails", id)
 	for _, p := range []string{filepath.Join(previews, "0.jpg"), filepath.Join(thumbs, "0.jpg")} {
 		if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
@@ -256,7 +259,7 @@ func gone(paths ...string) bool {
 func TestDeleteFileRemovesWhatWasMadeFromIt(t *testing.T) {
 	d := dbtest.Open(t)
 	l := &library.Library{Name: "m", Kind: library.Movies}
-	if err := library.New(d).Create(l); err != nil {
+	if err := library.New(d).Create(l, nil); err != nil {
 		t.Fatal(err)
 	}
 	it := &item.Item{LibraryID: l.ID, Kind: item.Movie, ParsedTitle: "x"}
@@ -264,7 +267,7 @@ func TestDeleteFileRemovesWhatWasMadeFromIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := mediafile.New(d)
-	f := &mediafile.File{ItemID: it.ID, Path: "/m/a.mkv"}
+	f := &mediafile.File{ItemID: &it.ID, Path: "/m/a.mkv"}
 	if err := r.CreateFile(f); err != nil {
 		t.Fatal(err)
 	}
@@ -282,7 +285,7 @@ func TestDeleteFileRemovesWhatWasMadeFromIt(t *testing.T) {
 func TestDeleteFileAfterTheDataFolderMoved(t *testing.T) {
 	d := dbtest.Open(t)
 	l := &library.Library{Name: "m", Kind: library.Movies}
-	if err := library.New(d).Create(l); err != nil {
+	if err := library.New(d).Create(l, nil); err != nil {
 		t.Fatal(err)
 	}
 	it := &item.Item{LibraryID: l.ID, Kind: item.Movie, ParsedTitle: "x"}
@@ -290,7 +293,7 @@ func TestDeleteFileAfterTheDataFolderMoved(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := mediafile.New(d)
-	f := &mediafile.File{ItemID: it.ID, Path: "/m/a.mkv"}
+	f := &mediafile.File{ItemID: &it.ID, Path: "/m/a.mkv"}
 	if err := r.CreateFile(f); err != nil {
 		t.Fatal(err)
 	}
@@ -302,7 +305,7 @@ func TestDeleteFileAfterTheDataFolderMoved(t *testing.T) {
 		t.Fatal(err)
 	}
 	dbtest.DataDir(t, now)
-	id := strconv.FormatInt(f.ID, 10)
+	id := f.ID.String()
 	if cs, err := r.Chapters(f.ID); err != nil || cs[0].ThumbnailPath != filepath.Join(now, "thumbnails", id, "0.jpg") {
 		t.Fatalf("%v %+v", err, cs)
 	}
@@ -319,7 +322,7 @@ func TestDeleteFileAfterTheDataFolderMoved(t *testing.T) {
 func TestDeleteItemRemovesWhatWasMadeFromItsFiles(t *testing.T) {
 	d := dbtest.Open(t)
 	l := &library.Library{Name: "t", Kind: library.TV}
-	if err := library.New(d).Create(l); err != nil {
+	if err := library.New(d).Create(l, nil); err != nil {
 		t.Fatal(err)
 	}
 	items := item.New(d)
@@ -339,7 +342,7 @@ func TestDeleteItemRemovesWhatWasMadeFromItsFiles(t *testing.T) {
 		}
 	}
 	r := mediafile.New(d)
-	only, shared := &mediafile.File{ItemID: ep.ID, Path: "/t/a.mkv"}, &mediafile.File{ItemID: ep.ID, Path: "/t/b.mkv"}
+	only, shared := &mediafile.File{ItemID: &ep.ID, Path: "/t/a.mkv"}, &mediafile.File{ItemID: &ep.ID, Path: "/t/b.mkv"}
 	for _, f := range []*mediafile.File{only, shared} {
 		if err := r.CreateFile(f); err != nil {
 			t.Fatal(err)
@@ -371,17 +374,17 @@ func TestDeleteLibraryRemovesWhatWasMadeFromItsFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	var files []*mediafile.File
-	var libIDs []int64
+	var libIDs []uid.ID
 	for n, p := range []string{media, "/b/b.mkv"} {
 		l := &library.Library{Name: strconv.Itoa(n), Kind: library.Movies}
-		if err := libs.Create(l); err != nil {
+		if err := libs.Create(l, nil); err != nil {
 			t.Fatal(err)
 		}
 		it := &item.Item{LibraryID: l.ID, Kind: item.Movie, ParsedTitle: "x"}
 		if err := items.Create(it); err != nil {
 			t.Fatal(err)
 		}
-		f := &mediafile.File{ItemID: it.ID, Path: p}
+		f := &mediafile.File{ItemID: &it.ID, Path: p}
 		if err := r.CreateFile(f); err != nil {
 			t.Fatal(err)
 		}
@@ -415,14 +418,14 @@ func TestLibraryTotals(t *testing.T) {
 		t.Fatalf("empty library: %d %d %v", n, b, err)
 	}
 	for i, size := range []int64{100, 2_000_000_000, 3_000_000_000} {
-		if err := r.CreateFile(&mediafile.File{ItemID: it, Path: "/m/" + string(rune('a'+i)) + ".mkv", SizeBytes: size}); err != nil {
+		if err := r.CreateFile(&mediafile.File{ItemID: &it, Path: "/m/" + string(rune('a'+i)) + ".mkv", SizeBytes: size}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if n, b, err := r.Totals(lib); err != nil || n != 3 || b != 5_000_000_100 {
 		t.Fatalf("totals: %d %d %v", n, b, err)
 	}
-	if n, b, _ := r.Totals(lib + 1); n != 0 || b != 0 {
+	if n, b, _ := r.Totals(uid.New()); n != 0 || b != 0 {
 		t.Fatalf("other library: %d %d", n, b)
 	}
 }
@@ -432,10 +435,10 @@ func TestLibraryTotals(t *testing.T) {
 func TestLibraryFilesStartFromItsItems(t *testing.T) {
 	p := &dbtest.Planner{DBTX: dbtest.Open(t)}
 	r := mediafile.New(p)
-	if _, _, err := r.Totals(1); err != nil {
+	if _, _, err := r.Totals(uid.N(1)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.FilesInLibrary(1); err != nil {
+	if _, err := r.FilesInLibrary(uid.N(1)); err != nil {
 		t.Fatal(err)
 	}
 	for _, plan := range p.Plans {
@@ -453,9 +456,9 @@ func TestProblems(t *testing.T) {
 	r, lib, it := setup(t)
 	at := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	zero := int64(0)
-	stated := &mediafile.File{ItemID: it, Path: "/m/a.mkv", ProbedAt: &at, DurationMs: &zero}
+	stated := &mediafile.File{ItemID: &it, Path: "/m/a.mkv", ProbedAt: &at, DurationMs: &zero}
 	loose := &mediafile.File{Path: "/m/b.mkv", ProbeFailedAt: &at, ProbeError: "no"}
-	gone := &mediafile.File{ItemID: it, Path: "/m/c.mkv", ProbedAt: &at}
+	gone := &mediafile.File{ItemID: &it, Path: "/m/c.mkv", ProbedAt: &at}
 	for _, f := range []*mediafile.File{stated, loose, gone} {
 		if err := r.CreateFile(f); err != nil {
 			t.Fatal(err)
@@ -468,18 +471,19 @@ func TestProblems(t *testing.T) {
 		t.Fatal(err)
 	}
 	for problem, want := range map[string]*mediafile.File{mediafile.NoDuration: stated, mediafile.Unreadable: loose, mediafile.Missing: gone} {
-		got, err := r.Problems(problem, 0)
+		got, err := r.Problems(problem, nil)
 		if n, _ := r.ProblemCount(problem); err != nil || len(got) != 1 || n != 1 || got[0].ID != want.ID {
 			t.Fatalf("%s: %+v %d %v", problem, got, n, err)
 		}
 	}
-	if got, _ := r.Problems(mediafile.NoDuration, lib); len(got) != 1 || got[0].LibraryID != lib || got[0].Title != "x" {
+	if got, _ := r.Problems(mediafile.NoDuration, &lib); len(got) != 1 || got[0].LibraryID == nil || *got[0].LibraryID != lib || got[0].Title != "x" {
 		t.Fatalf("in its library %+v", got)
 	}
-	if got, _ := r.Problems(mediafile.Unreadable, 0); got[0].LibraryID != 0 || got[0].Title != "" || got[0].ProbeError != "no" {
+	if got, _ := r.Problems(mediafile.Unreadable, nil); got[0].LibraryID != nil || got[0].Title != "" || got[0].ProbeError != "no" || got[0].ItemID != nil {
 		t.Fatalf("of no item %+v", got[0])
 	}
-	if got, _ := r.Problems(mediafile.NoDuration, lib+1); len(got) != 0 {
+	other := uid.New()
+	if got, _ := r.Problems(mediafile.NoDuration, &other); len(got) != 0 {
 		t.Fatalf("another library %+v", got)
 	}
 	if err := r.ForgetProbe(stated.ID); err != nil {

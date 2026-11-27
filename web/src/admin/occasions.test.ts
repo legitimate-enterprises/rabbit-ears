@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { boot } from "./app";
 import { setToken } from "./api";
+import { uid } from "../api/uid";
 
 type Handler = (body: unknown, url: URL) => unknown;
 const calls: { key: string; body: unknown }[] = [];
@@ -9,7 +10,7 @@ const calls: { key: string; body: unknown }[] = [];
 function mockFetch(routes: Record<string, Handler | unknown>) {
   return async (req: Request) => {
     const url = new URL(req.url, "http://x");
-    const key = `${req.method} ${url.pathname.replace("/api/v1", "")}`;
+    const key = `${req.method} ${url.pathname.replace("/api/v2", "")}`;
     const body =
       req.method === "GET" || req.method === "DELETE"
         ? undefined
@@ -32,25 +33,25 @@ function mockFetch(routes: Record<string, Handler | unknown>) {
 }
 
 const adult = {
-  id: 1,
+  id: uid(1),
   kind: "adult",
   name: "Ada",
   email: "ada@example.com",
   isAdmin: true,
-  householdId: 1,
+  householdId: uid(1),
   hasPin: false,
   pinLocked: false,
   pending: false,
   filterMode: "ratings",
   createdAt: "2026-01-01T00:00:00Z",
-  updatedAt: "2026-01-01T00:00:00Z",
+  modifiedAt: "2026-01-01T00:00:00Z",
 };
 const device = {
-  id: 9,
+  id: uid(9),
   name: "Admin web",
   platform: "web",
-  accountId: 1,
-  householdId: 1,
+  accountId: uid(1),
+  householdId: uid(1),
   createdAt: "2026-01-01T00:00:00Z",
 };
 const page = (items: unknown[]) => ({ items });
@@ -96,7 +97,7 @@ const holidays = [
   { key: "valentine", name: "Valentine's Day", dates: ["2026-02-14", "2027-02-14"] },
 ];
 const occ = (id: number, name: string, extra: object) => ({
-  id,
+  id: uid(id),
   name,
   daysBefore: 0,
   daysAfter: 0,
@@ -127,13 +128,13 @@ const six = [
   christmas,
 ];
 const title = (id: number, name: string, kind = "movie", year = 2020) => ({
-  id,
-  libraryId: 1,
+  id: uid(id),
+  libraryId: uid(1),
   kind,
   parsedTitle: name.toLowerCase(),
   metadata: { provider: "tmdb", status: "matched", title: name, releaseDate: `${year}-01-01` },
   addedAt: "",
-  updatedAt: "",
+  modifiedAt: "",
 });
 const member = (id: number, name: string, via = "keyword", kind = "movie", year = 2020) => ({
   item: title(id, name, kind, year),
@@ -150,16 +151,19 @@ const routes = () => {
     "GET /me": {
       device,
       account: adult,
-      activeProfileId: 1,
-      household: { id: 1, name: "Ada", adultId: 1, createdAt: "" },
+      activeProfileId: uid(1),
+      household: { id: uid(1), name: "Ada", adultId: uid(1), createdAt: "" },
       profiles: [adult],
     },
     "GET /holidays": page(holidays),
     "GET /occasions": () => page(occasions),
     ...Object.fromEntries(
       [1, 2, 3, 4, 5, 6, 7].flatMap((n) => [
-        [`GET /occasions/${n}`, () => (occasions as { id: number }[]).find((o) => o.id === n)],
-        [`GET /occasions/${n}/members`, () => page(members[n] ?? [])],
+        [
+          `GET /occasions/${uid(n)}`,
+          () => (occasions as { id: string }[]).find((o) => o.id === uid(n)),
+        ],
+        [`GET /occasions/${uid(n)}/members`, () => page(members[n] ?? [])],
       ]),
     ),
     ...extra,
@@ -230,12 +234,12 @@ describe("occasions list", () => {
     expect(rows[5][4]).toBe("Starts Oct 1");
     expect(rows[5][3]).toBe("1");
     const edit = root.querySelector<HTMLAnchorElement>("a[aria-label='Edit Christmas']")!;
-    expect(edit.getAttribute("href")).toBe("#/occasions/1");
+    expect(edit.getAttribute("href")).toBe(`#/occasions/${uid(1)}`);
     expect(byText("a", "Add occasion")!.getAttribute("href")).toBe("#/occasions/new");
   });
 
   it("counts every page of members", async () => {
-    extra["GET /occasions/1/members"] = (_: unknown, url: URL) =>
+    extra[`GET /occasions/${uid(1)}/members`] = (_: unknown, url: URL) =>
       url.searchParams.get("offset") === "0"
         ? { items: [member(1, "A"), member(2, "B")], nextOffset: 2 }
         : { items: [member(3, "C")] };
@@ -295,7 +299,7 @@ describe("new occasion", () => {
       daysAfter: 5,
       keywordIds: [],
     });
-    expect(location.hash).toBe("#/occasions/7");
+    expect(location.hash).toBe(`#/occasions/${uid(7)}`);
   });
 
   it("saves a fixed month and day, with keyword ids", async () => {
@@ -507,7 +511,7 @@ describe("edit occasion", () => {
   });
 
   it("fills the form from the occasion and says it is active", async () => {
-    await open("#/occasions/1");
+    await open(`#/occasions/${uid(1)}`);
     expect(root.querySelector("h1")!.textContent).toBe("Christmas");
     expect(root.textContent).toContain("Active today");
     expect(root.textContent).toContain("Shows Nov 15 – Dec 30");
@@ -526,7 +530,7 @@ describe("edit occasion", () => {
   });
 
   it("fills a fixed anchor", async () => {
-    await open("#/occasions/4");
+    await open(`#/occasions/${uid(4)}`);
     expect(control("Fixed date").checked).toBe(true);
     expect(aria<HTMLSelectElement>("Month").value).toBe("1");
     expect(aria<HTMLInputElement>("Day").value).toBe("15");
@@ -536,8 +540,8 @@ describe("edit occasion", () => {
   });
 
   it("replaces the occasion with the changed form, switching anchor kinds", async () => {
-    extra["PUT /occasions/1"] = (b: object) => occ(1, "x", b);
-    await open("#/occasions/1");
+    extra[`PUT /occasions/${uid(1)}`] = (b: object) => occ(1, "x", b);
+    await open(`#/occasions/${uid(1)}`);
     click(control("Fixed date"));
     set(aria<HTMLSelectElement>("Month"), "12");
     set(aria<HTMLInputElement>("Day"), "24");
@@ -545,7 +549,7 @@ describe("edit occasion", () => {
     click(aria("Remove keyword 207317"));
     submit();
     await settle();
-    expect(body("PUT /occasions/1")).toEqual({
+    expect(body(`PUT /occasions/${uid(1)}`)).toEqual({
       name: "Christmas",
       month: 12,
       day: 24,
@@ -559,8 +563,8 @@ describe("edit occasion", () => {
   });
 
   it("fills the phrases and colors, and replaces them as edited", async () => {
-    extra["PUT /occasions/1"] = (b: object) => occ(1, "x", b);
-    await open("#/occasions/1");
+    extra[`PUT /occasions/${uid(1)}`] = (b: object) => occ(1, "x", b);
+    await open(`#/occasions/${uid(1)}`);
     expect(phrases()).toEqual(["Ho, Ho, Ho!", "Merry Movies"]);
     expect(swatches()).toEqual(["#1f6b45", "#b3263e", "#e0b252"]);
     click(aria("Remove phrase Ho, Ho, Ho!"));
@@ -569,7 +573,7 @@ describe("edit occasion", () => {
     set(aria<HTMLInputElement>("Color 2"), "#000000");
     submit();
     await settle();
-    expect(body("PUT /occasions/1")).toMatchObject({
+    expect(body(`PUT /occasions/${uid(1)}`)).toMatchObject({
       phrases: ["Merry Movies", "Sleigh Bells"],
       colors: ["#1f6b45", "#000000", "#e0b252"],
     });
@@ -578,32 +582,32 @@ describe("edit occasion", () => {
     calls.length = 0;
     submit();
     await settle();
-    expect(body("PUT /occasions/1")).toMatchObject({
+    expect(body(`PUT /occasions/${uid(1)}`)).toMatchObject({
       phrases: ["Merry Movies", "Sleigh Bells"],
       colors: [],
     });
   });
 
   it("sends no colors and no phrases for an occasion with none", async () => {
-    extra["PUT /occasions/4"] = (b: object) => occ(4, "x", b);
-    await open("#/occasions/4");
+    extra[`PUT /occasions/${uid(4)}`] = (b: object) => occ(4, "x", b);
+    await open(`#/occasions/${uid(4)}`);
     expect(phrases()).toEqual([]);
     expect(swatches()).toEqual([undefined, undefined, undefined]);
     submit();
     await settle();
-    expect(body("PUT /occasions/4")).toMatchObject({ phrases: [], colors: [] });
+    expect(body(`PUT /occasions/${uid(4)}`)).toMatchObject({ phrases: [], colors: [] });
   });
 
   it("shows a duplicate name from the server", async () => {
-    extra["PUT /occasions/1"] = () => err(409, "conflict", "name taken");
-    await open("#/occasions/1");
+    extra[`PUT /occasions/${uid(1)}`] = () => err(409, "conflict", "name taken");
+    await open(`#/occasions/${uid(1)}`);
     submit();
     await settle();
     expect(alertText()).toBe("name taken");
   });
 
   it("lists the members by source, with a count summary", async () => {
-    await open("#/occasions/1");
+    await open(`#/occasions/${uid(1)}`);
     const sec = document.querySelector("section[aria-label=Titles]")!;
     expect(sec.querySelector("h2")!.textContent).toBe("Titles32 by keyword · 1 added");
     const rows = [...sec.querySelectorAll("tbody tr")].map((tr) =>
@@ -614,13 +618,13 @@ describe("edit occasion", () => {
       ["Tinsel Street", "Show", "2023", "Keyword", "×"],
       ["A Lantern for December", "Movie", "2022", "Added", "×"],
     ]);
-    expect(sec.querySelector("tbody tr i")!.getAttribute("data-art")).toBe("11/poster");
+    expect(sec.querySelector("tbody tr i")!.getAttribute("data-art")).toBe(`${uid(11)}/poster`);
     expect(byText("button", "Show all 3")).toBeUndefined();
   });
 
   it("shows the first ten members until told to show all", async () => {
     members[1] = Array.from({ length: 12 }, (_, i) => member(30 + i, `Film ${i}`));
-    await open("#/occasions/1");
+    await open(`#/occasions/${uid(1)}`);
     expect(document.querySelectorAll("section[aria-label=Titles] tbody tr")).toHaveLength(10);
     click(byText("button", "Show all 12"));
     expect(document.querySelectorAll("section[aria-label=Titles] tbody tr")).toHaveLength(12);
@@ -628,22 +632,25 @@ describe("edit occasion", () => {
   });
 
   it("removes a member and reads the list and counts again", async () => {
-    extra["DELETE /occasions/1/members/13"] = () => {
+    extra[`DELETE /occasions/${uid(1)}/members/${uid(13)}`] = () => {
       members[1] = members[1].slice(0, 2);
       return null;
     };
-    await open("#/occasions/1");
+    await open(`#/occasions/${uid(1)}`);
     click(aria("Remove A Lantern for December"));
     await settle();
-    expect(calls.some((c) => c.key === "DELETE /occasions/1/members/13")).toBe(true);
+    expect(calls.some((c) => c.key === `DELETE /occasions/${uid(1)}/members/${uid(13)}`)).toBe(
+      true,
+    );
     const sec = document.querySelector("section[aria-label=Titles]")!;
     expect(sec.querySelector("h2")!.textContent).toBe("Titles22 by keyword · 0 added");
     expect(sec.querySelectorAll("tbody tr")).toHaveLength(2);
   });
 
   it("shows a refused removal", async () => {
-    extra["DELETE /occasions/1/members/13"] = () => err(404, "not_found", "no such title");
-    await open("#/occasions/1");
+    extra[`DELETE /occasions/${uid(1)}/members/${uid(13)}`] = () =>
+      err(404, "not_found", "no such title");
+    await open(`#/occasions/${uid(1)}`);
     click(aria("Remove A Lantern for December"));
     await settle();
     expect(alertText()).toBe("no such title");
@@ -661,11 +668,11 @@ describe("edit occasion", () => {
       channels: [],
       videos: [],
     });
-    extra["PUT /occasions/1/members/40"] = () => {
+    extra[`PUT /occasions/${uid(1)}/members/${uid(40)}`] = () => {
       members[1] = [...members[1], member(40, "Frosty Nights", "added")];
       return null;
     };
-    await open("#/occasions/1");
+    await open(`#/occasions/${uid(1)}`);
     const q = aria<HTMLInputElement>("Add a movie or show");
     set(q, "fro");
     await new Promise((r) => setTimeout(r, 300));
@@ -679,7 +686,7 @@ describe("edit occasion", () => {
     expect(document.querySelector("[aria-label='Add An episode']")).toBeNull();
     click(aria("Add Frosty Nights"));
     await settle();
-    expect(calls.some((c) => c.key === "PUT /occasions/1/members/40")).toBe(true);
+    expect(calls.some((c) => c.key === `PUT /occasions/${uid(1)}/members/${uid(40)}`)).toBe(true);
     const sec = document.querySelector("section[aria-label=Titles]")!;
     expect(sec.querySelector("h2")!.textContent).toBe("Titles42 by keyword · 2 added");
     expect(sec.querySelectorAll("tbody tr")).toHaveLength(4);
@@ -703,32 +710,32 @@ describe("edit occasion", () => {
       channels: [],
       videos: [],
     });
-    await open("#/occasions/1");
+    await open(`#/occasions/${uid(1)}`);
     set(aria<HTMLInputElement>("Add a movie or show"), "zzz");
     await new Promise((r) => setTimeout(r, 300));
     expect(document.querySelector(".found")!.textContent).toBe("No movie or show matches.");
   });
 
   it("deletes after asking in the page, then returns to the list", async () => {
-    extra["DELETE /occasions/1"] = () => null;
-    await open("#/occasions/1");
+    extra[`DELETE /occasions/${uid(1)}`] = () => null;
+    await open(`#/occasions/${uid(1)}`);
     click(byText("button", "Delete occasion"));
     expect(root.textContent).toContain("Delete Christmas?");
-    expect(calls.some((c) => c.key === "DELETE /occasions/1")).toBe(false);
+    expect(calls.some((c) => c.key === `DELETE /occasions/${uid(1)}`)).toBe(false);
     click(
       [...document.querySelectorAll("button")]
         .filter((b) => b.textContent === "Delete occasion")
         .at(-1),
     );
     await settle();
-    expect(calls.some((c) => c.key === "DELETE /occasions/1")).toBe(true);
+    expect(calls.some((c) => c.key === `DELETE /occasions/${uid(1)}`)).toBe(true);
     expect(location.hash).toBe("#/occasions");
   });
 
   it("offers no delete or titles for a new occasion, and fails on one that is missing", async () => {
     await open("#/occasions/new");
     expect(byText("button", "Delete occasion")).toBeUndefined();
-    await open("#/occasions/99");
+    await open(`#/occasions/${uid(99)}`);
     expect(root.querySelector("[role=alert]")).not.toBeNull();
   });
 });

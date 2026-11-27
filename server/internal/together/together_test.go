@@ -2,7 +2,6 @@ package together_test
 
 import (
 	"errors"
-	"strconv"
 	"testing"
 	"time"
 
@@ -14,34 +13,35 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/library"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/together"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
-type person struct{ account, device int64 }
+type person struct{ account, device uid.ID }
 
 func TestWatchTogether(t *testing.T) {
 	d := dbtest.Open(t)
 	owner := &account.Account{Kind: account.Adult, Email: "h@example.test", Name: "Heidi"}
-	if err := account.New(d).Create(owner); err != nil {
+	if err := account.New(d).Create(owner, nil); err != nil {
 		t.Fatal(err)
 	}
 	h := &household.Household{Name: "Home", AdultID: owner.ID}
-	if err := household.New(d).Create(h); err != nil {
+	if err := household.New(d).Create(h, nil); err != nil {
 		t.Fatal(err)
 	}
 	other := &account.Account{Kind: account.Adult, Email: "c@example.test", Name: "Claire", HouseholdID: &h.ID}
-	if err := account.New(d).Create(other); err != nil {
+	if err := account.New(d).Create(other, nil); err != nil {
 		t.Fatal(err)
 	}
 	var people []person
-	for _, a := range []int64{owner.ID, other.ID} {
-		dev := &device.Device{TokenHash: "t" + strconv.FormatInt(a, 10), Name: "TV", Platform: "tvos", AccountID: a, HouseholdID: h.ID}
+	for _, a := range []uid.ID{owner.ID, other.ID} {
+		dev := &device.Device{TokenHash: "t" + a.String(), Name: "TV", Platform: "tvos", AccountID: a, HouseholdID: h.ID}
 		if err := device.New(d).Create(dev); err != nil {
 			t.Fatal(err)
 		}
 		people = append(people, person{a, dev.ID})
 	}
 	l := &library.Library{Name: "Movies", Kind: library.Movies}
-	if err := library.New(d).Create(l); err != nil {
+	if err := library.New(d).Create(l, nil); err != nil {
 		t.Fatal(err)
 	}
 	movie := &item.Item{LibraryID: l.ID, Kind: item.Movie, ParsedTitle: "Dune"}
@@ -53,19 +53,19 @@ func TestWatchTogether(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	w := &together.Together{HouseholdID: h.ID, ItemID: movie.ID, PositionAt: now, OpenedAt: now, JoinBy: now.Add(together.JoinWindow)}
 	host := &together.Member{AccountID: people[0].account, DeviceID: people[0].device, Role: together.Host, JoinedAt: now, LastSeenAt: now}
-	if err := r.Create(w, host); err != nil || w.ID == 0 || w.Version != 1 {
+	if err := r.Create(w, host); err != nil || w.ID.IsZero() || w.Version != 1 {
 		t.Fatalf("%+v %v", w, err)
 	}
-	if open, err := r.Open(h.ID, movie.ID); err != nil || len(open) != 1 || open[0].ID != w.ID {
+	if open, err := r.Open(&h.ID, &movie.ID); err != nil || len(open) != 1 || open[0].ID != w.ID {
 		t.Fatalf("%v %v", open, err)
 	}
-	if open, _ := r.Open(h.ID, 0); len(open) != 1 {
+	if open, _ := r.Open(&h.ID, nil); len(open) != 1 {
 		t.Fatalf("any item: %v", open)
 	}
-	if open, _ := r.Open(0, 0); len(open) != 1 {
+	if open, _ := r.Open(nil, nil); len(open) != 1 {
 		t.Fatalf("any household: %v", open)
 	}
-	if open, _ := r.Open(h.ID+1, 0); len(open) != 0 {
+	if open, _ := r.Open(new(uid.N(999)), nil); len(open) != 0 {
 		t.Fatalf("another household: %v", open)
 	}
 	guest := &together.Member{WatchTogetherID: w.ID, AccountID: people[1].account, DeviceID: people[1].device, Role: together.Guest, JoinedAt: now, LastSeenAt: now}
@@ -112,7 +112,7 @@ func TestWatchTogether(t *testing.T) {
 	if err := r.Update(got); err != nil {
 		t.Fatal(err)
 	}
-	if open, _ := r.Open(h.ID, movie.ID); len(open) != 0 {
+	if open, _ := r.Open(&h.ID, &movie.ID); len(open) != 0 {
 		t.Fatalf("ended still open: %v", open)
 	}
 }

@@ -1,7 +1,6 @@
 import { expect, test, type APIRequestContext } from "@playwright/test";
-import { email, password, seed, signIn } from "./support";
+import { api, email, password, seed, signIn } from "./support";
 
-const api = "/api/v1";
 type Headers = { Authorization: string };
 
 /** An adult the admin adds, who joins with their code into a household of their own. */

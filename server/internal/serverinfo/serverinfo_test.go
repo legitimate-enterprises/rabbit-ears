@@ -21,7 +21,7 @@ func TestSaveAndRename(t *testing.T) {
 		t.Fatal(err)
 	}
 	i, err := r.Get()
-	if err != nil || i.Name != "Attic" || i.UpdatedAt.Before(i.CreatedAt) {
+	if err != nil || i.Name != "Attic" || i.ModifiedAt.Before(i.CreatedAt) {
 		t.Fatalf("%+v %v", i, err)
 	}
 }

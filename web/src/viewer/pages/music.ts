@@ -44,7 +44,7 @@ interface Row {
   title: string;
   sub?: string;
   ms?: number;
-  id?: number;
+  id?: string;
   on: () => void;
   remove?: () => void;
 }
@@ -109,7 +109,7 @@ function live(paint: (m: Music) => void) {
 const markPlaying = (list: HTMLElement) =>
   live((m) =>
     list.querySelectorAll<HTMLElement>("li[data-id]").forEach((li) => {
-      li.setAttribute("aria-current", String(Number(li.dataset.id) === m.q.current?.id));
+      li.setAttribute("aria-current", String(li.dataset.id === m.q.current?.id));
     }),
   );
 
@@ -131,13 +131,13 @@ const playAll = (
     ...extra,
   );
 
-const albumsOf = (ctx: Ctx, query: { artistId?: number; sort?: Schemas["MusicAlbumSort"] }) =>
+const albumsOf = (ctx: Ctx, query: { artistId?: string; sort?: Schemas["MusicAlbumSort"] }) =>
   paged((offset) =>
     ok(ctx.api.GET("/music/albums", { params: { query: { ...query, limit: 200, offset } } })),
   );
 const songsOf = (
   ctx: Ctx,
-  query: { albumId?: number; artistId?: number; sort?: Schemas["MusicSongSort"] },
+  query: { albumId?: string; artistId?: string; sort?: Schemas["MusicSongSort"] },
 ) =>
   paged((offset) =>
     ok(ctx.api.GET("/music/songs", { params: { query: { ...query, limit: 200, offset } } })),
@@ -267,7 +267,7 @@ export async function music(ctx: Ctx, _a: string[], query: URLSearchParams) {
 }
 
 export async function artist(ctx: Ctx, [id]: string[]) {
-  const artistId = Number(id);
+  const artistId = id;
   const [a, popular, albums] = await Promise.all([
     ok(ctx.api.GET("/music/artists/{artistId}", { params: { path: { artistId } } })),
     ok(
@@ -332,7 +332,7 @@ export async function artist(ctx: Ctx, [id]: string[]) {
 }
 
 export async function album(ctx: Ctx, [id]: string[]) {
-  const albumId = Number(id);
+  const albumId = id;
   const al = await ok(ctx.api.GET("/music/albums/{albumId}", { params: { path: { albumId } } }));
   const [songs, more] = await Promise.all([
     songsOf(ctx, { albumId }),
@@ -429,7 +429,7 @@ const detailsPanel = (a: Schemas["AudioDetails"]) =>
 
 /** The art, or the file details in its place; a click anywhere on it, or its info button, flips it. */
 function artSquare(
-  albumId: number,
+  albumId: string,
   audio: Schemas["AudioDetails"] | undefined,
   flip: { open: boolean },
 ) {
@@ -462,20 +462,20 @@ export async function nowPlaying(ctx: Ctx) {
   const right = h("section", { "aria-label": "Up next" });
   const backEl = h("span");
   // The song whose Add to playlist button is drawn, so a queue change keeps it.
-  let shownId = 0;
+  let shownId: string | undefined;
   let focusAt = -1;
   // Whether the art shows the file details; a visit to the page starts on the art.
   const flip = { open: false };
   live((m) => {
     if (m.station) {
-      shownId = 0;
+      shownId = undefined;
       return station(m, backEl, left, right);
     }
     const s = m.q.current;
     if (!s) return ctx.go("#/music");
     backEl.replaceChildren(back(m.q.from, m.q.fromHref));
     if (s.id !== shownId || !m.pb) {
-      shownId = m.pb ? s.id : 0;
+      shownId = m.pb ? s.id : undefined;
       left.replaceChildren(
         artSquare(s.albumId, m.pb?.stream.audio, flip),
         songText(s),

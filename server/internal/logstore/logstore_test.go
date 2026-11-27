@@ -10,6 +10,7 @@ import (
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db/dbtest"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/logstore"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 func entry(at time.Time, level, source, msg string) *logstore.Entry {
@@ -27,7 +28,7 @@ func TestRepoFiltersAndOrder(t *testing.T) {
 		entry(t0.Add(3*time.Minute), "info", "playback", "Session 7 transcode"),
 	} {
 		if i == 3 {
-			e.SessionID, e.FFmpegCommand, e.TranscodeReason = ptr(int64(7)), cmd, "HEVC not supported"
+			e.SessionID, e.FFmpegCommand, e.TranscodeReason = ptr(uid.N(7)), cmd, "HEVC not supported"
 		}
 		if err := r.Insert(e); err != nil {
 			t.Fatal(err)
@@ -37,7 +38,7 @@ func TestRepoFiltersAndOrder(t *testing.T) {
 	if err != nil || len(all) != 4 || all[0].Source != "playback" || all[3].Source != "scan" {
 		t.Fatalf("newest first: %+v %v", all, err)
 	}
-	if d := all[0]; d.SessionID == nil || *d.SessionID != 7 || d.FFmpegCommand != cmd || d.TranscodeReason != "HEVC not supported" || !d.At.Equal(t0.Add(3*time.Minute)) {
+	if d := all[0]; d.SessionID == nil || *d.SessionID != uid.N(7) || d.FFmpegCommand != cmd || d.TranscodeReason != "HEVC not supported" || !d.At.Equal(t0.Add(3*time.Minute)) {
 		t.Fatalf("detail columns: %+v", d)
 	}
 	for name, c := range map[string]struct {
@@ -94,7 +95,7 @@ func TestHandlerMapsAttrsAndRedacts(t *testing.T) {
 	var stderr bytes.Buffer
 	sink := &memSink{}
 	l := slog.New(logstore.NewHandler(slog.NewTextHandler(&stderr, nil), sink, slog.LevelInfo)).With("source", "playback")
-	l.Info("decided", "session_id", int64(9), "item_id", int64(4), "ffmpeg_command", "ffmpeg -i x", "transcode_reason", "audio codec", "device", "Roku",
+	l.Info("decided", "session_id", uid.N(9), "item_id", uid.N(4).String(), "ffmpeg_command", "ffmpeg -i x", "transcode_reason", "audio codec", "device", "Roku",
 		"api_key", "SECRET1", "pin", "1234", "err", "GET https://x/3/movie?api_key=SECRET2&query=a: refused", "auth", "Bearer SECRET3",
 		"callback", "/callback?code=SECRET4&state=s", "form", "client_secret=SECRET6&code_verifier=SECRET7")
 	l.Debug("dropped")
@@ -102,7 +103,7 @@ func TestHandlerMapsAttrsAndRedacts(t *testing.T) {
 		t.Fatalf("entries %d", len(sink.es))
 	}
 	e := sink.es[0]
-	if e.Level != "info" || e.Source != "playback" || *e.SessionID != 9 || *e.ItemID != 4 || e.FFmpegCommand != "ffmpeg -i x" || e.TranscodeReason != "audio codec" {
+	if e.Level != "info" || e.Source != "playback" || *e.SessionID != uid.N(9) || *e.ItemID != uid.N(4) || e.FFmpegCommand != "ffmpeg -i x" || e.TranscodeReason != "audio codec" {
 		t.Fatalf("%+v", e)
 	}
 	if !strings.Contains(e.Message, "decided") || !strings.Contains(e.Message, "device=Roku") {

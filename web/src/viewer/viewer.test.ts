@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setToken } from "../admin/api";
 import { boot } from "./app";
 import { type Handler, at, calls, json, mockFetch, root, until } from "./testSupport";
+import { uid } from "../api/uid";
 
 // hls.js needs MediaSource, which jsdom lacks; the fake records what the player asks of it.
 interface FakeHls {
@@ -58,7 +59,7 @@ vi.mock("hls.js", () => {
 
 const ts = "2026-01-01T00:00:00Z";
 const acct = (id: number, name: string, kind = "adult", extra = {}) => ({
-  id,
+  id: uid(id),
   kind,
   name,
   isAdmin: false,
@@ -67,15 +68,15 @@ const acct = (id: number, name: string, kind = "adult", extra = {}) => ({
   pending: false,
   filterMode: "ratings",
   createdAt: ts,
-  updatedAt: ts,
+  modifiedAt: ts,
   ...extra,
 });
 const health = { status: "ok", version: "1.0.0", setupRequired: false };
 const me = (active: number, kids = true, others: unknown[] = []) => ({
-  device: { id: 1 },
+  device: { id: uid(1) },
   account: acct(1, "Heidi"),
-  activeProfileId: active,
-  household: { id: 1, name: "Heidi", adultId: 1, createdAt: ts },
+  activeProfileId: uid(active),
+  household: { id: uid(1), name: "Heidi", adultId: uid(1), createdAt: ts },
   profiles: [
     acct(1, "Heidi", "adult", { hasPin: true }),
     ...(kids ? [acct(2, "Jax", "kid")] : []),
@@ -84,12 +85,12 @@ const me = (active: number, kids = true, others: unknown[] = []) => ({
 });
 const page = (items: unknown[]) => ({ items });
 const item = (id: number, kind: string, extra = {}) => ({
-  id,
-  libraryId: 1,
+  id: uid(id),
+  libraryId: uid(1),
   kind,
   parsedTitle: `T${id}`,
   addedAt: `2026-01-0${id}T00:00:00Z`,
-  updatedAt: ts,
+  modifiedAt: ts,
   ...extra,
 });
 
@@ -208,8 +209,8 @@ describe("sign in and join", () => {
 
   describe("which household", () => {
     const households = [
-      { id: 1, name: "Heidi's household" },
-      { id: 5, name: "Mark's household" },
+      { id: uid(1), name: "Heidi's household" },
+      { id: uid(5), name: "Mark's household" },
     ];
     const moved = () => new Response(null, { status: 204 });
     const ask = async (r: HTMLElement) => {
@@ -240,7 +241,9 @@ describe("sign in and join", () => {
       other.click();
       r.querySelector("form")!.requestSubmit();
       await until(() => location.hash === "#/who");
-      expect(calls.find((c) => c.key === "PUT /me/household")!.body).toEqual({ householdId: 5 });
+      expect(calls.find((c) => c.key === "PUT /me/household")!.body).toEqual({
+        householdId: uid(5),
+      });
     });
 
     it("moves nothing when the own household is kept, after a single sign-on", async () => {
@@ -334,8 +337,8 @@ describe("server name", () => {
       "POST /me/lock": () => new Response(null, { status: 204 }),
       "GET /items": page([]),
       "GET /genres": page([]),
-      "GET /profiles/1/watch-state": page([]),
-      "GET /profiles/1/show-progress": page([]),
+      [`GET /profiles/${uid(1)}/watch-state`]: page([]),
+      [`GET /profiles/${uid(1)}/show-progress`]: page([]),
     });
     await boot(r, { fetch });
     await until(() => r.querySelector(".profiles"));
@@ -349,8 +352,8 @@ describe("server name", () => {
 
 describe("single sign-on", () => {
   const providers = [
-    { id: 3, name: "Keyhole" },
-    { id: 4, name: "Front door" },
+    { id: uid(3), name: "Keyhole" },
+    { id: uid(4), name: "Front door" },
   ];
 
   it("offers one Sign in with button per provider under the password form", async () => {
@@ -361,8 +364,8 @@ describe("single sign-on", () => {
     await until(() => r.querySelectorAll("a[href*='/auth/sso/']").length === 2);
     const [a, b] = r.querySelectorAll<HTMLAnchorElement>("a[href*='/auth/sso/']");
     expect(a.textContent).toBe("Sign in with Keyhole");
-    expect(a.getAttribute("href")).toBe("/api/v1/auth/sso/3/start?returnTo=viewer");
-    expect(b.getAttribute("href")).toBe("/api/v1/auth/sso/4/start?returnTo=viewer");
+    expect(a.getAttribute("href")).toBe(`/api/v2/auth/sso/${uid(3)}/start?returnTo=viewer`);
+    expect(b.getAttribute("href")).toBe(`/api/v2/auth/sso/${uid(4)}/start?returnTo=viewer`);
     const submit = r.querySelector("button[type=submit]")!;
     expect(submit.compareDocumentPosition(a) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
@@ -437,7 +440,7 @@ describe("who's watching", () => {
       fetch: mockFetch({
         "GET /health": health,
         "GET /me": me(1),
-        "POST /profiles/1/unlock": () => new Response(null, { status: 204 }),
+        [`POST /profiles/${uid(1)}/unlock`]: () => new Response(null, { status: 204 }),
       }),
     });
     await until(() => r.querySelector(".profiles"));
@@ -460,7 +463,9 @@ describe("who's watching", () => {
     pin.value = "1234";
     pin.dispatchEvent(new Event("input"));
     await until(() => calls.filter((c) => c.key === "GET /me").length === 2);
-    expect(calls.find((c) => c.key === "POST /profiles/1/unlock")!.body).toEqual({ pin: "1234" });
+    expect(calls.find((c) => c.key === `POST /profiles/${uid(1)}/unlock`)!.body).toEqual({
+      pin: "1234",
+    });
   });
 
   it("shows the lockout message and clears the dots on a wrong PIN", async () => {
@@ -470,7 +475,7 @@ describe("who's watching", () => {
       fetch: mockFetch({
         "GET /health": health,
         "GET /me": me(1),
-        "POST /profiles/1/unlock": json({ code: "pin_locked", message: "locked" }, 403),
+        [`POST /profiles/${uid(1)}/unlock`]: json({ code: "pin_locked", message: "locked" }, 403),
       }),
     });
     await until(() => r.querySelector(".profiles"));
@@ -542,10 +547,10 @@ describe("who's watching", () => {
             {
               account: acct(3, "Bea", "adult", { pending: true }),
               joinCode: {
-                id: 1,
+                id: uid(1),
                 code: "7KQ4-MNP2",
                 link: "/join/7KQ4-MNP2",
-                accountId: 3,
+                accountId: uid(3),
                 expiresAt: ts,
                 createdAt: ts,
               },
@@ -597,8 +602,8 @@ describe("who's watching", () => {
         "GET /health": health,
         "GET /me": me(1),
         "POST /profiles": acct(9, "Claire", "kid"),
-        "PUT /profiles/9": acct(9, "Claire", "kid"),
-        "PUT /profiles/9/pin": () =>
+        [`PUT /profiles/${uid(9)}`]: acct(9, "Claire", "kid"),
+        [`PUT /profiles/${uid(9)}/pin`]: () =>
           pins++
             ? new Response(null, { status: 204 })
             : json({ code: "internal", message: "try again" }, 500),
@@ -621,9 +626,9 @@ describe("who's watching", () => {
     await until(() => pins === 2);
     expect(calls.filter((c) => /^(POST|PUT) \/profiles/.test(c.key)).map((c) => c.key)).toEqual([
       "POST /profiles",
-      "PUT /profiles/9/pin",
-      "PUT /profiles/9",
-      "PUT /profiles/9/pin",
+      `PUT /profiles/${uid(9)}/pin`,
+      `PUT /profiles/${uid(9)}`,
+      `PUT /profiles/${uid(9)}/pin`,
     ]);
   });
 
@@ -684,7 +689,7 @@ describe("device lock", () => {
         "GET /health": health,
         "GET /me": () => ({ ...me(1), locked }),
         "POST /me/lock": unlocked,
-        "POST /profiles/2/unlock": () => ((locked = false), unlocked()),
+        [`POST /profiles/${uid(2)}/unlock`]: () => ((locked = false), unlocked()),
       }),
     });
     await until(() => r.querySelector(".profiles"));
@@ -721,11 +726,11 @@ describe("device lock", () => {
         "GET /health": health,
         "GET /me": m,
         "POST /me/lock": unlocked,
-        "POST /profiles/2/unlock": unlocked,
+        [`POST /profiles/${uid(2)}/unlock`]: unlocked,
         "GET /items": page([]),
         "GET /genres": page([]),
-        "GET /profiles/1/watch-state": page([]),
-        "GET /profiles/2/watch-state": page([]),
+        [`GET /profiles/${uid(1)}/watch-state`]: page([]),
+        [`GET /profiles/${uid(2)}/watch-state`]: page([]),
       });
     const admin = (active: number) => ({
       ...me(active),
@@ -793,7 +798,7 @@ describe("device lock", () => {
 
   describe("remember profile", () => {
     const remember = (account: number, v: object) =>
-      localStorage.setItem(`rabbit-ears.remember.${account}`, JSON.stringify(v));
+      localStorage.setItem(`rabbit-ears.remember.${uid(account)}`, JSON.stringify(v));
     const shell = (m: unknown, extra = {}) =>
       mockFetch({
         "GET /health": health,
@@ -801,8 +806,8 @@ describe("device lock", () => {
         "POST /me/lock": unlocked,
         "GET /items": page([]),
         "GET /genres": page([]),
-        "GET /profiles/1/watch-state": page([]),
-        "GET /profiles/2/watch-state": page([]),
+        [`GET /profiles/${uid(1)}/watch-state`]: page([]),
+        [`GET /profiles/${uid(2)}/watch-state`]: page([]),
         ...extra,
       });
 
@@ -819,7 +824,7 @@ describe("device lock", () => {
       remember(1, { profile: false, skipPin: true });
       await at("#/movies");
       const r = root();
-      await boot(r, { fetch: shell(me(1), { "POST /profiles/2/unlock": unlocked }) });
+      await boot(r, { fetch: shell(me(1), { [`POST /profiles/${uid(2)}/unlock`]: unlocked }) });
       await until(() => r.querySelector(".profiles"));
       expect(calls.filter((c) => c.key === "POST /me/lock")).toHaveLength(1);
       [...r.querySelectorAll<HTMLElement>(".who")]
@@ -846,11 +851,11 @@ describe("device lock", () => {
       let locked = true;
       await boot(r, {
         fetch: shell(() => ({ ...me(2), locked }), {
-          "POST /profiles/2/unlock": () => ((locked = false), unlocked()),
+          [`POST /profiles/${uid(2)}/unlock`]: () => ((locked = false), unlocked()),
         }),
       });
       await until(() => location.hash === "#/movies" && r.querySelector("header .profile"));
-      expect(calls.map((c) => c.key)).toContain("POST /profiles/2/unlock");
+      expect(calls.map((c) => c.key)).toContain(`POST /profiles/${uid(2)}/unlock`);
       expect(document.querySelector(".pinbox")).toBeNull();
     });
 
@@ -902,17 +907,17 @@ describe("device lock", () => {
       expect(sw("Remember profile").checked).toBe(true);
       expect(sw("Skip PIN").checked).toBe(true);
       sw("Skip PIN").click();
-      expect(JSON.parse(localStorage.getItem("rabbit-ears.remember.1")!)).toEqual({
+      expect(JSON.parse(localStorage.getItem(`rabbit-ears.remember.${uid(1)}`)!)).toEqual({
         profile: true,
         skipPin: false,
       });
       sw("Remember profile").click();
       expect(sw("Skip PIN").closest<HTMLElement>(".row")!.hidden).toBe(true);
-      expect(JSON.parse(localStorage.getItem("rabbit-ears.remember.1")!)).toEqual({
+      expect(JSON.parse(localStorage.getItem(`rabbit-ears.remember.${uid(1)}`)!)).toEqual({
         profile: false,
         skipPin: false,
       });
-      expect(calls.map((c) => c.key)).not.toContain("PUT /profiles/1/preferences");
+      expect(calls.map((c) => c.key)).not.toContain(`PUT /profiles/${uid(1)}/preferences`);
     });
   });
 
@@ -923,14 +928,14 @@ describe("device lock", () => {
       fetch: mockFetch({
         "GET /health": health,
         "GET /me": { ...me(1), profiles: [acct(1, "Heidi"), acct(2, "Jax", "kid")] },
-        "POST /profiles/1/unlock": unlocked,
+        [`POST /profiles/${uid(1)}/unlock`]: unlocked,
       }),
     });
     await until(() => r.querySelector(".profiles"));
     r.querySelector<HTMLElement>("a[href='#/add-kid']")!.click();
     expect(location.hash).toBe("#/who");
     await until(() => location.hash === "#/add-kid");
-    expect(calls.find((c) => c.key === "POST /profiles/1/unlock")!.body).toEqual({});
+    expect(calls.find((c) => c.key === `POST /profiles/${uid(1)}/unlock`)!.body).toEqual({});
   });
 });
 
@@ -939,26 +944,26 @@ describe("grids", () => {
   const shows = [
     item(10, "show", { metadata: { status: "matched", title: "Severance", runtimeMinutes: 60 } }),
   ];
-  const seasons = [item(11, "season", { parentId: 10, seasonNumber: 1 })];
+  const seasons = [item(11, "season", { parentId: uid(10), seasonNumber: 1 })];
   const episodes = [21, 22, 23].map((id, i) =>
     item(id, "episode", {
-      parentId: 11,
+      parentId: uid(11),
       seasonNumber: 1,
       episodeNumber: i + 1,
       metadata: { status: "matched", runtimeMinutes: i < 2 ? 50 : 44 },
     }),
   );
   const progress = (unwatched: number) =>
-    page([{ showId: 10, seasons: 1, episodes: 3, unwatched, inProgress: false }]);
+    page([{ showId: uid(10), seasons: 1, episodes: 3, unwatched, inProgress: false }]);
   const tv = (active: number) => ({
     "GET /health": health,
     "GET /me": me(active),
-    "GET /profiles/1/watch-state": page([
-      { itemId: 21, positionMs: 0, watched: true, playCount: 1, updatedAt: ts },
+    [`GET /profiles/${uid(1)}/watch-state`]: page([
+      { itemId: uid(21), positionMs: 0, watched: true, playCount: 1, changedAt: ts },
     ]),
-    "GET /profiles/2/watch-state": page([]),
-    "GET /profiles/1/show-progress": progress(2),
-    "GET /profiles/2/show-progress": progress(3),
+    [`GET /profiles/${uid(2)}/watch-state`]: page([]),
+    [`GET /profiles/${uid(1)}/show-progress`]: progress(2),
+    [`GET /profiles/${uid(2)}/show-progress`]: progress(3),
     "GET /genres": page([]),
     ...Object.fromEntries(
       [...shows, ...seasons, ...episodes].map((i) => [`GET /items/${i.id}`, i]),
@@ -982,13 +987,13 @@ describe("grids", () => {
   });
 
   it("names season 0 Specials on an episode, as the season page does", async () => {
-    await at("#/episode/21");
+    await at(`#/episode/${uid(21)}`);
     const r = root();
     await boot(r, {
       fetch: mockFetch({
         ...tv(1),
         "GET /media-files": page([]),
-        "GET /items/11": item(11, "season", { parentId: 10, seasonNumber: 0 }),
+        [`GET /items/${uid(11)}`]: item(11, "season", { parentId: uid(10), seasonNumber: 0 }),
       }),
     });
     await until(() => r.querySelector(".crumb"));
@@ -998,23 +1003,23 @@ describe("grids", () => {
   });
 
   it("shows nothing in place of a show's absent cast", async () => {
-    await at("#/show/10");
+    await at(`#/show/${uid(10)}`);
     const r = root();
     await boot(r, {
-      fetch: mockFetch({ ...tv(1), "GET /items/10/credits": { cast: [], crew: [] } }),
+      fetch: mockFetch({ ...tv(1), [`GET /items/${uid(10)}/credits`]: { cast: [], crew: [] } }),
     });
     await until(() => r.querySelector("h1.big"));
     expect(r.querySelector("main")!.textContent).not.toContain("null");
   });
 
   it("Mark all watched on a show is one batch request with the show's id", async () => {
-    await at("#/show/10");
+    await at(`#/show/${uid(10)}`);
     const r = root();
     await boot(r, {
       fetch: mockFetch({
         ...tv(1),
-        "GET /items/10/credits": { cast: [], crew: [] },
-        "PUT /profiles/1/watch-state/batch": () => new Response(null, { status: 204 }),
+        [`GET /items/${uid(10)}/credits`]: { cast: [], crew: [] },
+        [`PUT /profiles/${uid(1)}/watch-state/batch`]: () => new Response(null, { status: 204 }),
       }),
     });
     await until(() => r.querySelector("h1.big"));
@@ -1022,42 +1027,42 @@ describe("grids", () => {
     [...r.querySelectorAll<HTMLElement>("[role=menuitem]")]
       .find((e) => e.textContent === "Mark as watched")!
       .click();
-    await until(() => calls.some((c) => c.key === "PUT /profiles/1/watch-state/batch"));
-    expect(calls.filter((c) => c.key.startsWith("PUT /profiles/1/watch-state"))).toEqual([
-      expect.objectContaining({ body: { itemIds: [10], watched: true } }),
+    await until(() => calls.some((c) => c.key === `PUT /profiles/${uid(1)}/watch-state/batch`));
+    expect(calls.filter((c) => c.key.startsWith(`PUT /profiles/${uid(1)}/watch-state`))).toEqual([
+      expect.objectContaining({ body: { itemIds: [uid(10)], watched: true } }),
     ]);
   });
 
   it("Mark all watched on a season is one batch request with the season's id", async () => {
-    await at("#/season/11");
+    await at(`#/season/${uid(11)}`);
     const r = root();
     await boot(r, {
       fetch: mockFetch({
         ...tv(1),
-        "PUT /profiles/1/watch-state/batch": () => new Response(null, { status: 204 }),
+        [`PUT /profiles/${uid(1)}/watch-state/batch`]: () => new Response(null, { status: 204 }),
       }),
     });
     await until(() => button(r, "Mark all watched"));
     button(r, "Mark all watched").click();
-    await until(() => calls.some((c) => c.key === "PUT /profiles/1/watch-state/batch"));
-    expect(calls.filter((c) => c.key.startsWith("PUT /profiles/1/watch-state"))).toEqual([
-      expect.objectContaining({ body: { itemIds: [11], watched: true } }),
+    await until(() => calls.some((c) => c.key === `PUT /profiles/${uid(1)}/watch-state/batch`));
+    expect(calls.filter((c) => c.key.startsWith(`PUT /profiles/${uid(1)}/watch-state`))).toEqual([
+      expect.objectContaining({ body: { itemIds: [uid(11)], watched: true } }),
     ]);
   });
 
   it("reads only the show's or season's watch states on its page", async () => {
     const r = root();
     for (const [hash, id] of [
-      ["#/show/10", "10"],
-      ["#/season/11", "11"],
+      [`#/show/${uid(10)}`, uid(10)],
+      [`#/season/${uid(11)}`, uid(11)],
     ]) {
       await at(hash);
       calls.length = 0;
       await boot(r, {
-        fetch: mockFetch({ ...tv(1), "GET /items/10/credits": { cast: [], crew: [] } }),
+        fetch: mockFetch({ ...tv(1), [`GET /items/${uid(10)}/credits`]: { cast: [], crew: [] } }),
       });
       await until(() => r.querySelector("h1.big"));
-      const asked = calls.filter((c) => c.key === "GET /profiles/1/watch-state");
+      const asked = calls.filter((c) => c.key === `GET /profiles/${uid(1)}/watch-state`);
       expect(asked.map((c) => new URLSearchParams(c.query).get("parentId"))).toEqual([id]);
     }
   });
@@ -1069,20 +1074,20 @@ describe("grids", () => {
     await boot(r, {
       fetch: mockFetch({
         ...tv(1),
-        "GET /items/40": () =>
+        [`GET /items/${uid(40)}`]: () =>
           scanned
             ? item(40, "show", { metadata: { status: "matched", title: "Slow Horses" } })
             : json({ code: "not_found", message: "no item" }, 404),
-        "GET /items/40/credits": { cast: [], crew: [] },
-        "GET /items/41/credits": { cast: [], crew: [] },
+        [`GET /items/${uid(40)}/credits`]: { cast: [], crew: [] },
+        [`GET /items/${uid(41)}/credits`]: { cast: [], crew: [] },
       }),
     });
     await until(() => r.querySelector(".grid a"));
     scanned = true;
     calls.length = 0;
-    await at("#/show/40");
+    await at(`#/show/${uid(40)}`);
     await until(() => r.querySelector("h1")?.textContent === "Slow Horses");
-    await at("#/show/41");
+    await at(`#/show/${uid(41)}`);
     await until(() => r.querySelector(".err")?.textContent === "Show not found");
     expect(calls.filter((c) => c.query.includes("kind=show"))).toHaveLength(0);
   });
@@ -1145,8 +1150,8 @@ describe("grids", () => {
               ? [item(30, "movie", { metadata: { status: "matched", runtimeMinutes: 166 } })]
               : [],
           ),
-        "GET /profiles/1/watch-state": page([
-          { itemId: 30, positionMs: 0, watched: true, playCount: 1, updatedAt: ts },
+        [`GET /profiles/${uid(1)}/watch-state`]: page([
+          { itemId: uid(30), positionMs: 0, watched: true, playCount: 1, changedAt: ts },
         ]),
       }),
     });
@@ -1257,19 +1262,19 @@ describe("player", () => {
   it("ends a session that finishes starting after the viewer has left", async () => {
     let started!: () => void;
     const gate = new Promise<void>((r) => (started = r));
-    await at("#/play/5");
+    await at(`#/play/${uid(5)}`);
     const r = root();
     await boot(r, {
       fetch: mockFetch({
         "GET /health": health,
         "GET /me": me(1),
-        "GET /items/5": item(5, "movie"),
+        [`GET /items/${uid(5)}`]: item(5, "movie"),
         "GET /media-files": page([]),
         "POST /playback/sessions": async () => {
           await gate;
           return json(
             {
-              sessionId: 7,
+              sessionId: uid(7),
               entry: {
                 position: 0,
                 verdict: "direct_play",
@@ -1278,7 +1283,7 @@ describe("player", () => {
                 subtitleAction: "none",
                 bad: false,
               },
-              streamUrl: "/api/v1/streams/k/0/file",
+              streamUrl: "/api/v2/streams/k/0/file",
               streamKind: "file",
               positionMs: 0,
               negotiated: { verdict: "direct_play" },
@@ -1288,30 +1293,30 @@ describe("player", () => {
             201,
           );
         },
-        "PUT /playback/sessions/7/position": () => new Response(null, { status: 204 }),
-        "DELETE /playback/sessions/7": () => new Response(null, { status: 204 }),
+        [`PUT /playback/sessions/${uid(7)}/position`]: () => new Response(null, { status: 204 }),
+        [`DELETE /playback/sessions/${uid(7)}`]: () => new Response(null, { status: 204 }),
       }),
     });
     await until(() => calls.some((c) => c.key === "POST /playback/sessions"));
     await at("#/");
     started();
-    await until(() => calls.some((c) => c.key === "DELETE /playback/sessions/7"));
+    await until(() => calls.some((c) => c.key === `DELETE /playback/sessions/${uid(7)}`));
   });
 
   it("ends the session of a player left and returned to before it finished starting", async () => {
     let started!: () => void;
     const gate = new Promise<void>((r) => (started = r));
     let next = 7;
-    await at("#/play/5");
+    await at(`#/play/${uid(5)}`);
     const r = root();
     await boot(r, {
       fetch: mockFetch({
         "GET /health": health,
         "GET /me": me(1),
-        "GET /items/5": item(5, "movie"),
+        [`GET /items/${uid(5)}`]: item(5, "movie"),
         "GET /media-files": page([]),
         "POST /playback/sessions": async () => {
-          const sessionId = next++;
+          const sessionId = uid(next++);
           await gate;
           return json(
             {
@@ -1324,7 +1329,7 @@ describe("player", () => {
                 subtitleAction: "none",
                 bad: false,
               },
-              streamUrl: "/api/v1/streams/k/0/file",
+              streamUrl: "/api/v2/streams/k/0/file",
               streamKind: "file",
               positionMs: 0,
               negotiated: { verdict: "direct_play" },
@@ -1334,26 +1339,26 @@ describe("player", () => {
             201,
           );
         },
-        "PUT /playback/sessions/7/position": () => new Response(null, { status: 204 }),
-        "PUT /playback/sessions/8/position": () => new Response(null, { status: 204 }),
-        "DELETE /playback/sessions/7": () => new Response(null, { status: 204 }),
-        "DELETE /playback/sessions/8": () => new Response(null, { status: 204 }),
+        [`PUT /playback/sessions/${uid(7)}/position`]: () => new Response(null, { status: 204 }),
+        [`PUT /playback/sessions/${uid(8)}/position`]: () => new Response(null, { status: 204 }),
+        [`DELETE /playback/sessions/${uid(7)}`]: () => new Response(null, { status: 204 }),
+        [`DELETE /playback/sessions/${uid(8)}`]: () => new Response(null, { status: 204 }),
       }),
     });
     await until(() => calls.some((c) => c.key === "POST /playback/sessions"));
     await at("#/");
-    await at("#/play/5");
+    await at(`#/play/${uid(5)}`);
     await until(() => calls.filter((c) => c.key === "POST /playback/sessions").length === 2);
     started();
-    await until(() => calls.some((c) => c.key === "DELETE /playback/sessions/7"));
-    expect(calls.some((c) => c.key === "DELETE /playback/sessions/8")).toBe(false);
+    await until(() => calls.some((c) => c.key === `DELETE /playback/sessions/${uid(7)}`));
+    expect(calls.some((c) => c.key === `DELETE /playback/sessions/${uid(8)}`)).toBe(false);
   });
 
   // The movie's largest file is another cut; file 9 is the one in play.
   const subtitled = async (hash: string) => {
     const stream = {
-      sessionId: 7,
-      mediaFileId: 9,
+      sessionId: uid(7),
+      mediaFileId: uid(9),
       entry: {
         position: 0,
         verdict: "direct_play",
@@ -1362,29 +1367,34 @@ describe("player", () => {
         subtitleAction: "none",
         bad: false,
       },
-      streamUrl: "/api/v1/streams/k/0/file",
+      streamUrl: "/api/v2/streams/k/0/file",
       streamKind: "file",
       positionMs: 0,
       negotiated: { verdict: "direct_play" },
       rungs: [],
       sidecars: [],
     };
-    const sub = (id: number, title: string) => ({ id, kind: "subtitle", title, isForced: false });
+    const sub = (id: number, title: string) => ({
+      id: uid(id),
+      kind: "subtitle",
+      title,
+      isForced: false,
+    });
     await at(hash);
     const r = root();
     await boot(r, {
       fetch: mockFetch({
         "GET /health": health,
         "GET /me": me(1),
-        "GET /items/5": item(5, "movie"),
+        [`GET /items/${uid(5)}`]: item(5, "movie"),
         "GET /media-files": page([
-          { id: 8, durationMs: 200_000, chapters: [], tracks: [sub(30, "Commentary")] },
-          { id: 9, durationMs: 120_000, chapters: [], tracks: [sub(31, "English")] },
+          { id: uid(8), durationMs: 200_000, chapters: [], tracks: [sub(30, "Commentary")] },
+          { id: uid(9), durationMs: 120_000, chapters: [], tracks: [sub(31, "English")] },
         ]),
         "POST /playback/sessions": () => json(stream, 201),
-        "PUT /playback/sessions/7/position": () => new Response(null, { status: 204 }),
-        "PUT /playback/sessions/7/tracks": { action: "continue", stream },
-        "DELETE /playback/sessions/7": () => new Response(null, { status: 204 }),
+        [`PUT /playback/sessions/${uid(7)}/position`]: () => new Response(null, { status: 204 }),
+        [`PUT /playback/sessions/${uid(7)}/tracks`]: { action: "continue", stream },
+        [`DELETE /playback/sessions/${uid(7)}`]: () => new Response(null, { status: 204 }),
       }),
     });
     await until(() => r.querySelector(".menu.subs"));
@@ -1392,7 +1402,7 @@ describe("player", () => {
   };
 
   it("lists the subtitles and the length of the file in play", async () => {
-    const r = await subtitled("#/play/5");
+    const r = await subtitled(`#/play/${uid(5)}`);
     expect([...r.querySelectorAll(".menu.subs .opt b")].map((o) => o.textContent)).toEqual([
       "Off",
       "Forced only",
@@ -1404,7 +1414,7 @@ describe("player", () => {
 
   it("starts at the volume this device last chose and remembers a new one", async () => {
     localStorage.setItem("rabbit-ears.volume", "0.3");
-    const r = await subtitled("#/play/5");
+    const r = await subtitled(`#/play/${uid(5)}`);
     const video = r.querySelector("video")!;
     expect(video.volume).toBe(0.3);
     expect(r.querySelector<HTMLInputElement>("input[aria-label=Volume]")!.value).toBe("0.3");
@@ -1415,55 +1425,61 @@ describe("player", () => {
   });
 
   it("keeps the audio track chosen at the start when a subtitle is picked", async () => {
-    const r = await subtitled("#/play/5?audio=12");
+    const r = await subtitled(`#/play/${uid(5)}?audio=${uid(12)}`);
     [...r.querySelectorAll<HTMLElement>(".menu.subs .opt")]
       .find((o) => o.textContent === "English")!
       .click();
-    await until(() => calls.some((c) => c.key === "PUT /playback/sessions/7/tracks"));
-    expect(calls.find((c) => c.key === "PUT /playback/sessions/7/tracks")!.body).toEqual({
-      audioTrackId: 12,
-      subtitleTrackId: 31,
+    await until(() => calls.some((c) => c.key === `PUT /playback/sessions/${uid(7)}/tracks`));
+    expect(calls.find((c) => c.key === `PUT /playback/sessions/${uid(7)}/tracks`)!.body).toEqual({
+      audioTrackId: uid(12),
+      subtitleTrackId: uid(31),
     });
   });
 
   it("moves to the next subtitles with C and closes with Esc", async () => {
-    await at("#/movie/5");
-    const r = await subtitled("#/play/5");
+    await at(`#/movie/${uid(5)}`);
+    const r = await subtitled(`#/play/${uid(5)}`);
     const key = (k: string, init = {}) =>
       document.body.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, ...init }));
     const checked = () => r.querySelector(".menu.subs .opt[aria-checked=true] b")?.textContent;
     expect(checked()).toBe("Forced only");
     key("c");
     await until(() => checked() === "English");
-    expect(calls.find((c) => c.key === "PUT /playback/sessions/7/tracks")!.body).toMatchObject({
-      subtitleTrackId: 31,
+    expect(
+      calls.find((c) => c.key === `PUT /playback/sessions/${uid(7)}/tracks`)!.body,
+    ).toMatchObject({
+      subtitleTrackId: uid(31),
     });
     // Cmd-F is the app's search, not full screen.
     key("f", { metaKey: true });
     key("Escape");
-    await until(() => location.hash === "#/movie/5");
+    await until(() => location.hash === `#/movie/${uid(5)}`);
   });
 
   it("cancels the Up next countdown when the viewer leaves", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     try {
-      await at("#/play/21");
+      await at(`#/play/${uid(21)}`);
       const r = root();
       const ep = (id: number, n: number) =>
-        item(id, "episode", { parentId: 11, seasonNumber: 1, episodeNumber: n });
+        item(id, "episode", { parentId: uid(11), seasonNumber: 1, episodeNumber: n });
       await boot(r, {
         fetch: mockFetch({
           "GET /health": health,
           "GET /me": me(1),
-          "GET /items/21": ep(21, 1),
-          "GET /items/11": item(11, "season", { parentId: 10, seasonNumber: 1 }),
-          "GET /items/10": item(10, "show"),
+          [`GET /items/${uid(21)}`]: ep(21, 1),
+          [`GET /items/${uid(11)}`]: item(11, "season", { parentId: uid(10), seasonNumber: 1 }),
+          [`GET /items/${uid(10)}`]: item(10, "show"),
           "GET /media-files": page([]),
-          "GET /profiles/1/up-next/21": { itemId: 22, kind: "episode", title: "T22" },
+          [`GET /profiles/${uid(1)}/up-next/${uid(21)}`]: {
+            itemId: uid(22),
+            kind: "episode",
+            title: "T22",
+          },
           "POST /playback/sessions": () =>
             json(
               {
-                sessionId: 7,
+                sessionId: uid(7),
                 entry: {
                   position: 0,
                   verdict: "direct_play",
@@ -1472,7 +1488,7 @@ describe("player", () => {
                   subtitleAction: "none",
                   bad: false,
                 },
-                streamUrl: "/api/v1/streams/k/0/file",
+                streamUrl: "/api/v2/streams/k/0/file",
                 streamKind: "file",
                 positionMs: 0,
                 negotiated: { verdict: "direct_play", width: 1920, height: 1080, bitrate: 8e6 },
@@ -1481,8 +1497,8 @@ describe("player", () => {
               },
               201,
             ),
-          "PUT /playback/sessions/7/position": () => new Response(null, { status: 204 }),
-          "DELETE /playback/sessions/7": () => new Response(null, { status: 204 }),
+          [`PUT /playback/sessions/${uid(7)}/position`]: () => new Response(null, { status: 204 }),
+          [`DELETE /playback/sessions/${uid(7)}`]: () => new Response(null, { status: 204 }),
         }),
       });
       await until(() => r.querySelector(".player video"));
@@ -1497,18 +1513,18 @@ describe("player", () => {
   });
 
   it("starts fading the controls after 2 s idle, or at 3 s with reduced motion", async () => {
-    await at("#/play/5");
+    await at(`#/play/${uid(5)}`);
     const r = root();
     await boot(r, {
       fetch: mockFetch({
         "GET /health": health,
         "GET /me": me(1),
-        "GET /items/5": item(5, "movie"),
+        [`GET /items/${uid(5)}`]: item(5, "movie"),
         "GET /media-files": page([]),
         "POST /playback/sessions": () =>
           json(
             {
-              sessionId: 7,
+              sessionId: uid(7),
               entry: {
                 position: 0,
                 verdict: "direct_play",
@@ -1517,7 +1533,7 @@ describe("player", () => {
                 subtitleAction: "none",
                 bad: false,
               },
-              streamUrl: "/api/v1/streams/k/0/file",
+              streamUrl: "/api/v2/streams/k/0/file",
               streamKind: "file",
               positionMs: 0,
               negotiated: { verdict: "direct_play" },
@@ -1526,8 +1542,8 @@ describe("player", () => {
             },
             201,
           ),
-        "PUT /playback/sessions/7/position": () => new Response(null, { status: 204 }),
-        "DELETE /playback/sessions/7": () => new Response(null, { status: 204 }),
+        [`PUT /playback/sessions/${uid(7)}/position`]: () => new Response(null, { status: 204 }),
+        [`DELETE /playback/sessions/${uid(7)}`]: () => new Response(null, { status: 204 }),
       }),
     });
     await until(() => r.querySelector(".player video"));
@@ -1579,33 +1595,37 @@ describe("player", () => {
   it("names an episode by its own show and asks the server what follows", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     try {
-      await at("#/play/22");
+      await at(`#/play/${uid(22)}`);
       const r = root();
       const ep = (id: number, season: number, s: number, n: number) =>
-        item(id, "episode", { parentId: season, seasonNumber: s, episodeNumber: n });
+        item(id, "episode", { parentId: uid(season), seasonNumber: s, episodeNumber: n });
       const season = (id: number, n: number) =>
-        item(id, "season", { parentId: 10, seasonNumber: n });
+        item(id, "season", { parentId: uid(10), seasonNumber: n });
       const children: Record<string, unknown[]> = {
-        "10": [season(13, 0), season(11, 1), season(12, 2)],
-        "11": [ep(21, 11, 1, 1), ep(22, 11, 1, 2)],
-        "12": [ep(31, 12, 2, 1), ep(32, 12, 2, 2)],
+        [uid(10)]: [season(13, 0), season(11, 1), season(12, 2)],
+        [uid(11)]: [ep(21, 11, 1, 1), ep(22, 11, 1, 2)],
+        [uid(12)]: [ep(31, 12, 2, 1), ep(32, 12, 2, 2)],
       };
       await boot(r, {
         fetch: mockFetch({
           "GET /health": health,
           "GET /me": me(1),
-          "GET /items/22": ep(22, 11, 1, 2),
-          "GET /items/11": season(11, 1),
-          "GET /items/10": item(10, "show", {
+          [`GET /items/${uid(22)}`]: ep(22, 11, 1, 2),
+          [`GET /items/${uid(11)}`]: season(11, 1),
+          [`GET /items/${uid(10)}`]: item(10, "show", {
             metadata: { status: "matched", title: "Severance" },
           }),
           "GET /media-files": page([]),
           "GET /items": (_: unknown, u: URL) => page(children[u.searchParams.get("parentId")!]),
-          "GET /profiles/1/up-next/22": { itemId: 31, kind: "episode", title: "T31" },
+          [`GET /profiles/${uid(1)}/up-next/${uid(22)}`]: {
+            itemId: uid(31),
+            kind: "episode",
+            title: "T31",
+          },
           "POST /playback/sessions": () =>
             json(
               {
-                sessionId: 7,
+                sessionId: uid(7),
                 entry: {
                   position: 0,
                   verdict: "direct_play",
@@ -1614,7 +1634,7 @@ describe("player", () => {
                   subtitleAction: "none",
                   bad: false,
                 },
-                streamUrl: "/api/v1/streams/k/0/file",
+                streamUrl: "/api/v2/streams/k/0/file",
                 streamKind: "file",
                 positionMs: 0,
                 negotiated: { verdict: "direct_play", width: 1920, height: 1080, bitrate: 8e6 },
@@ -1623,8 +1643,8 @@ describe("player", () => {
               },
               201,
             ),
-          "PUT /playback/sessions/7/position": () => new Response(null, { status: 204 }),
-          "DELETE /playback/sessions/7": () => new Response(null, { status: 204 }),
+          [`PUT /playback/sessions/${uid(7)}/position`]: () => new Response(null, { status: 204 }),
+          [`DELETE /playback/sessions/${uid(7)}`]: () => new Response(null, { status: 204 }),
         }),
       });
       await until(() => r.querySelector(".player video"));
@@ -1641,23 +1661,28 @@ describe("player", () => {
   it("plays a playlist row, sends its playlistId and goes to the next row when it ends", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     try {
-      await at("#/play/21?playlist=9&n=0");
+      await at(`#/play/${uid(21)}?playlist=${uid(9)}&n=0`);
       const r = root();
       await boot(r, {
         fetch: mockFetch({
           "GET /health": health,
           "GET /me": me(1),
-          "GET /items/21": item(21, "movie"),
+          [`GET /items/${uid(21)}`]: item(21, "movie"),
           "GET /media-files": page([]),
-          "GET /profiles/1/playlists/9/play-order": page([
-            { entryId: 1, itemId: 21, kind: "movie", item: item(21, "movie") },
-            { entryId: 2, itemId: 22, kind: "movie", item: item(22, "movie") },
+          [`GET /profiles/${uid(1)}/playlists/${uid(9)}/play-order`]: page([
+            { entryId: uid(1), itemId: uid(21), kind: "movie", item: item(21, "movie") },
+            { entryId: uid(2), itemId: uid(22), kind: "movie", item: item(22, "movie") },
           ]),
-          "GET /profiles/1/up-next/21": { itemId: 22, kind: "movie", title: "T22", index: 1 },
+          [`GET /profiles/${uid(1)}/up-next/${uid(21)}`]: {
+            itemId: uid(22),
+            kind: "movie",
+            title: "T22",
+            index: 1,
+          },
           "POST /playback/sessions": () =>
             json(
               {
-                sessionId: 7,
+                sessionId: uid(7),
                 entry: {
                   position: 0,
                   verdict: "direct_play",
@@ -1666,7 +1691,7 @@ describe("player", () => {
                   subtitleAction: "none",
                   bad: false,
                 },
-                streamUrl: "/api/v1/streams/k/0/file",
+                streamUrl: "/api/v2/streams/k/0/file",
                 streamKind: "file",
                 positionMs: 0,
                 negotiated: { verdict: "direct_play", width: 1920, height: 1080, bitrate: 8e6 },
@@ -1675,30 +1700,30 @@ describe("player", () => {
               },
               201,
             ),
-          "PUT /playback/sessions/7/position": () => new Response(null, { status: 204 }),
-          "DELETE /playback/sessions/7": () => new Response(null, { status: 204 }),
+          [`PUT /playback/sessions/${uid(7)}/position`]: () => new Response(null, { status: 204 }),
+          [`DELETE /playback/sessions/${uid(7)}`]: () => new Response(null, { status: 204 }),
         }),
       });
       await until(() => r.querySelector(".player video"));
       expect(calls.find((c) => c.key === "POST /playback/sessions")!.body).toMatchObject({
-        itemId: 21,
-        playlistId: 9,
+        itemId: uid(21),
+        playlistId: uid(9),
       });
       r.querySelector("video")!.dispatchEvent(new Event("ended"));
       expect(r.querySelector(".upnext")!.textContent).toContain("Up next: T22 in 10s");
       vi.advanceTimersByTime(11_000);
-      expect(location.hash).toBe("#/play/22?playlist=9&n=1");
+      expect(location.hash).toBe(`#/play/${uid(22)}?playlist=${uid(9)}&n=1`);
     } finally {
       vi.useRealTimers();
     }
   });
 
   it("reads only its own row of the play order", async () => {
-    await at("#/play/22?playlist=9&n=1");
+    await at(`#/play/${uid(22)}?playlist=${uid(9)}&n=1`);
     const r = root();
     const rows = [21, 22, 23, 24].map((id, i) => ({
-      entryId: i + 1,
-      itemId: id,
+      entryId: uid(i + 1),
+      itemId: uid(id),
       kind: "movie",
       item: item(id, "movie"),
     }));
@@ -1706,10 +1731,15 @@ describe("player", () => {
       fetch: mockFetch({
         "GET /health": health,
         "GET /me": me(1),
-        "GET /items/22": item(22, "movie"),
+        [`GET /items/${uid(22)}`]: item(22, "movie"),
         "GET /media-files": page([]),
-        "GET /profiles/1/up-next/22": { itemId: 23, kind: "movie", title: "T23", index: 2 },
-        "GET /profiles/1/playlists/9/play-order": (_: unknown, u: URL) => {
+        [`GET /profiles/${uid(1)}/up-next/${uid(22)}`]: {
+          itemId: uid(23),
+          kind: "movie",
+          title: "T23",
+          index: 2,
+        },
+        [`GET /profiles/${uid(1)}/playlists/${uid(9)}/play-order`]: (_: unknown, u: URL) => {
           const offset = Number(u.searchParams.get("offset"));
           const limit = Number(u.searchParams.get("limit"));
           const more = offset + limit < rows.length;
@@ -1721,7 +1751,7 @@ describe("player", () => {
         "POST /playback/sessions": () =>
           json(
             {
-              sessionId: 7,
+              sessionId: uid(7),
               entry: {
                 position: 0,
                 verdict: "direct_play",
@@ -1730,7 +1760,7 @@ describe("player", () => {
                 subtitleAction: "none",
                 bad: false,
               },
-              streamUrl: "/api/v1/streams/k/0/file",
+              streamUrl: "/api/v2/streams/k/0/file",
               streamKind: "file",
               positionMs: 0,
               negotiated: { verdict: "direct_play" },
@@ -1739,12 +1769,14 @@ describe("player", () => {
             },
             201,
           ),
-        "PUT /playback/sessions/7/position": () => new Response(null, { status: 204 }),
-        "DELETE /playback/sessions/7": () => new Response(null, { status: 204 }),
+        [`PUT /playback/sessions/${uid(7)}/position`]: () => new Response(null, { status: 204 }),
+        [`DELETE /playback/sessions/${uid(7)}`]: () => new Response(null, { status: 204 }),
       }),
     });
     await until(() => r.querySelector(".player video"));
-    const reads = calls.filter((c) => c.key === "GET /profiles/1/playlists/9/play-order");
+    const reads = calls.filter(
+      (c) => c.key === `GET /profiles/${uid(1)}/playlists/${uid(9)}/play-order`,
+    );
     expect(reads.map((c) => new URLSearchParams(c.query).toString())).toEqual(["limit=1&offset=1"]);
     expect(r.querySelector("[aria-label=Next]")).not.toBeNull();
     await at("#/");
@@ -1752,7 +1784,7 @@ describe("player", () => {
 
   describe("at the end", () => {
     const started = {
-      sessionId: 7,
+      sessionId: uid(7),
       entry: {
         position: 0,
         verdict: "direct_play",
@@ -1761,7 +1793,7 @@ describe("player", () => {
         subtitleAction: "none",
         bad: false,
       },
-      streamUrl: "/api/v1/streams/k/0/file",
+      streamUrl: "/api/v2/streams/k/0/file",
       streamKind: "file",
       positionMs: 0,
       negotiated: { verdict: "direct_play" },
@@ -1769,18 +1801,18 @@ describe("player", () => {
       sidecars: [],
     };
     const ended = async (routes: Record<string, unknown>, active = me(1)) => {
-      await at("#/item/21");
-      await at("#/play/21");
+      await at(`#/item/${uid(21)}`);
+      await at(`#/play/${uid(21)}`);
       const r = root();
       await boot(r, {
         fetch: mockFetch({
           "GET /health": health,
           "GET /me": active,
-          "GET /items/21": item(21, "movie"),
+          [`GET /items/${uid(21)}`]: item(21, "movie"),
           "GET /media-files": page([]),
           "POST /playback/sessions": () => json(started, 201),
-          "PUT /playback/sessions/7/position": () => new Response(null, { status: 204 }),
-          "DELETE /playback/sessions/7": () => new Response(null, { status: 204 }),
+          [`PUT /playback/sessions/${uid(7)}/position`]: () => new Response(null, { status: 204 }),
+          [`DELETE /playback/sessions/${uid(7)}`]: () => new Response(null, { status: 204 }),
           ...routes,
         }),
       });
@@ -1790,16 +1822,22 @@ describe("player", () => {
     };
 
     it("closes back to where it was opened with nothing next", async () => {
-      await ended({ "GET /profiles/1/up-next/21": () => new Response(null, { status: 204 }) });
-      await until(() => location.hash === "#/item/21");
+      await ended({
+        [`GET /profiles/${uid(1)}/up-next/${uid(21)}`]: () => new Response(null, { status: 204 }),
+      });
+      await until(() => location.hash === `#/item/${uid(21)}`);
     });
 
     it("closes back on Cancel", async () => {
       const r = await ended({
-        "GET /profiles/1/up-next/21": { itemId: 22, kind: "movie", title: "T22" },
+        [`GET /profiles/${uid(1)}/up-next/${uid(21)}`]: {
+          itemId: uid(22),
+          kind: "movie",
+          title: "T22",
+        },
       });
       button(r, "Cancel").click();
-      await until(() => location.hash === "#/item/21");
+      await until(() => location.hash === `#/item/${uid(21)}`);
     });
 
     it("waits for Play now with Autoplay off, and its checkbox turns Autoplay on", async () => {
@@ -1810,8 +1848,15 @@ describe("player", () => {
         off.profiles[0] = { ...heidi, autoplay: false };
         const r = await ended(
           {
-            "GET /profiles/1/up-next/21": { itemId: 22, kind: "movie", title: "T22" },
-            "PUT /profiles/1/preferences": (b: unknown) => ({ ...heidi, ...(b as object) }),
+            [`GET /profiles/${uid(1)}/up-next/${uid(21)}`]: {
+              itemId: uid(22),
+              kind: "movie",
+              title: "T22",
+            },
+            [`PUT /profiles/${uid(1)}/preferences`]: (b: unknown) => ({
+              ...heidi,
+              ...(b as object),
+            }),
           },
           off,
         );
@@ -1819,15 +1864,15 @@ describe("player", () => {
         expect(card.textContent).toContain("Up next: T22");
         expect(card.textContent).not.toContain(" in 10s");
         vi.advanceTimersByTime(11_000);
-        expect(location.hash).toBe("#/play/21");
+        expect(location.hash).toBe(`#/play/${uid(21)}`);
         card.querySelector<HTMLInputElement>("input[type=checkbox]")!.click();
-        await until(() => calls.some((c) => c.key === "PUT /profiles/1/preferences"));
-        expect(calls.find((c) => c.key === "PUT /profiles/1/preferences")!.body).toEqual({
+        await until(() => calls.some((c) => c.key === `PUT /profiles/${uid(1)}/preferences`));
+        expect(calls.find((c) => c.key === `PUT /profiles/${uid(1)}/preferences`)!.body).toEqual({
           autoplay: true,
         });
         expect(card.textContent).toContain("Up next: T22 in 10s");
         vi.advanceTimersByTime(11_000);
-        expect(location.hash).toBe("#/play/22");
+        expect(location.hash).toBe(`#/play/${uid(22)}`);
       } finally {
         vi.useRealTimers();
       }
@@ -1837,7 +1882,11 @@ describe("player", () => {
       vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
       try {
         const r = await ended({
-          "GET /profiles/1/up-next/21": { itemId: 22, kind: "movie", title: "T22" },
+          [`GET /profiles/${uid(1)}/up-next/${uid(21)}`]: {
+            itemId: uid(22),
+            kind: "movie",
+            title: "T22",
+          },
         });
         const video = r.querySelector("video")!;
         Object.defineProperty(video, "duration", { get: () => 100 });
@@ -1852,11 +1901,11 @@ describe("player", () => {
         video.dispatchEvent(new Event("seeking"));
         expect(r.querySelector<HTMLElement>(".upnext")!.hidden).toBe(true);
         vi.advanceTimersByTime(11_000);
-        expect(location.hash).toBe("#/play/21");
+        expect(location.hash).toBe(`#/play/${uid(21)}`);
         calls.length = 0;
         window.dispatchEvent(new Event("pagehide"));
-        await until(() => calls.some((c) => c.key === "DELETE /playback/sessions/7"));
-        expect(calls.find((c) => c.key === "DELETE /playback/sessions/7")!.query).toBe(
+        await until(() => calls.some((c) => c.key === `DELETE /playback/sessions/${uid(7)}`));
+        expect(calls.find((c) => c.key === `DELETE /playback/sessions/${uid(7)}`)!.query).toBe(
           "?positionMs=40000",
         );
       } finally {
@@ -1874,8 +1923,8 @@ describe("player", () => {
       ...extra,
     });
     const away = (extra = {}) => ({
-      sessionId: 7,
-      mediaFileId: 9,
+      sessionId: uid(7),
+      mediaFileId: uid(9),
       entry: {
         position: 0,
         verdict: "video_transcode",
@@ -1884,7 +1933,7 @@ describe("player", () => {
         subtitleAction: "none",
         bad: false,
       },
-      streamUrl: "/api/v1/streams/k/0/file",
+      streamUrl: "/api/v2/streams/k/0/file",
       streamKind: "file",
       positionMs: 0,
       negotiated: { verdict: "video_transcode", width: 1920, height: 1080, bitrate: 8_000_000 },
@@ -1899,25 +1948,27 @@ describe("player", () => {
       ...extra,
     });
     const play = async (stream: unknown, extra: Record<string, unknown> = {}) => {
-      await at("#/play/5");
+      await at(`#/play/${uid(5)}`);
       const r = root();
       await boot(r, {
         fetch: mockFetch({
           "GET /health": health,
           "GET /me": me(1),
-          "GET /items/5": item(5, "movie"),
+          [`GET /items/${uid(5)}`]: item(5, "movie"),
           "GET /media-files": page([
             {
-              id: 9,
+              id: uid(9),
               durationMs: 120_000,
               tracks: [],
-              chapters: [{ id: 1, position: 0, startMs: 0, endMs: 120_000, title: "Cold open" }],
+              chapters: [
+                { id: uid(1), position: 0, startMs: 0, endMs: 120_000, title: "Cold open" },
+              ],
             },
           ]),
           "POST /playback/sessions": () => json(stream, 201),
-          "PUT /playback/sessions/7/position": () => new Response(null, { status: 204 }),
-          "PUT /playback/sessions/7/network": () => ({ action: "continue", stream }),
-          "DELETE /playback/sessions/7": () => new Response(null, { status: 204 }),
+          [`PUT /playback/sessions/${uid(7)}/position`]: () => new Response(null, { status: 204 }),
+          [`PUT /playback/sessions/${uid(7)}/network`]: () => ({ action: "continue", stream }),
+          [`DELETE /playback/sessions/${uid(7)}`]: () => new Response(null, { status: 204 }),
           ...extra,
         }),
       });
@@ -1925,17 +1976,17 @@ describe("player", () => {
       return r;
     };
     const net = () =>
-      calls.filter((c) => c.key === "PUT /playback/sessions/7/network").map((c) => c.body);
+      calls.filter((c) => c.key === `PUT /playback/sessions/${uid(7)}/network`).map((c) => c.body);
     const previews = {
       intervalMs: 10_000,
       count: 12,
       width: 320,
       height: 180,
-      frameUrl: "/api/v1/streams/k/0/previews/{n}.jpg",
-      bifUrl: "/api/v1/streams/k/0/previews.bif",
+      frameUrl: "/api/v2/streams/k/0/previews/{n}.jpg",
+      bifUrl: "/api/v2/streams/k/0/previews.bif",
     };
     const hlsAway = (extra = {}) =>
-      away({ streamKind: "hls", streamUrl: "/api/v1/streams/k/0/master.m3u8", ...extra });
+      away({ streamKind: "hls", streamUrl: "/api/v2/streams/k/0/master.m3u8", ...extra });
     const levels = [
       { width: 854, height: 480, bitrate: 1_500_000 },
       { width: 1920, height: 1080, bitrate: 8_000_000 },
@@ -1989,7 +2040,7 @@ describe("player", () => {
       const pv = r.querySelector<HTMLElement>(".pv")!;
       expect(pv.hidden).toBe(false);
       expect(pv.querySelector("img")!.getAttribute("src")).toBe(
-        "/api/v1/streams/k/0/previews/0.jpg",
+        "/api/v2/streams/k/0/previews/0.jpg",
       );
       expect(pv.textContent).toBe("0:00Cold open");
       seek.dispatchEvent(new PointerEvent("pointerleave"));
@@ -2003,12 +2054,12 @@ describe("player", () => {
       const img = r.querySelector<HTMLImageElement>(".pv img")!;
       for (const x of [0, 300, 500, 1000])
         seek.dispatchEvent(new PointerEvent("pointermove", { clientX: x }));
-      expect(img.getAttribute("src")).toBe("/api/v1/streams/k/0/previews/0.jpg");
+      expect(img.getAttribute("src")).toBe("/api/v2/streams/k/0/previews/0.jpg");
       expect(r.querySelector(".pvcap span")!.textContent).toBe("2:00");
       img.dispatchEvent(new Event("load"));
-      expect(img.getAttribute("src")).toBe("/api/v1/streams/k/0/previews/11.jpg");
+      expect(img.getAttribute("src")).toBe("/api/v2/streams/k/0/previews/11.jpg");
       img.dispatchEvent(new Event("error"));
-      expect(img.getAttribute("src")).toBe("/api/v1/streams/k/0/previews/11.jpg");
+      expect(img.getAttribute("src")).toBe("/api/v2/streams/k/0/previews/11.jpg");
     });
 
     it("starts hls.js at the negotiated rung without a bandwidth probe, and Auto names the level in use", async () => {
@@ -2077,16 +2128,19 @@ describe("player", () => {
     it("carries the position in telemetry and switches to a stream the answer restarts", async () => {
       vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
       try {
-        const floor = away({ streamUrl: "/api/v1/streams/k2/0/file", positionMs: 12_000 });
+        const floor = away({ streamUrl: "/api/v2/streams/k2/0/file", positionMs: 12_000 });
         const r = await play(away(), {
-          "PUT /playback/sessions/7/throughput": () => ({ action: "restart", stream: floor }),
+          [`PUT /playback/sessions/${uid(7)}/throughput`]: () => ({
+            action: "restart",
+            stream: floor,
+          }),
         });
         const video = r.querySelector("video")!;
         Object.defineProperty(video, "currentTime", { get: () => 12.5, set() {} });
         calls.length = 0;
         vi.advanceTimersByTime(10_000);
-        await until(() => video.getAttribute("src") === "/api/v1/streams/k2/0/file");
-        expect(calls.map((c) => c.key)).toEqual(["PUT /playback/sessions/7/throughput"]);
+        await until(() => video.getAttribute("src") === "/api/v2/streams/k2/0/file");
+        expect(calls.map((c) => c.key)).toEqual([`PUT /playback/sessions/${uid(7)}/throughput`]);
         expect(calls[0].body).toMatchObject({ positionMs: 12_500 });
       } finally {
         vi.useRealTimers();
@@ -2096,8 +2150,8 @@ describe("player", () => {
     it("starts again at the position when the server has ended the session", async () => {
       let n = 0;
       const again = away({
-        sessionId: 8,
-        streamUrl: "/api/v1/streams/k2/0/file",
+        sessionId: uid(8),
+        streamUrl: "/api/v2/streams/k2/0/file",
         positionMs: 12_500,
       });
       const r = await play(away(), {
@@ -2106,9 +2160,9 @@ describe("player", () => {
       const video = r.querySelector("video")!;
       Object.defineProperty(video, "currentTime", { get: () => 12.5, set() {} });
       video.dispatchEvent(new Event("error"));
-      await until(() => video.getAttribute("src") === "/api/v1/streams/k2/0/file");
+      await until(() => video.getAttribute("src") === "/api/v2/streams/k2/0/file");
       expect(calls.filter((c) => c.key === "POST /playback/sessions")[1].body).toMatchObject({
-        itemId: 5,
+        itemId: uid(5),
         positionMs: 12_500,
       });
       expect(r.querySelector<HTMLElement>(".pmsg")!.hidden).toBe(true);
@@ -2116,14 +2170,17 @@ describe("player", () => {
 
     it("sends telemetry at once on a stall", async () => {
       const r = await play(away(), {
-        "PUT /playback/sessions/7/throughput": () => ({ action: "continue", stream: away() }),
+        [`PUT /playback/sessions/${uid(7)}/throughput`]: () => ({
+          action: "continue",
+          stream: away(),
+        }),
       });
       const video = r.querySelector("video")!;
       Object.defineProperty(video, "paused", { get: () => false });
       video.dispatchEvent(new Event("waiting"));
-      await until(() => calls.some((c) => c.key === "PUT /playback/sessions/7/throughput"));
+      await until(() => calls.some((c) => c.key === `PUT /playback/sessions/${uid(7)}/throughput`));
       expect(
-        calls.find((c) => c.key === "PUT /playback/sessions/7/throughput")!.body,
+        calls.find((c) => c.key === `PUT /playback/sessions/${uid(7)}/throughput`)!.body,
       ).toMatchObject({ stallCount: 1 });
     });
 
@@ -2135,39 +2192,44 @@ describe("player", () => {
       document.dispatchEvent(new Event("visibilitychange"));
       Reflect.deleteProperty(document, "visibilityState");
       const reported = () =>
-        calls.filter((c) => c.key === "PUT /playback/sessions/7/position").map((c) => c.body);
+        calls
+          .filter((c) => c.key === `PUT /playback/sessions/${uid(7)}/position`)
+          .map((c) => c.body);
       await vi.waitFor(() =>
         expect(reported()).toContainEqual({ positionMs: 12_500, paused: true }),
       );
       calls.length = 0;
       window.dispatchEvent(new Event("pagehide"));
-      await until(() => calls.some((c) => c.key === "DELETE /playback/sessions/7"));
+      await until(() => calls.some((c) => c.key === `DELETE /playback/sessions/${uid(7)}`));
       await new Promise((x) => setTimeout(x, 20));
       const last = calls.filter((c) => /position|DELETE/.test(c.key));
       expect(last.map((c) => [c.key, c.query, c.keepalive])).toEqual([
-        ["DELETE /playback/sessions/7", "?positionMs=12500", true],
+        [`DELETE /playback/sessions/${uid(7)}`, "?positionMs=12500", true],
       ]);
     });
 
     it("reports the start position, not 0, until the element has reached it", async () => {
       const r = await play(away({ positionMs: 3_600_000 }), {
-        "PUT /playback/sessions/7/throughput": () => ({ action: "continue", stream: away() }),
+        [`PUT /playback/sessions/${uid(7)}/throughput`]: () => ({
+          action: "continue",
+          stream: away(),
+        }),
       });
       const video = r.querySelector("video")!;
       let now = 0;
       Object.defineProperty(video, "currentTime", { get: () => now, set() {} });
       Object.defineProperty(video, "paused", { get: () => false });
       video.dispatchEvent(new Event("waiting"));
-      await until(() => calls.some((c) => c.key === "PUT /playback/sessions/7/throughput"));
+      await until(() => calls.some((c) => c.key === `PUT /playback/sessions/${uid(7)}/throughput`));
       expect(
-        calls.find((c) => c.key === "PUT /playback/sessions/7/throughput")!.body,
+        calls.find((c) => c.key === `PUT /playback/sessions/${uid(7)}/throughput`)!.body,
       ).toMatchObject({ positionMs: 3_600_000 });
       now = 3600.5;
       video.dispatchEvent(new Event("timeupdate"));
       calls.length = 0;
       window.dispatchEvent(new Event("pagehide"));
-      await until(() => calls.some((c) => c.key === "DELETE /playback/sessions/7"));
-      expect(calls.find((c) => c.key === "DELETE /playback/sessions/7")!.query).toBe(
+      await until(() => calls.some((c) => c.key === `DELETE /playback/sessions/${uid(7)}`));
+      expect(calls.find((c) => c.key === `DELETE /playback/sessions/${uid(7)}`)!.query).toBe(
         "?positionMs=3600500",
       );
     });
@@ -2176,8 +2238,8 @@ describe("player", () => {
       await play(away({ positionMs: 3_600_000 }));
       calls.length = 0;
       window.dispatchEvent(new Event("pagehide"));
-      await until(() => calls.some((c) => c.key === "DELETE /playback/sessions/7"));
-      expect(calls.find((c) => c.key === "DELETE /playback/sessions/7")!.query).toBe(
+      await until(() => calls.some((c) => c.key === `DELETE /playback/sessions/${uid(7)}`));
+      expect(calls.find((c) => c.key === `DELETE /playback/sessions/${uid(7)}`)!.query).toBe(
         "?positionMs=3600000",
       );
     });
@@ -2195,7 +2257,12 @@ describe("player", () => {
         get: () => ({ mode: "disabled" }),
       });
       try {
-        const sidecar = { trackId: 9, format: "srt", forced: false, url: "/api/v1/subs/9.srt" };
+        const sidecar = {
+          trackId: uid(9),
+          format: "srt",
+          forced: false,
+          url: "/api/v2/subs/9.srt",
+        };
         const r = await play(away({ sidecars: [sidecar] }));
         await until(() => r.querySelector("track"));
         await at("#/");
@@ -2274,7 +2341,7 @@ describe("link a TV", () => {
     open();
     const r = root();
     await boot(r, {
-      fetch: mockFetch(linkApi({ "POST /link/7KQ4-MNP2/approve": () => ({ id: 1 }) })),
+      fetch: mockFetch(linkApi({ "POST /link/7KQ4-MNP2/approve": () => ({ id: uid(1) }) })),
     });
     await until(() => button(r, "Link this TV"));
     expect(r.textContent).toContain("Living room Roku");
@@ -2391,7 +2458,7 @@ describe("link a TV", () => {
     const r = root();
     const fetch = mockFetch({
       ...linkApi(),
-      "GET /auth/sso-providers": [{ id: 3, name: "Keyhole" }],
+      "GET /auth/sso-providers": [{ id: uid(3), name: "Keyhole" }],
       "POST /auth/sso/exchange": { token: "tok", me: me(1) },
     });
     await boot(r, { fetch });
@@ -2457,18 +2524,18 @@ describe("search", () => {
                 shows: [item(10, "show", { parsedTitle: "Toy Shop" })],
                 episodes: [
                   item(21, "episode", {
-                    parentId: 11,
+                    parentId: uid(11),
                     seasonNumber: 1,
                     episodeNumber: 2,
                     metadata: { status: "matched", title: "Toys" },
                   }),
                 ],
-                people: [{ id: 7, name: "Toy Maker" }],
+                people: [{ id: uid(7), name: "Toy Maker" }],
                 albums: [
                   {
-                    id: 100,
-                    libraryId: 3,
-                    artistId: 50,
+                    id: uid(100),
+                    libraryId: uid(3),
+                    artistId: uid(50),
                     artistName: "Toy Band",
                     title: "Toybox",
                     songCount: 1,
@@ -2480,8 +2547,8 @@ describe("search", () => {
                 ],
                 artists: [
                   {
-                    id: 50,
-                    libraryId: 3,
+                    id: uid(50),
+                    libraryId: uid(3),
                     name: "Toy Band",
                     sortName: "Toy Band",
                     albumCount: 1,
@@ -2492,8 +2559,8 @@ describe("search", () => {
                 ],
                 channels: [
                   {
-                    id: 40,
-                    libraryId: 5,
+                    id: uid(40),
+                    libraryId: uid(5),
                     title: "Toy Reviews",
                     videoCount: 1,
                     unwatchedCount: 0,
@@ -2508,13 +2575,13 @@ describe("search", () => {
     expect(r.querySelector<HTMLInputElement>("input[type=search]")!.value).toBe("toy");
     expect(texts(r, "section h2")).toEqual(["Movies", "TV", "Music", "YouTube", "People"]);
     expect([...r.querySelectorAll("section a")].map((a) => a.getAttribute("href"))).toEqual([
-      "#/movie/30",
-      "#/episode/21",
-      "#/show/10",
-      "#/album/100",
-      "#/artist/50",
-      "#/channel/40",
-      "#/person/7",
+      `#/movie/${uid(30)}`,
+      `#/episode/${uid(21)}`,
+      `#/show/${uid(10)}`,
+      `#/album/${uid(100)}`,
+      `#/artist/${uid(50)}`,
+      `#/channel/${uid(40)}`,
+      `#/person/${uid(7)}`,
     ]);
     expect(calls.some((c) => c.key === "GET /items" || c.key === "GET /people")).toBe(false);
     const field = r.querySelector<HTMLInputElement>("input[type=search]")!;
@@ -2555,7 +2622,7 @@ describe("search", () => {
     field.dispatchEvent(new Event("input"));
     field.value = "toy";
     field.dispatchEvent(new Event("input"));
-    await until(() => r.querySelector("a[href='#/movie/30']"));
+    await until(() => r.querySelector(`a[href='#/movie/${uid(30)}']`));
     expect(location.hash).toBe("#/search?q=toy");
     expect(calls.filter((c) => c.key === "GET /search").map((c) => c.query)).toEqual(["?q=toy"]);
     expect(document.activeElement).toBe(field);
@@ -2574,7 +2641,7 @@ describe("genres and people", () => {
   const base = {
     "GET /health": health,
     "GET /me": me(1),
-    "GET /profiles/1/watch-state": page([]),
+    [`GET /profiles/${uid(1)}/watch-state`]: page([]),
   };
 
   it("filters the Movies grid by a genre of its library", async () => {
@@ -2585,17 +2652,17 @@ describe("genres and people", () => {
         ...base,
         "GET /genres": (_: unknown, u: URL) =>
           page(
-            u.searchParams.get("libraryId") === "1"
+            u.searchParams.get("libraryId") === uid(1)
               ? [
-                  { id: 3, name: "Comedy" },
-                  { id: 4, name: "Drama" },
+                  { id: uid(3), name: "Comedy" },
+                  { id: uid(4), name: "Drama" },
                 ]
               : [],
           ),
         "GET /items": (_: unknown, u: URL) =>
           u.searchParams.get("kind") !== "movie"
             ? page([])
-            : u.searchParams.get("genreId") === "3"
+            : u.searchParams.get("genreId") === uid(3)
               ? page([item(30, "movie")])
               : page([item(30, "movie"), item(31, "movie")]),
       }),
@@ -2609,7 +2676,7 @@ describe("genres and people", () => {
       "Comedy",
       "Drama",
     ]);
-    select.value = "3";
+    select.value = uid(3);
     select.dispatchEvent(new Event("change"));
     await until(() => r.querySelectorAll(".grid a").length === 1);
     expect(r.querySelector(".grid b")!.textContent).toBe("T30");
@@ -2621,11 +2688,11 @@ describe("genres and people", () => {
     await boot(r, {
       fetch: mockFetch({
         ...base,
-        "GET /genres": page([{ id: 3, name: "All genres" }]),
+        "GET /genres": page([{ id: uid(3), name: "All genres" }]),
         "GET /items": (_: unknown, u: URL) =>
           u.searchParams.get("kind") !== "movie"
             ? page([])
-            : u.searchParams.get("genreId") === "3"
+            : u.searchParams.get("genreId") === uid(3)
               ? page([item(30, "movie")])
               : page([item(30, "movie"), item(31, "movie")]),
       }),
@@ -2634,36 +2701,40 @@ describe("genres and people", () => {
     const select = [...r.querySelectorAll<HTMLSelectElement>("select")].find((s) =>
       s.parentElement!.textContent!.startsWith("Genre"),
     )!;
-    select.value = "3";
+    select.value = uid(3);
     select.dispatchEvent(new Event("change"));
     await until(() => r.querySelectorAll(".grid a").length === 1);
   });
 
   it("shows genres, cast, key crew and the server's playability on Movie details", async () => {
-    await at("#/movie/30");
+    await at(`#/movie/${uid(30)}`);
     const r = root();
     await boot(r, {
       fetch: mockFetch({
         ...base,
-        "GET /items/30": item(30, "movie", { genres: [{ id: 3, name: "Comedy" }] }),
+        [`GET /items/${uid(30)}`]: item(30, "movie", { genres: [{ id: uid(3), name: "Comedy" }] }),
         "GET /media-files": page([
           {
-            id: 1,
-            itemId: 30,
+            id: uid(1),
+            itemId: uid(30),
             path: "/m/toy.mkv",
             sizeBytes: 1e9,
             container: "matroska",
-            tracks: [{ id: 1, kind: "video", index: 0, codec: "h264", width: 1920, height: 1080 }],
+            tracks: [
+              { id: uid(1), kind: "video", index: 0, codec: "h264", width: 1920, height: 1080 },
+            ],
           },
         ]),
-        "GET /items/30/credits": {
-          cast: [{ personId: 7, name: "Tom Hanks", character: "Woody", profilePath: "/a.jpg" }],
+        [`GET /items/${uid(30)}/credits`]: {
+          cast: [
+            { personId: uid(7), name: "Tom Hanks", character: "Woody", profilePath: "/a.jpg" },
+          ],
           crew: [
-            { personId: 8, name: "John Lasseter", job: "Director" },
-            { personId: 9, name: "Joss Whedon", job: "Screenplay" },
+            { personId: uid(8), name: "John Lasseter", job: "Director" },
+            { personId: uid(9), name: "Joss Whedon", job: "Screenplay" },
           ],
         },
-        "POST /items/30/playability": {
+        [`POST /items/${uid(30)}/playability`]: {
           verdict: "video_transcode",
           negotiated: { verdict: "video_transcode" },
         },
@@ -2672,30 +2743,30 @@ describe("genres and people", () => {
     await until(() => r.querySelector("[aria-label=Cast] a"));
     expect(r.querySelector(".meta")!.textContent).toContain("Comedy");
     const cast = r.querySelector("[aria-label=Cast] a")!;
-    expect(cast.getAttribute("href")).toBe("#/person/7");
+    expect(cast.getAttribute("href")).toBe(`#/person/${uid(7)}`);
     expect(cast.textContent).toBe("Tom HanksWoody");
-    expect(cast.querySelector("[data-art]")!.getAttribute("data-art")).toBe("person/7");
+    expect(cast.querySelector("[data-art]")!.getAttribute("data-art")).toBe(`person/${uid(7)}`);
     expect(r.textContent).toContain("Directed by John Lasseter · Written by Joss Whedon");
     await until(() => r.querySelector(".warn")?.textContent === "Converted for this device");
-    const sent = calls.find((c) => c.key === "POST /items/30/playability")!.body as {
+    const sent = calls.find((c) => c.key === `POST /items/${uid(30)}/playability`)!.body as {
       decoder: unknown;
       network: unknown;
     };
     expect(sent.decoder).toBeTruthy();
     expect(sent.network).toBeTruthy();
-    await until(() => calls.some((c) => c.key === "GET /people/7/artwork"));
+    await until(() => calls.some((c) => c.key === `GET /people/${uid(7)}/artwork`));
   });
 
   it("lists a person's titles", async () => {
-    await at("#/person/7");
+    await at(`#/person/${uid(7)}`);
     const r = root();
     await boot(r, {
       fetch: mockFetch({
         ...base,
-        "GET /people/7": { id: 7, name: "Tom Hanks" },
+        [`GET /people/${uid(7)}`]: { id: uid(7), name: "Tom Hanks" },
         "GET /items": (_: unknown, u: URL) =>
           page(
-            u.searchParams.get("personId") === "7"
+            u.searchParams.get("personId") === uid(7)
               ? [item(30, "movie"), item(10, "show", { parsedTitle: "Band" })]
               : [],
           ),
@@ -2704,8 +2775,8 @@ describe("genres and people", () => {
     await until(() => r.querySelector(".grid a"));
     expect(r.querySelector("h1")!.textContent).toBe("Tom Hanks");
     expect([...r.querySelectorAll(".grid a")].map((a) => a.getAttribute("href"))).toEqual([
-      "#/movie/30",
-      "#/show/10",
+      `#/movie/${uid(30)}`,
+      `#/show/${uid(10)}`,
     ]);
   });
 });
@@ -2720,10 +2791,10 @@ describe("household", () => {
     acct(2, "Jax", "kid", { movieCeiling: "PG", tvCeiling: "TV-PG", birthday: "2017-08-19" }),
   ];
   const code = {
-    id: 9,
+    id: uid(9),
     code: "7KQ4-MNP2",
     link: "/join/7KQ4-MNP2",
-    accountId: 4,
+    accountId: uid(4),
     expiresAt: later,
     createdAt: ts,
   };
@@ -2755,7 +2826,7 @@ describe("household", () => {
   });
 
   it("sends a kid who types an adult's form to Home", async () => {
-    for (const hash of ["#/password", "#/add-kid", "#/add-adult", "#/kid/2"]) {
+    for (const hash of ["#/password", "#/add-kid", "#/add-adult", `#/kid/${uid(2)}`]) {
       document.body.replaceChildren();
       await at(hash);
       const r = root();
@@ -2765,7 +2836,7 @@ describe("household", () => {
           "GET /me": me(2),
           "GET /items": page([]),
           "GET /genres": page([]),
-          "GET /profiles/2/watch-state": page([]),
+          [`GET /profiles/${uid(2)}/watch-state`]: page([]),
         }),
       });
       await until(() => location.hash === "#/");
@@ -2782,7 +2853,7 @@ describe("household", () => {
         fetch: mockFetch({
           "GET /health": health,
           "GET /me": me(1),
-          "POST /profiles/1/unlock": unlock,
+          [`POST /profiles/${uid(1)}/unlock`]: unlock,
         }),
       });
       await until(() => r.querySelector(".profiles"));
@@ -2812,7 +2883,9 @@ describe("household", () => {
       r.querySelector<HTMLElement>("a[href='#/add-kid']")!.click();
       type("1234");
       await until(() => location.hash === "#/add-kid");
-      expect(calls.find((c) => c.key === "POST /profiles/1/unlock")!.body).toEqual({ pin: "1234" });
+      expect(calls.find((c) => c.key === `POST /profiles/${uid(1)}/unlock`)!.body).toEqual({
+        pin: "1234",
+      });
     });
   });
 
@@ -2825,7 +2898,7 @@ describe("household", () => {
         "GET /me": me(1, true, [members[1], members[2]]),
         "GET /profiles": page(members),
         "GET /household/offers": noOffers,
-        "POST /profiles/4/join-code": { account: members[2], joinCode: code },
+        [`POST /profiles/${uid(4)}/join-code`]: { account: members[2], joinCode: code },
       }),
     });
     await until(() => r.querySelector(".members li"));
@@ -2854,8 +2927,8 @@ describe("household", () => {
         "GET /me": me(3, true, [members[1]]),
         "GET /profiles": page([members[0], members[1], members[3]]),
         "GET /household/offers": noOffers,
-        "DELETE /profiles/2": () => new Response(null, { status: 204 }),
-        "PUT /profiles/3/pin": () => new Response(null, { status: 204 }),
+        [`DELETE /profiles/${uid(2)}`]: () => new Response(null, { status: 204 }),
+        [`PUT /profiles/${uid(3)}/pin`]: () => new Response(null, { status: 204 }),
       }),
     });
     await until(() => r.querySelector(".members li"));
@@ -2870,14 +2943,16 @@ describe("household", () => {
     pinDlg.querySelector<HTMLInputElement>("input[type=password]")!.value = "4321";
     pinDlg.querySelector("form")!.requestSubmit();
     await until(() => calls.filter((c) => c.key === "GET /me").length === 2);
-    expect(calls.find((c) => c.key === "PUT /profiles/3/pin")!.body).toEqual({ pin: "4321" });
+    expect(calls.find((c) => c.key === `PUT /profiles/${uid(3)}/pin`)!.body).toEqual({
+      pin: "4321",
+    });
     await until(() => r.querySelector(".members li"));
     button(r, "Remove").click();
     const dlg = document.querySelector("[role=dialog]")!;
     expect(dlg.textContent).toContain("Remove Jax?");
     button(dlg, "Remove").click();
     await until(() => calls.filter((c) => c.key === "GET /me").length === 2);
-    expect(calls.some((c) => c.key === "DELETE /profiles/2")).toBe(true);
+    expect(calls.some((c) => c.key === `DELETE /profiles/${uid(2)}`)).toBe(true);
   });
 
   it("changes a kid to an adult with an email", async () => {
@@ -2889,7 +2964,7 @@ describe("household", () => {
         "GET /me": me(1, true, [members[1]]),
         "GET /profiles": page(members),
         "GET /household/offers": noOffers,
-        "POST /profiles/2/make-adult": { account: members[3], joinCode: code },
+        [`POST /profiles/${uid(2)}/make-adult`]: { account: members[3], joinCode: code },
       }),
     });
     await until(() => r.querySelector(".members li"));
@@ -2898,14 +2973,14 @@ describe("household", () => {
     dlg.querySelector<HTMLInputElement>("input[type=email]")!.value = "jax@example.test";
     dlg.querySelector("form")!.requestSubmit();
     await until(() => r.textContent!.includes("7KQ4-MNP2"));
-    expect(calls.find((c) => c.key === "POST /profiles/2/make-adult")!.body).toEqual({
+    expect(calls.find((c) => c.key === `POST /profiles/${uid(2)}/make-adult`)!.body).toEqual({
       email: "jax@example.test",
       expiresInDays: 7,
     });
   });
 
   it("edits a kid: name, PIN cleared, and titles added to and removed from the allow list", async () => {
-    await at("#/kid/2");
+    await at(`#/kid/${uid(2)}`);
     const r = root();
     const kid = acct(2, "Jax", "kid", {
       hasPin: true,
@@ -2918,20 +2993,22 @@ describe("household", () => {
       fetch: mockFetch({
         "GET /health": health,
         "GET /me": me(1),
-        "GET /profiles/2": kid,
-        "PUT /profiles/2": (b: unknown) => ({ ...kid, ...(b as object) }),
-        "DELETE /profiles/2/pin": () => new Response(null, { status: 204 }),
-        "GET /profiles/2/allowed-items": { itemIds: [30, 40] },
-        "GET /items/30": item(30, "movie", { parsedTitle: "Toy Story" }),
-        "GET /youtube/channels/40": { id: 40, title: "Toy Reviews" },
+        [`GET /profiles/${uid(2)}`]: kid,
+        [`PUT /profiles/${uid(2)}`]: (b: unknown) => ({ ...kid, ...(b as object) }),
+        [`DELETE /profiles/${uid(2)}/pin`]: () => new Response(null, { status: 204 }),
+        [`GET /profiles/${uid(2)}/allowed-items`]: { itemIds: [uid(30), uid(40)] },
+        [`GET /items/${uid(30)}`]: item(30, "movie", { parsedTitle: "Toy Story" }),
+        [`GET /youtube/channels/${uid(40)}`]: { id: uid(40), title: "Toy Reviews" },
         "GET /items": (_: unknown, u: URL) =>
           page(
             u.searchParams.get("q") === "mat" && u.searchParams.get("kind") === "movie"
               ? [item(31, "movie", { parsedTitle: "Matrix" })]
               : [],
           ),
-        "PUT /profiles/2/allowed-items/31": () => new Response(null, { status: 204 }),
-        "DELETE /profiles/2/allowed-items/30": () => new Response(null, { status: 204 }),
+        [`PUT /profiles/${uid(2)}/allowed-items/${uid(31)}`]: () =>
+          new Response(null, { status: 204 }),
+        [`DELETE /profiles/${uid(2)}/allowed-items/${uid(30)}`]: () =>
+          new Response(null, { status: 204 }),
         "GET /profiles": page(members),
       }),
     });
@@ -2953,18 +3030,22 @@ describe("household", () => {
     find.dispatchEvent(new Event("input"));
     await until(() => r.textContent!.includes("Matrix"));
     button(r, "Add").click();
-    await until(() => calls.some((c) => c.key === "PUT /profiles/2/allowed-items/31"));
+    await until(() =>
+      calls.some((c) => c.key === `PUT /profiles/${uid(2)}/allowed-items/${uid(31)}`),
+    );
     [...r.querySelectorAll<HTMLElement>(".allow li")]
       .find((li) => li.textContent!.startsWith("Toy Story"))!
       .querySelector("button")!
       .click();
-    await until(() => calls.some((c) => c.key === "DELETE /profiles/2/allowed-items/30"));
+    await until(() =>
+      calls.some((c) => c.key === `DELETE /profiles/${uid(2)}/allowed-items/${uid(30)}`),
+    );
 
     r.querySelector<HTMLInputElement>("#kn")!.value = "Jaxon";
     pin.click();
     r.querySelector("form")!.requestSubmit();
-    await until(() => calls.some((c) => c.key === "DELETE /profiles/2/pin"));
-    expect(calls.find((c) => c.key === "PUT /profiles/2")!.body).toEqual({
+    await until(() => calls.some((c) => c.key === `DELETE /profiles/${uid(2)}/pin`));
+    expect(calls.find((c) => c.key === `PUT /profiles/${uid(2)}`)!.body).toEqual({
       name: "Jaxon",
       birthday: "2017-08-19",
       filterMode: "allow_list",
@@ -2974,62 +3055,64 @@ describe("household", () => {
   });
 
   it("keeps the allow list on screen through an add and a remove, without asking for any title again", async () => {
-    await at("#/kid/2");
+    await at(`#/kid/${uid(2)}`);
     const r = root();
     const kid = acct(2, "Jax", "kid", { birthday: "2017-08-19", filterMode: "allow_list" });
     await boot(r, {
       fetch: mockFetch({
         "GET /health": health,
         "GET /me": me(1),
-        "GET /profiles/2": kid,
-        // 50 is gone from both the items and the channels.
-        "GET /profiles/2/allowed-items": { itemIds: [30, 50] },
-        "GET /items/30": item(30, "movie", { parsedTitle: "Toy Story" }),
+        [`GET /profiles/${uid(2)}`]: kid,
+        // 50 is gone from both the items and the channels: an unknown title.
+        [`GET /profiles/${uid(2)}/allowed-items`]: { itemIds: [uid(30), uid(50)] },
+        [`GET /items/${uid(30)}`]: item(30, "movie", { parsedTitle: "Toy Story" }),
         "GET /items": (_: unknown, u: URL) =>
           page(
             u.searchParams.get("q") === "mat" && u.searchParams.get("kind") === "movie"
               ? [item(31, "movie", { parsedTitle: "Matrix" })]
               : [],
           ),
-        "PUT /profiles/2/allowed-items/31": () => new Response(null, { status: 204 }),
-        "DELETE /profiles/2/allowed-items/30": () => new Response(null, { status: 204 }),
+        [`PUT /profiles/${uid(2)}/allowed-items/${uid(31)}`]: () =>
+          new Response(null, { status: 204 }),
+        [`DELETE /profiles/${uid(2)}/allowed-items/${uid(30)}`]: () =>
+          new Response(null, { status: 204 }),
         "GET /profiles": page(members),
       }),
     });
     const titles = () =>
       [...r.querySelectorAll(".allow ul:first-of-type b")].map((b) => b.textContent);
     await until(() => titles().length === 2);
-    expect(titles()).toEqual(["Toy Story", "Item 50"]);
+    expect(titles()).toEqual(["Toy Story", "Untitled"]);
     const find = r.querySelector<HTMLInputElement>("input[type=search]")!;
     find.value = "mat";
     find.dispatchEvent(new Event("input"));
     await until(() => r.textContent!.includes("Matrix"));
     button(r, "Add").click();
     await until(() => titles().length === 3);
-    expect(titles()).toEqual(["Toy Story", "Item 50", "Matrix"]);
+    expect(titles()).toEqual(["Toy Story", "Untitled", "Matrix"]);
     [...r.querySelectorAll<HTMLElement>(".allow li")]
       .find((li) => li.textContent!.startsWith("Toy Story"))!
       .querySelector("button")!
       .click();
     await until(() => titles().length === 2);
-    expect(titles()).toEqual(["Item 50", "Matrix"]);
+    expect(titles()).toEqual(["Untitled", "Matrix"]);
     const count = (key: string) => calls.filter((c) => c.key === key).length;
-    expect(count("GET /profiles/2/allowed-items")).toBe(1);
-    expect(count("GET /items/30")).toBe(1);
-    expect(count("GET /items/50")).toBe(1);
+    expect(count(`GET /profiles/${uid(2)}/allowed-items`)).toBe(1);
+    expect(count(`GET /items/${uid(30)}`)).toBe(1);
+    expect(count(`GET /items/${uid(50)}`)).toBe(1);
   });
 
   describe("shared with other households", () => {
     const offer = (id: number, extra = {}) => ({
-      id,
-      profileId: 7,
+      id: uid(id),
+      profileId: uid(7),
       profileName: "Mia",
       profileKind: "kid",
-      householdId: 5,
+      householdId: uid(5),
       householdName: "Mark",
-      fromProfileId: 8,
+      fromProfileId: uid(8),
       fromName: "Mark",
-      toProfileId: 1,
+      toProfileId: uid(1),
       toName: "Heidi",
       createdAt: ts,
       ...extra,
@@ -3060,11 +3143,11 @@ describe("household", () => {
       const r = await open({
         "GET /household/offers": {
           incoming: [offer(10), offer(11, { profileName: "Ty", profileKind: "adult" })],
-          outgoing: [offer(12, { profileId: 2, profileName: "Jax", toName: "Mark" })],
+          outgoing: [offer(12, { profileId: uid(2), profileName: "Jax", toName: "Mark" })],
         },
-        "POST /household/offers/10/accept": () => new Response(null, { status: 204 }),
-        "DELETE /household/offers/11": () => new Response(null, { status: 204 }),
-        "DELETE /household/offers/12": () => new Response(null, { status: 204 }),
+        [`POST /household/offers/${uid(10)}/accept`]: () => new Response(null, { status: 204 }),
+        [`DELETE /household/offers/${uid(11)}`]: () => new Response(null, { status: 204 }),
+        [`DELETE /household/offers/${uid(12)}`]: () => new Response(null, { status: 204 }),
       });
       expect(texts(r, "h2")).toEqual(["Offers", "Profiles"]);
       const [mia, ty, jax] = r.querySelectorAll(".members")[0].querySelectorAll("li");
@@ -3081,9 +3164,9 @@ describe("household", () => {
       button(ty, "Decline").click();
       button(jax, "Withdraw").click();
       for (const k of [
-        "POST /household/offers/10/accept",
-        "DELETE /household/offers/11",
-        "DELETE /household/offers/12",
+        `POST /household/offers/${uid(10)}/accept`,
+        `DELETE /household/offers/${uid(11)}`,
+        `DELETE /household/offers/${uid(12)}`,
       ])
         await until(() => calls.some((c) => c.key === k));
       await until(() => calls.filter((c) => c.key === "GET /me").length > 1);
@@ -3096,7 +3179,7 @@ describe("household", () => {
 
     it("marks shared and visiting profiles, and removing a shared one only takes it out of here", async () => {
       const r = await open({
-        "DELETE /profiles/2": () => new Response(null, { status: 204 }),
+        [`DELETE /profiles/${uid(2)}`]: () => new Response(null, { status: 204 }),
       });
       expect(texts(r, ".members li .sub")).toEqual([
         "Owner · PIN",
@@ -3124,7 +3207,7 @@ describe("household", () => {
         "Jax stays in their other household. Nothing of theirs is deleted.",
       );
       button(dlg, "Remove").click();
-      await until(() => calls.some((c) => c.key === "DELETE /profiles/2"));
+      await until(() => calls.some((c) => c.key === `DELETE /profiles/${uid(2)}`));
     });
 
     it("keeps today's removal wording and no caption for a profile in this household only", async () => {
@@ -3156,8 +3239,8 @@ describe("household", () => {
       send.click();
       await until(() => calls.some((c) => c.key === "POST /household/offers"));
       expect(calls.find((c) => c.key === "POST /household/offers")!.body).toEqual({
-        profileId: 2,
-        toProfileId: 9,
+        profileId: uid(2),
+        toProfileId: uid(9),
       });
       await until(() => !document.querySelector("[role=dialog]"));
     });
@@ -3180,7 +3263,7 @@ describe("household", () => {
     it("gives a visiting adult nothing to manage, only Leave this household", async () => {
       const visiting = { ...me(6, true, [jo]), account: jo };
       const r = await open(
-        { "DELETE /profiles/6": () => new Response(null, { status: 204 }) },
+        { [`DELETE /profiles/${uid(6)}`]: () => new Response(null, { status: 204 }) },
         visiting,
       );
       expect(rows(r)).toEqual({ Heidi: [], Jax: [], Jo: [] });
@@ -3190,7 +3273,7 @@ describe("household", () => {
       const dlg = document.querySelector("[role=dialog]")!;
       expect(dlg.textContent).toContain("Nothing of yours is deleted.");
       button(dlg, "Leave").click();
-      await until(() => calls.some((c) => c.key === "DELETE /profiles/6"));
+      await until(() => calls.some((c) => c.key === `DELETE /profiles/${uid(6)}`));
       await until(() => location.hash.startsWith("#/who"));
     });
 
@@ -3219,35 +3302,36 @@ describe("More on details", () => {
   const listKid = acct(5, "Ivy", "kid", { filterMode: "allow_list" });
   const household = { ...me(1), profiles: [...me(1).profiles, listKid] };
   const station = (id: number, name: string, ownerId = 1) => ({
-    id,
+    id: uid(id),
     name,
     kind: "movies",
-    ownerId,
-    householdId: 1,
-    playlistId: id * 10,
+    ownerId: uid(ownerId),
+    householdId: uid(1),
+    playlistId: uid(id * 10),
     order: "playlist",
     visibility: "private",
     days: [],
     times: [],
     onAir: { status: "off_schedule", upNext: [] },
     createdAt: ts,
-    updatedAt: ts,
+    modifiedAt: ts,
   });
   const routes = (m: unknown, movie: object) =>
     mockFetch({
       "GET /health": health,
       "GET /me": m,
-      "GET /profiles/1/watch-state": page([]),
-      "GET /profiles/2/watch-state": page([]),
-      "GET /items/30": item(30, "movie", movie),
+      [`GET /profiles/${uid(1)}/watch-state`]: page([]),
+      [`GET /profiles/${uid(2)}/watch-state`]: page([]),
+      [`GET /items/${uid(30)}`]: item(30, "movie", movie),
       "GET /media-files": page([]),
-      "GET /items/30/credits": { cast: [], crew: [] },
-      "GET /items/30/allowed-for": { profileIds: [5] },
-      "PUT /items/30/kids-content": (b: unknown) => item(30, "movie", b as object),
-      "DELETE /items/30/kids-content": () => new Response(null, { status: 204 }),
-      "DELETE /profiles/5/allowed-items/30": () => new Response(null, { status: 204 }),
+      [`GET /items/${uid(30)}/credits`]: { cast: [], crew: [] },
+      [`GET /items/${uid(30)}/allowed-for`]: { profileIds: [uid(5)] },
+      [`PUT /items/${uid(30)}/kids-content`]: (b: unknown) => item(30, "movie", b as object),
+      [`DELETE /items/${uid(30)}/kids-content`]: () => new Response(null, { status: 204 }),
+      [`DELETE /profiles/${uid(5)}/allowed-items/${uid(30)}`]: () =>
+        new Response(null, { status: 204 }),
       "GET /stations": page([station(4, "Mine"), station(6, "Someone else's", 3)]),
-      "POST /profiles/1/playlists/40/entries": { id: 1 },
+      [`POST /profiles/${uid(1)}/playlists/${uid(40)}/entries`]: { id: uid(1) },
     });
   const rows = (r: Element) =>
     [...r.querySelectorAll("[role=menu][aria-label=More] > *")].map((e) =>
@@ -3259,7 +3343,7 @@ describe("More on details", () => {
     );
 
   it("holds watched, kids' content, the allow lists, then Add to playlist, station and collection", async () => {
-    await at("#/movie/30");
+    await at(`#/movie/${uid(30)}`);
     const r = root();
     await boot(r, {
       fetch: routes(household, { kidsContent: true, kidsContentOverride: true }),
@@ -3282,7 +3366,9 @@ describe("More on details", () => {
         e.textContent!.startsWith(t),
       )!;
     opt("Ivy").click();
-    await until(() => calls.some((c) => c.key === "DELETE /profiles/5/allowed-items/30"));
+    await until(() =>
+      calls.some((c) => c.key === `DELETE /profiles/${uid(5)}/allowed-items/${uid(30)}`),
+    );
     await until(() => opt("Ivy").getAttribute("aria-checked") === "false");
     opt("Add to station").click();
     await until(() => document.querySelector("[role=dialog] .choices button"));
@@ -3290,21 +3376,25 @@ describe("More on details", () => {
     expect(texts(dlg, ".choices button")).toEqual(["Mine"]);
     expect(calls.find((c) => c.key === "GET /stations")!.query).toContain("kind=movies");
     button(dlg as HTMLElement, "Mine").click();
-    await until(() => calls.some((c) => c.key === "POST /profiles/1/playlists/40/entries"));
-    expect(calls.find((c) => c.key === "POST /profiles/1/playlists/40/entries")!.body).toEqual({
-      itemId: 30,
+    await until(() =>
+      calls.some((c) => c.key === `POST /profiles/${uid(1)}/playlists/${uid(40)}/entries`),
+    );
+    expect(
+      calls.find((c) => c.key === `POST /profiles/${uid(1)}/playlists/${uid(40)}/entries`)!.body,
+    ).toEqual({
+      itemId: uid(30),
     });
     opt("Kids' content").click();
-    await until(() => calls.some((c) => c.key === "PUT /items/30/kids-content"));
-    expect(calls.find((c) => c.key === "PUT /items/30/kids-content")!.body).toEqual({
+    await until(() => calls.some((c) => c.key === `PUT /items/${uid(30)}/kids-content`));
+    expect(calls.find((c) => c.key === `PUT /items/${uid(30)}/kids-content`)!.body).toEqual({
       kidsContent: false,
     });
     opt("Use rating").click();
-    await until(() => calls.some((c) => c.key === "DELETE /items/30/kids-content"));
+    await until(() => calls.some((c) => c.key === `DELETE /items/${uid(30)}/kids-content`));
   });
 
   it("a More option whose write fails says so in a toast", async () => {
-    await at("#/movie/30");
+    await at(`#/movie/${uid(30)}`);
     const r = root();
     await boot(r, {
       fetch: async (req: Request) =>
@@ -3322,7 +3412,7 @@ describe("More on details", () => {
   });
 
   it("leaves out the allow lists when no kid is on one, and all but watched for a kid", async () => {
-    await at("#/movie/30");
+    await at(`#/movie/${uid(30)}`);
     const r = root();
     await boot(r, { fetch: routes(me(1), { kidsContent: false }) });
     await until(() => button(r, "More"));
@@ -3335,7 +3425,7 @@ describe("More on details", () => {
       "Add to station",
       "Add to collection",
     ]);
-    expect(calls.some((c) => c.key === "GET /items/30/allowed-for")).toBe(false);
+    expect(calls.some((c) => c.key === `GET /items/${uid(30)}/allowed-for`)).toBe(false);
 
     document.body.replaceChildren();
     const kid = root();
@@ -3354,24 +3444,24 @@ describe("related titles and neighbors on details", () => {
   const film = (id: number, name: string) =>
     item(id, "movie", { metadata: { status: "matched", title: name } });
   const collection = (id: number, name: string) => ({
-    id,
+    id: uid(id),
     name,
     source: "tmdb",
     movieCount: 2,
     createdAt: ts,
-    updatedAt: ts,
+    modifiedAt: ts,
   });
   const movieRoutes = (related: unknown, extra = {}) =>
     mockFetch({
       "GET /health": health,
       "GET /me": me(1),
-      "GET /items/30": film(30, "The Two Towers"),
+      [`GET /items/${uid(30)}`]: film(30, "The Two Towers"),
       "GET /media-files": page([]),
-      "GET /items/30/credits": {
-        cast: [{ personId: 7, name: "Elijah Wood", character: "Frodo" }],
+      [`GET /items/${uid(30)}/credits`]: {
+        cast: [{ personId: uid(7), name: "Elijah Wood", character: "Frodo" }],
         crew: [],
       },
-      "GET /items/30/related": related,
+      [`GET /items/${uid(30)}/related`]: related,
       ...extra,
     });
   // The rows between the film's header and its cast.
@@ -3391,7 +3481,7 @@ describe("related titles and neighbors on details", () => {
     ]);
 
   it("gives each collection its own row of its films, in order, directly above Cast", async () => {
-    await at("#/movie/30");
+    await at(`#/movie/${uid(30)}`);
     const r = root();
     await boot(r, {
       fetch: movieRoutes({
@@ -3413,8 +3503,12 @@ describe("related titles and neighbors on details", () => {
         [...row.querySelectorAll(".strip a.poster")].map((a) => a.getAttribute("href")),
       ]),
     ).toEqual([
-      ["The Lord of the Rings", "The Lord of the Rings", ["#/movie/52", "#/movie/41"]],
-      ["Long ones", "Long ones", ["#/movie/47"]],
+      [
+        "The Lord of the Rings",
+        "The Lord of the Rings",
+        [`#/movie/${uid(52)}`, `#/movie/${uid(41)}`],
+      ],
+      ["Long ones", "Long ones", [`#/movie/${uid(47)}`]],
     ]);
     expect(rowsAbove(r)[0]!.querySelector("a.poster b")!.textContent).toBe("Return");
     expect(actions(r)).toEqual([]);
@@ -3422,14 +3516,14 @@ describe("related titles and neighbors on details", () => {
 
   it("gives each occasion in season it belongs to a row of the others, after its collections", async () => {
     const active = (id: number, name: string) => ({
-      id,
+      id: uid(id),
       name,
       headline: "Not this",
       anchorDate: "2026-12-25",
       firstDate: "2026-11-25",
       lastDate: "2026-12-31",
     });
-    await at("#/movie/30");
+    await at(`#/movie/${uid(30)}`);
     const r = root();
     await boot(r, {
       fetch: movieRoutes(
@@ -3438,10 +3532,10 @@ describe("related titles and neighbors on details", () => {
           similar: [],
         },
         {
-          "GET /profiles/1/occasions": page([active(7, "Christmas"), active(8, "Alone")]),
+          [`GET /profiles/${uid(1)}/occasions`]: page([active(7, "Christmas"), active(8, "Alone")]),
           "GET /items": (_: unknown, u: URL) =>
             page(
-              u.searchParams.get("occasionId") === "7"
+              u.searchParams.get("occasionId") === uid(7)
                 ? [film(30, "The Two Towers"), film(70, "Elf")]
                 : [film(30, "The Two Towers")],
             ),
@@ -3457,11 +3551,13 @@ describe("related titles and neighbors on details", () => {
         [...row.querySelectorAll(".strip a.poster")].map((a) => a.getAttribute("href")),
       ]),
     ).toEqual([
-      ["Heists", "Heists", undefined, ["#/movie/47"]],
-      ["Christmas", "Christmas", "#/occasion/7", ["#/movie/70"]],
+      ["Heists", "Heists", undefined, [`#/movie/${uid(47)}`]],
+      ["Christmas", "Christmas", `#/occasion/${uid(7)}`, [`#/movie/${uid(70)}`]],
     ]);
-    const q = new URLSearchParams(calls.find((c) => c.key === "GET /profiles/1/occasions")!.query);
-    expect(q.get("itemId")).toBe("30");
+    const q = new URLSearchParams(
+      calls.find((c) => c.key === `GET /profiles/${uid(1)}/occasions`)!.query,
+    );
+    expect(q.get("itemId")).toBe(uid(30));
     expect(q.get("date")).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 
@@ -3473,7 +3569,7 @@ describe("related titles and neighbors on details", () => {
       () => Promise.reject(new TypeError("Failed to fetch")),
     ]) {
       await at("#/");
-      await at("#/movie/30");
+      await at(`#/movie/${uid(30)}`);
       await boot(r, { fetch: movieRoutes(answer) });
       await until(() => r.querySelector("[aria-label=Cast]"));
       expect(rowsAbove(r)).toEqual([]);
@@ -3484,7 +3580,7 @@ describe("related titles and neighbors on details", () => {
 
   it("draws nothing of the row while it loads, then the page with it", async () => {
     let answer: (body: unknown) => void = () => {};
-    await at("#/movie/30");
+    await at(`#/movie/${uid(30)}`);
     const r = root();
     await boot(r, {
       fetch: movieRoutes(
@@ -3494,7 +3590,7 @@ describe("related titles and neighbors on details", () => {
           }),
       ),
     });
-    await until(() => calls.some((c) => c.key === "GET /items/30/related"));
+    await until(() => calls.some((c) => c.key === `GET /items/${uid(30)}/related`));
     expect(r.querySelector("main")!.textContent).toBe("Loading");
     answer({
       collections: [{ collection: collection(2, "Heists"), items: [film(47, "Heat")] }],
@@ -3504,7 +3600,7 @@ describe("related titles and neighbors on details", () => {
   });
 
   it("names a film's franchise neighbors by title among the secondary actions", async () => {
-    await at("#/movie/30");
+    await at(`#/movie/${uid(30)}`);
     const r = root();
     await boot(r, {
       fetch: movieRoutes({
@@ -3520,15 +3616,15 @@ describe("related titles and neighbors on details", () => {
       [
         "Previous: The Fellowship of the Ring",
         "Previous film, The Fellowship of the Ring",
-        "#/movie/41",
+        `#/movie/${uid(41)}`,
       ],
-      ["Next: The Return of the King", "Next film, The Return of the King", "#/movie/52"],
+      ["Next: The Return of the King", "Next film, The Return of the King", `#/movie/${uid(52)}`],
     ]);
   });
 
   const ep = (id: number, season: number, n: number) =>
     item(id, "episode", {
-      parentId: season === 0 ? 12 : 11,
+      parentId: season === 0 ? uid(12) : uid(11),
       seasonNumber: season,
       episodeNumber: n,
     });
@@ -3536,64 +3632,64 @@ describe("related titles and neighbors on details", () => {
     mockFetch({
       "GET /health": health,
       "GET /me": me(1),
-      "GET /items/10": item(10, "show"),
-      "GET /items/11": item(11, "season", { parentId: 10, seasonNumber: 1 }),
-      "GET /items/22": ep(22, 1, 2),
-      "GET /items/23": ep(23, 0, 1),
+      [`GET /items/${uid(10)}`]: item(10, "show"),
+      [`GET /items/${uid(11)}`]: item(11, "season", { parentId: uid(10), seasonNumber: 1 }),
+      [`GET /items/${uid(22)}`]: ep(22, 1, 2),
+      [`GET /items/${uid(23)}`]: ep(23, 0, 1),
       "GET /items": (_: unknown, u: URL) =>
         page(
           u.searchParams.get("kind") === "season"
-            ? [item(11, "season", { parentId: 10, seasonNumber: 1 })]
+            ? [item(11, "season", { parentId: uid(10), seasonNumber: 1 })]
             : u.searchParams.get("kind") === "episode"
               ? [ep(21, 1, 1), ep(22, 1, 2)]
               : [],
         ),
       "GET /media-files": page([]),
-      "GET /profiles/1/watch-state": page([]),
-      "GET /items/22/related": related,
+      [`GET /profiles/${uid(1)}/watch-state`]: page([]),
+      [`GET /items/${uid(22)}/related`]: related,
     });
 
   it("names an episode's neighbors by season and episode and goes in place of the page", async () => {
-    await at("#/season/11");
-    await at("#/episode/22");
+    await at(`#/season/${uid(11)}`);
+    await at(`#/episode/${uid(22)}`);
     const r = root();
     await boot(r, {
       fetch: tvRoutes({ collections: [], similar: [], previous: ep(21, 1, 1), next: ep(23, 0, 1) }),
     });
     await until(() => actions(r).length > 1);
     expect(actions(r).filter(([t]) => /^(Previous|Next)/.test(t!))).toEqual([
-      ["Previous: S1 E1", "Previous episode, S1 E1", "#/episode/21"],
-      ["Next: S0 E1", "Next episode, S0 E1", "#/episode/23"],
+      ["Previous: S1 E1", "Previous episode, S1 E1", `#/episode/${uid(21)}`],
+      ["Next: S0 E1", "Next episode, S0 E1", `#/episode/${uid(23)}`],
     ]);
     const depth = history.length;
     [...r.querySelectorAll<HTMLElement>(".actions a")]
       .find((a) => a.textContent === "Next: S0 E1")!
       .click();
-    await until(() => location.hash === "#/episode/23");
+    await until(() => location.hash === `#/episode/${uid(23)}`);
     expect(history.length).toBe(depth);
     history.back();
-    await until(() => location.hash === "#/season/11");
+    await until(() => location.hash === `#/season/${uid(11)}`);
   });
 
   it("gives a show a row of each in-season occasion's other members, above its cast", async () => {
-    await at("#/show/10");
+    await at(`#/show/${uid(10)}`);
     const r = root();
     await boot(r, {
       fetch: mockFetch({
         "GET /health": health,
         "GET /me": me(1),
-        "GET /items/10": item(10, "show"),
-        "GET /items/10/credits": {
-          cast: [{ personId: 7, name: "Ann", character: "Mom" }],
+        [`GET /items/${uid(10)}`]: item(10, "show"),
+        [`GET /items/${uid(10)}/credits`]: {
+          cast: [{ personId: uid(7), name: "Ann", character: "Mom" }],
           crew: [],
         },
-        "GET /profiles/1/watch-state": page([]),
-        "GET /profiles/1/occasions": (_: unknown, u: URL) =>
+        [`GET /profiles/${uid(1)}/watch-state`]: page([]),
+        [`GET /profiles/${uid(1)}/occasions`]: (_: unknown, u: URL) =>
           page(
-            u.searchParams.get("itemId") === "10"
+            u.searchParams.get("itemId") === uid(10)
               ? [
                   {
-                    id: 7,
+                    id: uid(7),
                     name: "Christmas",
                     headline: "Not this",
                     anchorDate: "2026-12-25",
@@ -3605,7 +3701,7 @@ describe("related titles and neighbors on details", () => {
           ),
         "GET /items": (_: unknown, u: URL) =>
           page(
-            u.searchParams.get("occasionId") === "7"
+            u.searchParams.get("occasionId") === uid(7)
               ? [item(10, "show"), item(4, "show"), item(5, "movie")]
               : [],
           ),
@@ -3614,15 +3710,15 @@ describe("related titles and neighbors on details", () => {
     await until(() => r.querySelector("section[aria-label=Christmas]"));
     const row = r.querySelector("section[aria-label=Christmas]")!;
     expect(row.nextElementSibling!.getAttribute("aria-label")).toBe("Cast");
-    expect(row.querySelector("h2 a")!.getAttribute("href")).toBe("#/occasion/7");
+    expect(row.querySelector("h2 a")!.getAttribute("href")).toBe(`#/occasion/${uid(7)}`);
     expect(row.querySelector("h2")!.textContent).toBe("Christmas");
     expect([...row.querySelectorAll(".strip a.poster")].map((a) => a.getAttribute("href"))).toEqual(
-      ["#/show/4", "#/movie/5"],
+      [`#/show/${uid(4)}`, `#/movie/${uid(5)}`],
     );
   });
 
   it("shows no neighbors on an episode whose read fails", async () => {
-    await at("#/episode/22");
+    await at(`#/episode/${uid(22)}`);
     const r = root();
     await boot(r, { fetch: tvRoutes(json({ code: "internal", message: "boom" }, 500)) });
     await until(() => r.querySelector("h1.big"));
@@ -3633,7 +3729,7 @@ describe("related titles and neighbors on details", () => {
 
 describe("primary navigation", () => {
   beforeEach(() => setToken("tok"));
-  const lib = (kind: string) => ({ id: 1, kind });
+  const lib = (kind: string) => ({ id: uid(1), kind });
   const labels = (r: HTMLElement) =>
     [...r.querySelectorAll("header nav a")].map((a) => a.textContent);
   const start = async (libraries: Handler | unknown, hash = "#/") => {
@@ -3673,7 +3769,7 @@ describe("primary navigation", () => {
 
   it("leaves the player alone when the sections change under it", async () => {
     let answer!: (body: unknown) => void;
-    await start(() => new Promise((r) => (answer = r)), "#/play/1");
+    await start(() => new Promise((r) => (answer = r)), `#/play/${uid(1)}`);
     const redrawn = vi.fn();
     window.addEventListener("hashchange", redrawn);
     answer(page([lib("movies")]));
@@ -3759,10 +3855,10 @@ describe("profile menu and preferences", () => {
     mockFetch({
       "GET /health": health,
       "GET /me": m,
-      "GET /profiles/1/watch-state": page([]),
-      "GET /profiles/2/watch-state": page([]),
+      [`GET /profiles/${uid(1)}/watch-state`]: page([]),
+      [`GET /profiles/${uid(2)}/watch-state`]: page([]),
       "GET /items": page([]),
-      "GET /profiles/1/avatar": () => new Response(new Blob(["x"]), { status: 200 }),
+      [`GET /profiles/${uid(1)}/avatar`]: () => new Response(new Blob(["x"]), { status: 200 }),
       ...extra,
     });
   const menuOf = async (m: unknown) => {
@@ -3810,10 +3906,10 @@ describe("profile menu and preferences", () => {
     await at("#/");
     const r = await menuOf({
       ...me(1),
-      profiles: [acct(1, "Heidi", "adult", { avatarUrl: "/api/v1/profiles/1/avatar" })],
+      profiles: [acct(1, "Heidi", "adult", { avatarUrl: `/api/v2/profiles/${uid(1)}/avatar` })],
     });
-    expect(r.querySelector(".profile .avatar")!.getAttribute("data-art")).toBe("profile/1");
-    await until(() => calls.some((c) => c.key === "GET /profiles/1/avatar"));
+    expect(r.querySelector(".profile .avatar")!.getAttribute("data-art")).toBe(`profile/${uid(1)}`);
+    await until(() => calls.some((c) => c.key === `GET /profiles/${uid(1)}/avatar`));
   });
 
   it("saves the color, Hide kids' content and Autoplay on Preferences", async () => {
@@ -3823,21 +3919,23 @@ describe("profile menu and preferences", () => {
     await boot(r, {
       fetch: shell(
         { ...me(1), profiles: [heidi] },
-        { "PUT /profiles/1/preferences": (b: unknown) => ({ ...heidi, ...(b as object) }) },
+        {
+          [`PUT /profiles/${uid(1)}/preferences`]: (b: unknown) => ({ ...heidi, ...(b as object) }),
+        },
       ),
     });
     await until(() => r.querySelector("input[aria-label=Teal]"));
     expect(r.querySelectorAll("[role=radiogroup] input[type=radio]")).toHaveLength(8);
     r.querySelector<HTMLInputElement>("input[aria-label=Teal]")!.click();
-    await until(() => calls.some((c) => c.key === "PUT /profiles/1/preferences"));
-    expect(calls.find((c) => c.key === "PUT /profiles/1/preferences")!.body).toEqual({
+    await until(() => calls.some((c) => c.key === `PUT /profiles/${uid(1)}/preferences`));
+    expect(calls.find((c) => c.key === `PUT /profiles/${uid(1)}/preferences`)!.body).toEqual({
       color: "#2E6B5B",
     });
     await until(() => r.querySelector("[role=switch]"));
     calls.length = 0;
     r.querySelector<HTMLInputElement>('[role=switch][aria-label="Hide kids\' content"]')!.click();
-    await until(() => calls.some((c) => c.key === "PUT /profiles/1/preferences"));
-    expect(calls.find((c) => c.key === "PUT /profiles/1/preferences")!.body).toEqual({
+    await until(() => calls.some((c) => c.key === `PUT /profiles/${uid(1)}/preferences`));
+    expect(calls.find((c) => c.key === `PUT /profiles/${uid(1)}/preferences`)!.body).toEqual({
       hideKidsContent: true,
     });
     await until(() => r.querySelector("[role=switch][aria-label=Autoplay]"));
@@ -3845,8 +3943,8 @@ describe("profile menu and preferences", () => {
     const auto = r.querySelector<HTMLInputElement>("[role=switch][aria-label=Autoplay]")!;
     expect(auto.checked).toBe(true);
     auto.click();
-    await until(() => calls.some((c) => c.key === "PUT /profiles/1/preferences"));
-    expect(calls.find((c) => c.key === "PUT /profiles/1/preferences")!.body).toEqual({
+    await until(() => calls.some((c) => c.key === `PUT /profiles/${uid(1)}/preferences`));
+    expect(calls.find((c) => c.key === `PUT /profiles/${uid(1)}/preferences`)!.body).toEqual({
       autoplay: false,
     });
   });

@@ -7,12 +7,13 @@ import (
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/api"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/logstore"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 func TestLogsListFilterAndDownload(t *testing.T) {
 	e := newEnv(t)
 	t0 := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
-	sid := int64(7)
+	sid := uid.N(7)
 	for _, l := range []*logstore.Entry{
 		{At: t0, Level: "info", Source: "scan", Message: "Scan finished: 3 movies added"},
 		{At: t0.Add(time.Minute), Level: "warn", Source: "tmdb", Message: "TMDB returned 429"},
@@ -27,7 +28,7 @@ func TestLogsListFilterAndDownload(t *testing.T) {
 		t.Fatalf("newest first: %+v", page.Items)
 	}
 	top := page.Items[0]
-	if top.SessionId == nil || *top.SessionId != 7 || top.FfmpegCommand == nil || *top.FfmpegCommand != "ffmpeg -i /m/a.mkv out.m3u8" ||
+	if top.SessionId == nil || *top.SessionId != sid || top.FfmpegCommand == nil || *top.FfmpegCommand != "ffmpeg -i /m/a.mkv out.m3u8" ||
 		top.TranscodeReason == nil || top.Level != api.LogLevelInfo || !top.At.Equal(t0.Add(2*time.Minute)) {
 		t.Fatalf("detail fields: %+v", top)
 	}

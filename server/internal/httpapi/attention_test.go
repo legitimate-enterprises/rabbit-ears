@@ -11,17 +11,19 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/scan"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/session"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/task"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // problemFiles makes one file of each problem in a Movies library, a
 // healthy file, and a missing file whose last probe also failed.
-func (e *env) problemFiles() (lib int64, missing, noDuration, unreadable *mediafile.File) {
+func (e *env) problemFiles() (lib uid.ID, missing, noDuration, unreadable *mediafile.File) {
 	e.t.Helper()
 	lib = e.library("movies")
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	files := e.svc.MediaFiles.Repo()
 	file := func(title string) *mediafile.File {
-		f := &mediafile.File{ItemID: e.movie(lib, title), Path: "/movies/" + title + ".mkv", SizeBytes: 1, ModifiedAt: now}
+		it := e.movie(lib, title)
+		f := &mediafile.File{ItemID: &it, Path: "/movies/" + title + ".mkv", SizeBytes: 1, FileModifiedAt: now}
 		must(e.t, files.CreateFile(f))
 		return f
 	}
@@ -159,6 +161,6 @@ func TestReadAFileAgain(t *testing.T) {
 	if tk, err = e.svc.Tasks.Repo().Get(tk.ID); err != nil || tk.RunRequestedAt == nil {
 		t.Fatalf("scan not queued %+v %v", tk, err)
 	}
-	e.expect(404, "POST", "/media-files/999/probe", e.admin.token, nil, nil)
+	e.expect(404, "POST", "/media-files/"+itoa(uid.N(999))+"/probe", e.admin.token, nil, nil)
 	e.expect(403, "POST", "/media-files/"+itoa(noDuration.ID)+"/probe", e.plain.token, nil, nil)
 }

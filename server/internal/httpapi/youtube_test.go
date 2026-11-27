@@ -9,13 +9,14 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/api"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/mediafile"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 type tube struct {
-	lib          int64
-	channel      int64
-	playlist     int64 // a channel folder that follows a playlist
-	newer, older int64
+	lib          uid.ID
+	channel      uid.ID
+	playlist     uid.ID // a channel folder that follows a playlist
+	newer, older uid.ID
 }
 
 // youtubeLibrary makes a YouTube library holding a channel folder with two
@@ -25,7 +26,7 @@ func (e *env) youtubeLibrary() tube {
 	tb := tube{lib: e.library("youtube")}
 	items, files, yt := e.svc.Items.Repo(), e.svc.MediaFiles.Repo(), e.svc.YouTube.Repo()
 	dir := e.t.TempDir()
-	folder := func(title, external string) int64 {
+	folder := func(title, external string) uid.ID {
 		ch := &item.Item{LibraryID: tb.lib, Kind: item.Channel, Path: filepath.Join(dir, title), ParsedTitle: title}
 		must(e.t, items.Create(ch))
 		must(e.t, items.SetLocal(&item.Metadata{ItemID: ch.ID, Status: item.Matched,
@@ -33,7 +34,7 @@ func (e *env) youtubeLibrary() tube {
 		return ch.ID
 	}
 	tb.channel, tb.playlist = folder("Workbench Weekly", "UCworkbenchweekly000000a"), folder("Clockwork Corner", "PLclockworkcorner00000b")
-	add := func(channel int64, external, title string, published time.Time, height int) int64 {
+	add := func(channel uid.ID, external, title string, published time.Time, height int) uid.ID {
 		p := filepath.Join(dir, external+".mp4")
 		v := &item.Item{LibraryID: tb.lib, ParentID: &channel, Kind: item.Video, Path: p, ParsedTitle: title}
 		must(e.t, items.Create(v))
@@ -41,7 +42,7 @@ func (e *env) youtubeLibrary() tube {
 		must(e.t, yt.SetSource(v.ID, published, 0))
 		must(e.t, os.WriteFile(p, []byte("video"), 0o600))
 		dur := int64(612000)
-		f := &mediafile.File{ItemID: v.ID, Path: p, SizeBytes: 5, ModifiedAt: time.Now(), DurationMs: &dur}
+		f := &mediafile.File{ItemID: &v.ID, Path: p, SizeBytes: 5, FileModifiedAt: time.Now(), DurationMs: &dur}
 		must(e.t, files.CreateFile(f))
 		must(e.t, files.ReplaceTracks(f.ID, []*mediafile.Track{{MediaFileID: f.ID, Kind: mediafile.Video, Codec: "h264", Width: ptr(1920), Height: &height}}))
 		return v.ID
@@ -142,9 +143,9 @@ func TestPutYouTubeChannelWatchStateFailsWhole(t *testing.T) {
 		BEGIN SELECT RAISE(ABORT, 'refused'); END`)
 	must(t, err)
 	e.expect(500, "PUT", "/profiles/"+itoa(me)+"/youtube/channels/"+itoa(tb.channel)+"/watch-state", e.plain.token, map[string]any{"watched": true}, nil)
-	for _, id := range []int64{tb.newer, tb.older} {
+	for _, id := range []uid.ID{tb.newer, tb.older} {
 		if watched(t, e, me, id) {
-			t.Errorf("video %d marked by a failed request", id)
+			t.Errorf("video %s marked by a failed request", id)
 		}
 	}
 }

@@ -23,13 +23,14 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/mediafile"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/probe"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/transcode"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
-func downloadsOf(profile int64) string { return "/profiles/" + itoa(profile) + "/downloads" }
+func downloadsOf(profile uid.ID) string { return "/profiles/" + itoa(profile) + "/downloads" }
 
 func (e *env) fetch(url, token string, header map[string]string) (*http.Response, []byte) {
 	e.t.Helper()
-	req, err := http.NewRequest("GET", strings.TrimSuffix(e.url, "/api/v1")+url, nil)
+	req, err := http.NewRequest("GET", strings.TrimSuffix(e.url, httpapi.BasePath)+url, nil)
 	must(e.t, err)
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -57,7 +58,7 @@ func (e *env) work() {
 	e.t.Cleanup(func() { cancel(); <-done })
 }
 
-func (e *env) ready(profile, id int64, token string) api.Download {
+func (e *env) ready(profile, id uid.ID, token string) api.Download {
 	e.t.Helper()
 	var d api.Download
 	for end := time.Now().Add(90 * time.Second); time.Now().Before(end); time.Sleep(100 * time.Millisecond) {
@@ -107,14 +108,14 @@ func ffprobe(t *testing.T, b []byte) probed {
 }
 
 // probedSong adds a song whose file is a probed fixture.
-func (e *env) probedSong(name string) int64 {
+func (e *env) probedSong(name string) uid.ID {
 	e.t.Helper()
 	src := fixturePath(e.t, name)
 	r, err := probe.Run(context.Background(), src)
 	must(e.t, err)
 	song := e.song(e.library("music"), name)
 	now := time.Now().UTC()
-	f := &mediafile.File{ItemID: song, Path: src, SizeBytes: 1, ModifiedAt: now, Container: r.Container, DurationMs: r.DurationMs, Bitrate: r.Bitrate, ProbedAt: &now}
+	f := &mediafile.File{ItemID: &song, Path: src, SizeBytes: 1, FileModifiedAt: now, Container: r.Container, DurationMs: r.DurationMs, Bitrate: r.Bitrate, ProbedAt: &now}
 	must(e.t, e.svc.MediaFiles.Repo().CreateFile(f))
 	must(e.t, e.svc.MediaFiles.Repo().ReplaceTracks(f.ID, r.Tracks))
 	return song
@@ -140,8 +141,11 @@ func TestDownloadTheFileItself(t *testing.T) {
 		!d.ExpiresAt.After(time.Now().Add(71*time.Hour)) {
 		t.Fatalf("%+v", d)
 	}
+	if d.CreatedBy == nil || *d.CreatedBy != me || !d.ModifiedAt.Equal(d.CreatedAt) {
+		t.Fatalf("audit fields: %+v", d)
+	}
 	if e.expect(201, "POST", downloadsOf(me), tok, body, &again); again.Id != d.Id {
-		t.Fatalf("asked again: %d, then %d", d.Id, again.Id)
+		t.Fatalf("asked again: %s, then %s", d.Id, again.Id)
 	}
 	src, err := os.ReadFile(fixturePath(t, "h264-high41.mp4"))
 	must(t, err)
@@ -276,7 +280,7 @@ func TestDownloadConvertsToTheSizeAskedFor(t *testing.T) {
 	m := e.movie(e.library("movies"), "Wide")
 	e.rate(m, "G")
 	now := time.Now().UTC()
-	f := &mediafile.File{ItemID: m, Path: src, SizeBytes: 1, ModifiedAt: now, Container: r.Container, DurationMs: r.DurationMs, Bitrate: r.Bitrate, ProbedAt: &now}
+	f := &mediafile.File{ItemID: &m, Path: src, SizeBytes: 1, FileModifiedAt: now, Container: r.Container, DurationMs: r.DurationMs, Bitrate: r.Bitrate, ProbedAt: &now}
 	must(t, e.svc.MediaFiles.Repo().CreateFile(f))
 	must(t, e.svc.MediaFiles.Repo().ReplaceTracks(f.ID, r.Tracks))
 	me, tok := e.plain.account.ID, e.plain.token
@@ -431,7 +435,7 @@ func TestDownloadsKeepToTheAudience(t *testing.T) {
 	k := e.kid(e.plain, "Kid")
 	kid := e.kidDevice(e.plain, k.Id)
 	base := downloadsOf(k.Id)
-	target := func(id int64) map[string]any {
+	target := func(id uid.ID) map[string]any {
 		return map[string]any{"targets": []map[string]any{{"itemId": id}}, "quality": "original", "snapshot": sdrWeb()}
 	}
 	e.expect(404, "POST", base+"/resolve", kid, target(r), nil)
@@ -443,7 +447,7 @@ func TestDownloadsKeepToTheAudience(t *testing.T) {
 	var d api.Download
 	e.expect(201, "POST", base, kid, map[string]any{"itemId": g, "quality": "original", "snapshot": sdrWeb()}, &d)
 	var sync api.DownloadSync
-	if e.expect(200, "POST", base+"/sync", kid, map[string]any{"itemIds": []int64{g, r, 999999}}, &sync); len(sync.Keep) != 1 || sync.Keep[0] != g ||
+	if e.expect(200, "POST", base+"/sync", kid, map[string]any{"itemIds": []uid.ID{g, r, uid.N(999999)}}, &sync); len(sync.Keep) != 1 || sync.Keep[0] != g ||
 		len(sync.Remove) != 2 {
 		t.Fatalf("%+v", sync)
 	}
@@ -458,7 +462,7 @@ func TestDownloadsKeepToTheAudience(t *testing.T) {
 	if res, _ := e.fetch(*d.Url, kid, nil); res.StatusCode != 404 {
 		t.Fatalf("file: %d", res.StatusCode)
 	}
-	if e.expect(200, "POST", base+"/sync", kid, map[string]any{"itemIds": []int64{g}}, &sync); len(sync.Remove) != 1 {
+	if e.expect(200, "POST", base+"/sync", kid, map[string]any{"itemIds": []uid.ID{g}}, &sync); len(sync.Remove) != 1 {
 		t.Fatalf("%+v", sync)
 	}
 	// A collection or playlist yields only what the kid may see.
@@ -466,7 +470,7 @@ func TestDownloadsKeepToTheAudience(t *testing.T) {
 	var pl api.Playlist
 	lists := "/profiles/" + itoa(e.plain.account.ID) + "/playlists"
 	e.expect(201, "POST", lists, e.plain.token, map[string]any{"name": "Night", "kind": "movies"}, &pl)
-	for _, id := range []int64{r, g} {
+	for _, id := range []uid.ID{r, g} {
 		e.expect(201, "POST", lists+"/"+itoa(pl.Id)+"/entries", e.plain.token, map[string]any{"itemId": id}, nil)
 	}
 	e.expect(201, "POST", lists+"/"+itoa(pl.Id)+"/shares", e.plain.token, map[string]any{"profileId": k.Id, "access": "read"}, nil)
@@ -502,7 +506,7 @@ func TestDownloadConvertsAFileOfUnknownLength(t *testing.T) {
 }
 
 // fileOf is the path of a download's file, asked to wait for it.
-func fileOf(id int64) string { return httpapi.BasePath + "/downloads/" + itoa(id) + "/file?wait=1" }
+func fileOf(id uid.ID) string { return httpapi.BasePath + "/downloads/" + itoa(id) + "/file?wait=1" }
 
 // fetchLater starts a fetch and hands over its response, nil if it failed.
 func (e *env) fetchLater(url, token string, header map[string]string) <-chan *http.Response {
@@ -639,12 +643,34 @@ func TestDownloadFileWaitEndsWithTheClient(t *testing.T) {
 }
 
 // batchOf is a createDownloads body for the items at quality q.
-func batchOf(q string, ids ...int64) map[string]any {
+func batchOf(q string, ids ...uid.ID) map[string]any {
 	titles := []map[string]any{}
 	for _, id := range ids {
 		titles = append(titles, map[string]any{"itemId": id})
 	}
 	return map[string]any{"titles": titles, "quality": q, "snapshot": sdrWeb()}
+}
+
+// A claim may name the download's id; a taken one is a conflict.
+func TestCreateDownloadTakesAClientID(t *testing.T) {
+	e := newEnv(t)
+	m, other := e.probed("h264-high41.mp4", ""), e.probed("chapters.mkv", "")
+	me, tok := e.plain.account.ID, e.plain.token
+	id := uid.New()
+	var d api.Download
+	e.expect(201, "POST", downloadsOf(me), tok, map[string]any{"id": id, "itemId": m, "quality": "original", "snapshot": sdrWeb()}, &d)
+	if d.Id != id || d.Url == nil || !strings.Contains(*d.Url, "/downloads/"+id.String()+"/file") {
+		t.Fatalf("%+v", d)
+	}
+	e.expect(200, "GET", downloadsOf(me)+"/"+itoa(id), tok, nil, nil)
+	e.expect(409, "POST", downloadsOf(me), tok, map[string]any{"id": id, "itemId": other, "quality": "original", "snapshot": sdrWeb()}, nil)
+	var b api.DownloadBatch
+	bid := uid.New()
+	e.expect(200, "POST", downloadsOf(me)+"/batch", tok, map[string]any{"titles": []map[string]any{{"id": bid, "itemId": other}}, "quality": "original",
+		"snapshot": sdrWeb()}, &b)
+	if len(b.Results) != 1 || b.Results[0].Download == nil || b.Results[0].Download.Id != bid {
+		t.Fatalf("%+v", b.Results)
+	}
 }
 
 // A batch claims each title as a lone claim would, and a title that cannot
@@ -662,7 +688,7 @@ func TestCreateDownloadsClaimsEachTitleOnItsOwn(t *testing.T) {
 	var one api.Download
 	e.expect(201, "POST", downloadsOf(me), tok, map[string]any{"itemId": g, "quality": "original", "snapshot": sdrWeb()}, &one)
 	var b api.DownloadBatch
-	ids := []int64{999999, g, show, gone, g}
+	ids := []uid.ID{uid.N(999999), g, show, gone, g}
 	e.expect(200, "POST", downloadsOf(me)+"/batch", tok, batchOf("original", ids...), &b)
 	codes := []string{}
 	for i, res := range b.Results {
@@ -689,9 +715,25 @@ func TestCreateDownloadsClaimsEachTitleOnItsOwn(t *testing.T) {
 	e.expect(403, "POST", downloadsOf(me)+"/batch", kid, batchOf("original", g), nil)
 }
 
+// A title whose client id another download holds answers conflict on its
+// own; the titles around it are claimed all the same.
+func TestCreateDownloadsAnswersATakenIdForThatTitleAlone(t *testing.T) {
+	e := newEnv(t)
+	m, other, third := e.probed("h264-high41.mp4", ""), e.probed("chapters.mkv", ""), e.probed("hdr10-main10.mkv", "")
+	me, tok := e.plain.account.ID, e.plain.token
+	taken := uid.New()
+	e.expect(201, "POST", downloadsOf(me), tok, map[string]any{"id": taken, "itemId": m, "quality": "original", "snapshot": sdrWeb()}, nil)
+	var b api.DownloadBatch
+	e.expect(200, "POST", downloadsOf(me)+"/batch", tok, map[string]any{"quality": "original", "snapshot": sdrWeb(),
+		"titles": []map[string]any{{"itemId": other}, {"id": taken, "itemId": third}}}, &b)
+	if len(b.Results) != 2 || b.Results[0].Download == nil || b.Results[1].Error == nil || b.Results[1].Error.Code != api.ErrorCodeConflict {
+		t.Fatalf("%+v", b.Results)
+	}
+}
+
 // conversionsOf waits until the conversions of the downloads are all ready,
 // reading the store alone, and returns them.
-func (e *env) conversionsOf(ids ...int64) []*download.Conversion {
+func (e *env) conversionsOf(ids ...uid.ID) []*download.Conversion {
 	e.t.Helper()
 	repo := e.svc.Downloads.Repo()
 	for end := time.Now().Add(90 * time.Second); ; time.Sleep(100 * time.Millisecond) {

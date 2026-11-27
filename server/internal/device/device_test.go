@@ -10,17 +10,18 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db/dbtest"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/device"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/household"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
-func household1(t *testing.T, d db.DBTX, email string) (int64, int64) {
+func household1(t *testing.T, d db.DBTX, email string) (uid.ID, uid.ID) {
 	t.Helper()
 	ar := account.New(d)
 	a := &account.Account{Kind: account.Adult, Email: email, Name: email, PasswordHash: "x"}
-	if err := ar.Create(a); err != nil {
+	if err := ar.Create(a, nil); err != nil {
 		t.Fatal(err)
 	}
 	h := &household.Household{Name: email, AdultID: a.ID}
-	if err := household.New(d).Create(h); err != nil {
+	if err := household.New(d).Create(h, nil); err != nil {
 		t.Fatal(err)
 	}
 	return a.ID, h.ID
@@ -38,7 +39,7 @@ func TestDevice(t *testing.T) {
 	if err := r.Create(&device.Device{TokenHash: "t1", Name: "dup", Platform: "web", AccountID: acc, HouseholdID: hh}); !errors.Is(err, db.ErrConflict) {
 		t.Fatalf("token hash unique: %v", err)
 	}
-	if err := r.Create(&device.Device{TokenHash: "t2", Name: "x", Platform: "web", AccountID: 999, HouseholdID: hh}); !errors.Is(err, db.ErrReference) {
+	if err := r.Create(&device.Device{TokenHash: "t2", Name: "x", Platform: "web", AccountID: uid.N(999), HouseholdID: hh}); !errors.Is(err, db.ErrReference) {
 		t.Fatal(err)
 	}
 	w := &device.Device{TokenHash: "t3", Name: "Other", Platform: "web", AccountID: acc2, HouseholdID: hh2}
@@ -77,7 +78,7 @@ func TestDevice(t *testing.T) {
 	if l, _ := r.ByAccount(acc); len(l) != 1 || l[0].Name != "Renamed" {
 		t.Fatalf("%+v", l)
 	}
-	if err := r.Revoke(999, seen); !errors.Is(err, db.ErrNotFound) {
+	if err := r.Revoke(uid.N(999), seen); !errors.Is(err, db.ErrNotFound) {
 		t.Fatal(err)
 	}
 	if err := r.Delete(w.ID); err != nil {
@@ -90,7 +91,7 @@ func TestReachingListsSignedInDevicesOfTheAccountOrActingAsIt(t *testing.T) {
 	r := device.New(d)
 	acc, hh := household1(t, d, "a@example.test")
 	kid := &account.Account{Kind: account.Kid, Name: "Kid", HouseholdID: &hh}
-	if err := account.New(d).Create(kid); err != nil {
+	if err := account.New(d).Create(kid, nil); err != nil {
 		t.Fatal(err)
 	}
 	var made []*device.Device

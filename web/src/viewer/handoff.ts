@@ -10,7 +10,7 @@ export type Session = Schemas["PlaybackSession"];
 export type Handoff = "move" | "together";
 
 /** The profile's session on itemId on another device, if one is playing now. */
-export const elsewhere = (api: Api, itemId: number): Promise<Session | undefined> =>
+export const elsewhere = (api: Api, itemId: string): Promise<Session | undefined> =>
   ok(api.GET("/playback/sessions", { params: { query: { itemId } } })).then(
     (p) => p.items.find((s) => !s.thisDevice),
     // A server that cannot say plays here without asking.
@@ -46,7 +46,7 @@ export function toast(text: string) {
 }
 
 /** The device that took the session with Move here; undefined when none did. */
-export const movedTo = (api: Api, sessionId: number) =>
+export const movedTo = (api: Api, sessionId: string) =>
   ok(api.GET("/playback/sessions/{sessionId}", { params: { path: { sessionId } } })).then(
     (s) => s.movedToDeviceName,
     () => undefined,

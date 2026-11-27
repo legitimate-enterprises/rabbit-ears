@@ -2,7 +2,7 @@
 // its titles' artwork, or a link the server fetches once. The server checks and keeps it.
 import { ok, paged } from "../admin/api";
 import { dialog, errorLine, field, h, input, showError } from "../admin/dom";
-import type { Api, Schemas } from "../api/client";
+import { API_BASE, type Api, type Schemas } from "../api/client";
 import { color, title } from "./data";
 
 type Entry = Schemas["PlaylistEntry"];
@@ -10,20 +10,22 @@ type ArtKind = Schemas["ArtworkKind"];
 type Input = Schemas["CustomImageInput"];
 
 export type Target =
-  { playlist: { profileId: number; playlistId: number } } | { station: { stationId: number } };
+  { playlist: { profileId: string; playlistId: string } } | { station: { stationId: string } };
 
 /** The data-art key of an imageUrl; the address changes with the image, so the key does. */
 export const imageKey = (url: string) => `image:${url}`;
 
-const ROUTE = /^\/api\/v1\/(?:profiles\/(\d+)\/playlists\/(\d+)|stations\/(\d+))\/image\?v=(\d+)$/;
+const ROUTE = new RegExp(
+  `^${API_BASE}/(?:profiles/([^/]+)/playlists/([^/]+)|stations/([^/]+))/image\\?v=([^&]+)$`,
+);
 
-export function imageRoute(url: string): (Target & { v: number }) | undefined {
+export function imageRoute(url: string): (Target & { v: string }) | undefined {
   const m = ROUTE.exec(url);
   if (!m) return undefined;
-  const v = Number(m[4]);
+  const v = m[4];
   return m[3]
-    ? { station: { stationId: Number(m[3]) }, v }
-    : { playlist: { profileId: Number(m[1]), playlistId: Number(m[2]) }, v };
+    ? { station: { stationId: m[3] }, v }
+    : { playlist: { profileId: m[1], playlistId: m[2] }, v };
 }
 
 /** Fetches the image an imageUrl names, as a blob; any other address is not found. */
@@ -42,14 +44,14 @@ export function fetchImage(api: Api, url: string) {
 }
 
 /** One choice of "Pick a title's artwork". */
-export type ArtChoice = { itemId: number; kind: ArtKind; label: string };
+export type ArtChoice = { itemId: string; kind: ArtKind; label: string };
 
 /**
  * The artwork the entries offer, each title once: a poster, and a backdrop for what has one
  * (movies and TV; music has only covers). Collections offer none.
  */
 export function artChoices(entries: Entry[]): ArtChoice[] {
-  const seen = new Set<number>();
+  const seen = new Set<string>();
   return entries.flatMap((e) => {
     if (e.itemId === undefined || seen.has(e.itemId)) return [];
     seen.add(e.itemId);
@@ -99,7 +101,7 @@ const removeImage = (api: Api, t: Target) =>
 export function imageDialog(
   api: Api,
   t: Target,
-  playlist: { profileId: number; playlistId: number },
+  playlist: { profileId: string; playlistId: string },
   done: () => void,
 ) {
   const e = errorLine();
@@ -171,7 +173,7 @@ export function imageDialog(
 export function imageButtons(
   api: Api,
   t: Target,
-  playlist: { profileId: number; playlistId: number },
+  playlist: { profileId: string; playlistId: string },
   imageUrl: string | undefined,
   done: () => void,
 ) {

@@ -15,6 +15,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/mediafile"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/probe"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/review"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // reconcileMoves gives each of the library's file records whose file is
@@ -65,7 +66,7 @@ func (s *Scanner) reconcileMoves(ctx context.Context, lib *library.Library, fold
 			break
 		}
 		if f := recorded[c.path]; f != nil {
-			if slices.ContainsFunc(gone[f.Fingerprint], func(g *mediafile.File) bool { return g.SizeBytes == c.size && g.ModifiedAt.Equal(c.mod) }) {
+			if slices.ContainsFunc(gone[f.Fingerprint], func(g *mediafile.File) bool { return g.SizeBytes == c.size && g.FileModifiedAt.Equal(c.mod) }) {
 				known[f.Fingerprint] = append(known[f.Fingerprint], c.path)
 			}
 			continue
@@ -77,7 +78,7 @@ func (s *Scanner) reconcileMoves(ctx context.Context, lib *library.Library, fold
 			arrived[fp] = append(arrived[fp], c.path)
 		}
 	}
-	var unsure []int64
+	var unsure []uid.ID
 	for k, olds := range gone {
 		news := arrived[k]
 		if len(news) == 0 {
@@ -91,10 +92,10 @@ func (s *Scanner) reconcileMoves(ctx context.Context, lib *library.Library, fold
 			}
 		default:
 			for _, f := range olds {
-				if f.ItemID == 0 {
+				if f.ItemID == nil {
 					continue
 				}
-				rv := &review.Review{LibraryID: lib.ID, ItemID: &f.ItemID, Reason: review.AmbiguousMove, RaisedAt: s.Now().UTC(),
+				rv := &review.Review{LibraryID: lib.ID, ItemID: f.ItemID, Reason: review.AmbiguousMove, RaisedAt: s.Now().UTC(),
 					Evidence: []review.Evidence{{Role: review.Stated, Path: f.Path}}}
 				for _, p := range news {
 					rv.Evidence = append(rv.Evidence, review.Evidence{Role: review.Candidate, Path: p})

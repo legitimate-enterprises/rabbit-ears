@@ -12,6 +12,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/library"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/mediafile"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 type fx struct {
@@ -20,20 +21,20 @@ type fx struct {
 	eds   *edition.Repo
 	files *mediafile.Repo
 	items *item.Repo
-	lib   int64
+	lib   uid.ID
 	n     int
 }
 
 func setup(t *testing.T) *fx {
 	d := dbtest.Open(t)
 	l := &library.Library{Name: "m", Kind: library.Movies}
-	if err := library.New(d).Create(l); err != nil {
+	if err := library.New(d).Create(l, nil); err != nil {
 		t.Fatal(err)
 	}
 	return &fx{t: t, d: d, eds: edition.New(d), files: mediafile.New(d), items: item.New(d), lib: l.ID}
 }
 
-func (x *fx) movie() int64 {
+func (x *fx) movie() uid.ID {
 	it := &item.Item{LibraryID: x.lib, Kind: item.Movie, ParsedTitle: "Lantern"}
 	if err := x.items.Create(it); err != nil {
 		x.t.Fatal(err)
@@ -43,11 +44,11 @@ func (x *fx) movie() int64 {
 
 // file makes an unlinked file of minutes, with one video track of height h
 // (none for 0).
-func (x *fx) file(minutes, h int) int64 {
+func (x *fx) file(minutes, h int) uid.ID {
 	x.t.Helper()
 	x.n++
 	ms := int64(minutes) * 60000
-	f := &mediafile.File{Path: "/m/" + strconv.Itoa(x.n) + ".mkv", SizeBytes: int64(h), ModifiedAt: time.Now(), DurationMs: &ms}
+	f := &mediafile.File{Path: "/m/" + strconv.Itoa(x.n) + ".mkv", SizeBytes: int64(h), FileModifiedAt: time.Now(), DurationMs: &ms}
 	if err := x.files.CreateFile(f); err != nil {
 		x.t.Fatal(err)
 	}
@@ -60,7 +61,7 @@ func (x *fx) file(minutes, h int) int64 {
 	return f.ID
 }
 
-func (x *fx) place(file, it int64, tag string, cuts bool) int64 {
+func (x *fx) place(file, it uid.ID, tag string, cuts bool) uid.ID {
 	x.t.Helper()
 	f, err := x.files.File(file)
 	if err != nil {
@@ -148,7 +149,7 @@ func TestDefaultsAndEmptyEditions(t *testing.T) {
 		t.Fatalf("empty edition %+v %v", got, err)
 	}
 	if id, err := x.eds.Of(m, f); err != nil || id != moved {
-		t.Fatalf("edition of file %d %v", id, err)
+		t.Fatalf("edition of file %s %v", id, err)
 	}
 }
 
@@ -164,7 +165,7 @@ func TestDefaultPrefersFilesOnDisk(t *testing.T) {
 		m := x.movie()
 		oldF, newF := x.file(100, 1080), x.file(120, 1080)
 		old, newer := x.place(oldF, m, "", true), x.place(newF, m, "", true)
-		for id, gone := range map[int64]bool{oldF: c.goneOld, newF: c.goneNew} {
+		for id, gone := range map[uid.ID]bool{oldF: c.goneOld, newF: c.goneNew} {
 			if !gone {
 				continue
 			}
@@ -181,7 +182,7 @@ func TestDefaultPrefersFilesOnDisk(t *testing.T) {
 			want = newer
 		}
 		if d, err := x.eds.Default(m); err != nil || d.ID != want {
-			t.Fatalf("%s: default %+v %v, want %d", name, d, err, want)
+			t.Fatalf("%s: default %+v %v, want %s", name, d, err, want)
 		}
 	}
 }
@@ -223,15 +224,17 @@ func TestFoldKeepsDownloadsAndCovers(t *testing.T) {
 	fb, fc := x.file(100, 720), x.file(150, 1080)
 	eb, ec := x.place(fb, b, "", true), x.place(fc, b, "", true)
 	for _, q := range []string{
-		`INSERT INTO account (id, kind, name, created_at, updated_at) VALUES (1,'adult','A',0,0)`,
-		`INSERT INTO household (id, name, adult_id, created_at) VALUES (1,'H',1,0)`,
-		`INSERT INTO device (id, token_hash, name, platform, account_id, household_id, created_at) VALUES (1,'t','D','web',1,1,0)`,
-		`INSERT INTO playlist (id, account_id, name, kind, created_at, updated_at) VALUES (1,1,'P','movies',0,0)`,
-		`INSERT INTO cover (playlist_id, item_id, created_at) VALUES (1,?2,0)`,
-		`INSERT INTO download (device_id, account_id, item_id, edition_id, media_file_id, quality, created_at)
-			VALUES (1,1,?2,?3,?4,'original',0), (1,1,?2,?5,?6,'original',0)`,
+		`INSERT INTO account (id, kind, name, created_at, modified_at) VALUES (?7,'adult','A',0,0)`,
+		`INSERT INTO household (id, name, adult_id, created_at, modified_at) VALUES (?7,'H',?7,0,0)`,
+		`INSERT INTO device (id, token_hash, name, platform, account_id, household_id, created_at, modified_at) VALUES (?7,'t','D','web',?7,?7,0,0)`,
+		`INSERT INTO playlist (id, account_id, name, kind, created_at, modified_at) VALUES (?7,?7,'P','movies',0,0)`,
+		`INSERT INTO cover (id, playlist_id, item_id, created_at, modified_at) VALUES (?8,?7,?2,0,0)`,
+		`INSERT INTO download (id, device_id, account_id, item_id, edition_id, media_file_id, quality, created_at, modified_at)
+			VALUES (?8,?7,?7,?2,?3,?4,'original',0,0), (?9,?7,?7,?2,?5,?6,'original',0,0)`,
+		`INSERT INTO playback_session (id, device_id, account_id, item_id, media_file_id, started_at, created_at, modified_at)
+			VALUES (?7,?7,?7,?2,?4,0,0,0)`,
 	} {
-		if _, err := x.d.Exec(q, a, b, eb, fb, ec, fc); err != nil {
+		if _, err := x.d.Exec(q, a, b, eb, fb, ec, fc, uid.N(1), uid.N(2), uid.N(3)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -240,12 +243,18 @@ func TestFoldKeepsDownloadsAndCovers(t *testing.T) {
 	}
 	var got string
 	if err := x.d.QueryRow(`SELECT
-		ifnull((SELECT group_concat(item_id || '/' || edition_id, ' ') FROM (SELECT * FROM download ORDER BY id)), '') || ' ' ||
-		ifnull((SELECT group_concat(item_id) FROM cover), '')`).Scan(&got); err != nil {
+		ifnull((SELECT group_concat(hex(item_id) || '/' || hex(edition_id), ' ') FROM (SELECT * FROM download ORDER BY id)), '') || ' ' ||
+		ifnull((SELECT group_concat(hex(item_id)) FROM cover), '')`).Scan(&got); err != nil {
 		t.Fatal(err)
 	}
-	if want := fmt.Sprintf("%[1]d/%[2]d %[1]d/%[3]d %[1]d", a, ea, ec); got != want {
+	if want := fmt.Sprintf("%[1]X/%[2]X %[1]X/%[3]X %[1]X", a[:], ea[:], ec[:]); got != want {
 		t.Fatalf("downloads and cover %q, want %q", got, want)
+	}
+	// A session follows its title without counting as the device reporting.
+	var item uid.ID
+	var reported int64
+	if err := x.d.QueryRow(`SELECT item_id, modified_at FROM playback_session`).Scan(&item, &reported); err != nil || item != a || reported != 0 {
+		t.Fatalf("session on %v last reported %d: %v", item, reported, err)
 	}
 }
 

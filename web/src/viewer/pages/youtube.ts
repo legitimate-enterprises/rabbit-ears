@@ -14,7 +14,7 @@ type Video = Schemas["YouTubeVideo"];
 type Channel = Schemas["YouTubeChannel"];
 type Sort = Schemas["YouTubeVideoSort"];
 type VideoQuery = {
-  channelId?: number;
+  channelId?: string;
   unwatched?: boolean;
   sort?: Sort;
 };
@@ -31,11 +31,11 @@ const sortIn = (q: URLSearchParams) =>
   (Object.values(SORTS).includes(q.get("sort") as Sort) ? q.get("sort") : "newest") as Sort;
 const sortName = (s: Sort) => Object.keys(SORTS).find((k) => SORTS[k] === s) ?? "Newest";
 
-const art = (id: number | undefined, cls: string) =>
+const art = (id: string, cls: string) =>
   h(`div.art.${cls}`, {
     "aria-hidden": "true",
-    style: `background:${color(id ?? 0)}`,
-    "data-art": id ? `${id}/poster` : undefined,
+    style: `background:${color(id)}`,
+    "data-art": `${id}/poster`,
     "data-ph": "channel",
   });
 
@@ -140,9 +140,9 @@ type View = keyof typeof VIEWS;
 export async function youtube(ctx: Ctx, _a: string[], query: URLSearchParams) {
   const view = (VIEWS[query.get("view") as View] ? query.get("view") : "videos") as View;
   const unwatched = query.get("unwatched") === "1";
-  const channelId = Number(query.get("channel")) || undefined;
+  const channelId = query.get("channel") || undefined;
   const sort = sortIn(query);
-  const href = (p: { view?: View; unwatched?: boolean; channel?: number; sort?: Sort }) => {
+  const href = (p: { view?: View; unwatched?: boolean; channel?: string; sort?: Sort }) => {
     const q = new URLSearchParams();
     const v = p.view ?? view;
     const u = p.unwatched ?? unwatched;
@@ -150,7 +150,7 @@ export async function youtube(ctx: Ctx, _a: string[], query: URLSearchParams) {
     const s = p.sort ?? sort;
     if (v !== "videos") q.set("view", v);
     if (u) q.set("unwatched", "1");
-    if (c) q.set("channel", String(c));
+    if (c) q.set("channel", c);
     if (s !== "newest") q.set("sort", s);
     return `#/youtube${q.size ? `?${q}` : ""}`;
   };
@@ -193,7 +193,7 @@ export async function youtube(ctx: Ctx, _a: string[], query: URLSearchParams) {
           "select.in",
           {
             onchange: (e: Event) =>
-              to({ channel: Number((e.target as HTMLSelectElement).value) || undefined }),
+              to({ channel: (e.target as HTMLSelectElement).value || undefined }),
           },
           h("option", { value: "" }, "Any"),
           ...channels.map((c) =>
@@ -216,7 +216,7 @@ export async function youtube(ctx: Ctx, _a: string[], query: URLSearchParams) {
 }
 
 export async function channel(ctx: Ctx, [id]: string[], query: URLSearchParams) {
-  const channelId = Number(id);
+  const channelId = id;
   const c = await ok(
     ctx.api.GET("/youtube/channels/{channelId}", { params: { path: { channelId } } }),
   );

@@ -6,19 +6,26 @@ import (
 	"time"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // Link lets two adults see each other, on TVs only when TV is set. It is
-// stored once, AID the lower account id.
+// stored once, AID the bytewise lower account id.
 type Link struct {
-	AID       int64
-	BID       int64
+	AID       uid.ID
+	BID       uid.ID
 	TV        bool
 	CreatedAt time.Time
 }
 
-// Pair orders two account ids as a link stores them.
-func Pair(a, b int64) (int64, int64) { return min(a, b), max(a, b) }
+// Pair orders two account ids as a link stores them, as the table's
+// CHECK (a_id < b_id) compares BLOBs.
+func Pair(a, b uid.ID) (uid.ID, uid.ID) {
+	if a.Compare(b) > 0 {
+		return b, a
+	}
+	return a, b
+}
 
 // Repo persists links.
 type Repo struct{ d db.DBTX }
@@ -49,7 +56,7 @@ func (r *Repo) Create(l *Link) error {
 
 // Get returns the link between two adults, in either order, or
 // db.ErrNotFound.
-func (r *Repo) Get(a, b int64) (*Link, error) {
+func (r *Repo) Get(a, b uid.ID) (*Link, error) {
 	a, b = Pair(a, b)
 	return scan(r.d.QueryRow(`SELECT `+cols+` FROM adult_link WHERE a_id = ? AND b_id = ?`, a, b))
 }
@@ -66,7 +73,7 @@ func (r *Repo) SetTV(l *Link) error {
 }
 
 // Delete removes the link between two adults, in either order.
-func (r *Repo) Delete(a, b int64) error {
+func (r *Repo) Delete(a, b uid.ID) error {
 	a, b = Pair(a, b)
 	return db.ExecOne(r.d, `DELETE FROM adult_link WHERE a_id = ? AND b_id = ?`, a, b)
 }

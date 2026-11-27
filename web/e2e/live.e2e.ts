@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { quiet, seed, signIn } from "./support";
+import { api, quiet, seed, signIn } from "./support";
 
 test.beforeEach(async ({ context }) => {
   await context.addInitScript(quiet);
@@ -11,10 +11,10 @@ test("one profile on two devices: live rows, Move here and Watch together", asyn
   request,
 }) => {
   const headers = await seed(request);
-  const me = await (await request.get("/api/v1/me", { headers })).json();
-  const movies = (await (await request.get("/api/v1/items?kind=movie", { headers })).json()).items;
+  const me = await (await request.get(`${api}/me`, { headers })).json();
+  const movies = (await (await request.get(`${api}/items?kind=movie`, { headers })).json()).items;
   const movie = movies.find((m: { parsedTitle: string }) => /h264-high41/.test(m.parsedTitle));
-  await request.delete(`/api/v1/profiles/${me.account.id}/watch-state/${movie.id}`, { headers });
+  await request.delete(`${api}/profiles/${me.account.id}/watch-state/${movie.id}`, { headers });
   const second = await browser.newContext();
   await second.addInitScript(quiet);
   const other = await second.newPage();

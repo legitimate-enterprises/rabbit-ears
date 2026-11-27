@@ -7,6 +7,7 @@ import (
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/api"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/genre"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 func TestGenresCRUDAndKidAudience(t *testing.T) {
@@ -90,8 +91,8 @@ func TestPeopleCreditsSearchAndArtwork(t *testing.T) {
 	var got api.ItemCredits
 	e.expect(403, "PUT", "/items/"+itoa(c.g)+"/credits", e.plain.token, credits, nil)
 	e.expect(200, "PUT", "/items/"+itoa(c.g)+"/credits", e.admin.token, credits, &got)
-	e.expect(400, "PUT", "/items/"+itoa(c.r)+"/credits", e.admin.token, map[string]any{"cast": []map[string]any{{"personId": 999}}, "crew": []any{}}, nil)
-	e.expect(404, "PUT", "/items/999/credits", e.admin.token, credits, nil)
+	e.expect(400, "PUT", "/items/"+itoa(c.r)+"/credits", e.admin.token, map[string]any{"cast": []map[string]any{{"personId": uid.N(999)}}, "crew": []any{}}, nil)
+	e.expect(404, "PUT", "/items/"+itoa(uid.N(999))+"/credits", e.admin.token, credits, nil)
 	e.expect(200, "PUT", "/items/"+itoa(c.r)+"/credits", e.admin.token, map[string]any{"cast": []map[string]any{{"personId": bob.Id}}, "crew": []any{}}, nil)
 	e.expect(200, "GET", "/items/"+itoa(c.g)+"/credits", e.plain.token, nil, &got)
 	if len(got.Cast) != 2 || got.Cast[0].Name != "Bob Annan" || *got.Cast[1].Character != "Sidekick" || len(got.Crew) != 1 ||

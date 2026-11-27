@@ -17,6 +17,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/gravatar"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/session"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/sso"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 const password = "longenough"
@@ -34,7 +35,7 @@ func (e *env) member(owner user, name, email string) user {
 // withPassword gives an adult made by the env password as theirs.
 func (e *env) withPassword(u user) user {
 	e.t.Helper()
-	_, err := e.svc.Auth.SetPassword(u.account, password, u.deviceID)
+	_, err := e.svc.Auth.SetPassword(u.account, password, &u.deviceID, nil)
 	must(e.t, err)
 	return u
 }
@@ -52,7 +53,7 @@ func (e *env) deleteSelf(want int, token, pw string) []byte {
 }
 
 // accountGone reports an account no longer stored.
-func (e *env) accountGone(id int64) bool {
+func (e *env) accountGone(id uid.ID) bool {
 	e.t.Helper()
 	_, err := e.svc.Accounts.Repo().Get(id)
 	if err != nil && !errors.Is(err, db.ErrNotFound) {
@@ -99,16 +100,16 @@ func TestDeletingAnAccountDeletesTheStationsPlayingItsPlaylists(t *testing.T) {
 func TestDeletingOwnAccount(t *testing.T) {
 	type outcome struct {
 		api.AccountDeletion
-		deleted []int64 // accounts gone afterwards
-		kept    []int64 // accounts still there
-		owner   int64   // the household's owner afterwards; 0 when it is gone
+		deleted []uid.ID // accounts gone afterwards
+		kept    []uid.ID // accounts still there
+		owner   *uid.ID  // the household's owner afterwards; nil when it is gone
 	}
 	for name, c := range map[string]func(e *env) (deleter user, want outcome){
 		"an adult who does not own the household": func(e *env) (user, outcome) {
 			cy := e.member(e.plain, "Cy", "cy@example.test")
 			k := e.kid(e.plain, "Mia")
 			return cy, outcome{api.AccountDeletion{Outcome: api.AccountDeletionOutcomeAccount, KidNames: []string{}},
-				[]int64{cy.account.ID}, []int64{e.plain.account.ID, k.Id}, e.plain.account.ID}
+				[]uid.ID{cy.account.ID}, []uid.ID{e.plain.account.ID, k.Id}, &e.plain.account.ID}
 		},
 		"the owner, with other adults": func(e *env) (user, outcome) {
 			// Cy is invited first and Bea joins first: the household goes to
@@ -122,20 +123,20 @@ func TestDeletingOwnAccount(t *testing.T) {
 			k := e.kid(e.plain, "Mia")
 			bea := "Bea"
 			return e.withPassword(e.plain), outcome{api.AccountDeletion{Outcome: api.AccountDeletionOutcomeTransfer, NewOwnerName: &bea, KidNames: []string{}},
-				[]int64{e.plain.account.ID}, []int64{beaInv.Account.Id, cyInv.Account.Id, k.Id}, beaInv.Account.Id}
+				[]uid.ID{e.plain.account.ID}, []uid.ID{beaInv.Account.Id, cyInv.Account.Id, k.Id}, &beaInv.Account.Id}
 		},
 		"the owner as its only adult": func(e *env) (user, outcome) {
 			k := e.kid(e.plain, "Mia")
 			var inv api.HouseholdInvite
 			e.expect(201, "POST", "/household/adults", e.plain.token, map[string]any{"name": "Dee", "email": "dee@example.test"}, &inv)
 			return e.withPassword(e.plain), outcome{api.AccountDeletion{Outcome: api.AccountDeletionOutcomeHousehold, KidNames: []string{"Mia"}},
-				[]int64{e.plain.account.ID, k.Id, inv.Account.Id}, []int64{e.admin.account.ID}, 0}
+				[]uid.ID{e.plain.account.ID, k.Id, inv.Account.Id}, []uid.ID{e.admin.account.ID}, nil}
 		},
 		"an admin who is not the only one": func(e *env) (user, outcome) {
 			e.plain.account.IsAdmin = true
-			must(e.t, e.svc.Accounts.Repo().Update(e.plain.account))
+			must(e.t, e.svc.Accounts.Repo().Update(e.plain.account, nil))
 			return e.withPassword(e.admin), outcome{api.AccountDeletion{Outcome: api.AccountDeletionOutcomeHousehold, KidNames: []string{}},
-				[]int64{e.admin.account.ID}, []int64{e.plain.account.ID}, 0}
+				[]uid.ID{e.admin.account.ID}, []uid.ID{e.plain.account.ID}, nil}
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -155,17 +156,17 @@ func TestDeletingOwnAccount(t *testing.T) {
 			e.expect(401, "GET", "/me", u.token, nil, nil)
 			for _, id := range want.deleted {
 				if !e.accountGone(id) {
-					t.Errorf("account %d is still there", id)
+					t.Errorf("account %v is still there", id)
 				}
 			}
 			for _, id := range want.kept {
 				if e.accountGone(id) {
-					t.Errorf("account %d went too", id)
+					t.Errorf("account %v went too", id)
 				}
 			}
 			h, err := e.svc.Households.Repo().Get(u.household.ID)
-			if want.owner == 0 && err == nil || want.owner != 0 && (err != nil || h.AdultID != want.owner) {
-				t.Fatalf("household afterwards %+v %v, want owner %d", h, err, want.owner)
+			if want.owner == nil && err == nil || want.owner != nil && (err != nil || h.AdultID != *want.owner) {
+				t.Fatalf("household afterwards %+v %v, want owner %v", h, err, want.owner)
 			}
 		})
 	}
@@ -309,13 +310,13 @@ func refs(t *testing.T, e *env) []ref {
 
 // naming counts, per column, the rows naming one of the accounts or
 // households.
-func naming(t *testing.T, e *env, rs []ref, accounts []int64, household int64) map[string]int {
+func naming(t *testing.T, e *env, rs []ref, accounts []uid.ID, household uid.ID) map[string]int {
 	t.Helper()
 	out := map[string]int{}
 	for _, r := range rs {
 		ids := accounts
 		if r.target == "household" {
-			ids = []int64{household}
+			ids = []uid.ID{household}
 		}
 		var n int
 		q := fmt.Sprintf(`SELECT COUNT(*) FROM %q WHERE %q IN (%s)`, r.table, r.column, strings.Trim(strings.Repeat("?,", len(ids)), ","))
@@ -350,7 +351,7 @@ func TestDeletingOwnAccountLeavesNoOrphans(t *testing.T) {
 	e.expect(201, "POST", "/household/adults", e.plain.token, map[string]any{"name": "Dee", "email": "dee@example.test"}, &inv)
 
 	p := &sso.Provider{Name: "Pocket", Issuer: "https://id.example.test", ClientID: "c", ClientSecret: "s", Enabled: true}
-	must(t, e.svc.SSO.Repo().Create(p))
+	must(t, e.svc.SSO.Repo().Create(p, nil))
 	must(t, e.svc.SSO.Repo().CreateIdentity(&sso.Identity{AccountID: owner, ProviderID: p.ID, Subject: "sub"}))
 
 	link := e.newLink()
@@ -363,9 +364,12 @@ func TestDeletingOwnAccountLeavesNoOrphans(t *testing.T) {
 	var pl api.Playlist
 	e.expect(201, "POST", owned+"/playlists", e.plain.token, map[string]any{"name": "Mine", "kind": "movies"}, &pl)
 	var st api.Station
-	e.expect(201, "POST", "/stations", e.plain.token, map[string]any{"name": "Nights", "playlistId": pl.Id}, &st)
-	for _, o := range []cover.Owner{{PlaylistID: pl.Id}, {StationID: st.Id}} {
-		must(t, e.svc.Covers.Repo().Set(&cover.Cover{Owner: o, JPEG: []byte{0xff, 0xd8}}))
+	e.expect(201, "POST", owned+"/playlists/"+itoa(pl.Id)+"/entries", e.plain.token, map[string]any{"itemId": m}, nil)
+	e.expect(201, "POST", "/stations", e.plain.token, map[string]any{"name": "Nights", "playlistId": pl.Id,
+		"times": []map[string]string{{"from": "16:00", "to": "02:00"}}}, &st)
+	e.expect(201, "POST", "/libraries/"+itoa(itemOf(t, e, m).LibraryId)+"/folders", e.admin.token, map[string]any{"path": "/media/films"}, nil)
+	for _, o := range []cover.Owner{{PlaylistID: &pl.Id}, {StationID: &st.Id}} {
+		must(t, e.svc.Covers.Repo().Set(&cover.Cover{Owner: o, JPEG: []byte{0xff, 0xd8}}, &owner))
 	}
 	var given api.Playlist
 	admins := "/profiles/" + itoa(e.admin.account.ID) + "/playlists"
@@ -387,7 +391,7 @@ func TestDeletingOwnAccountLeavesNoOrphans(t *testing.T) {
 		{DeviceID: e.admin.deviceID, AccountID: e.admin.account.ID, ConversionID: &shared.ID},
 	} {
 		d.ItemID, d.MediaFileID, d.Quality = m, f, "720p"
-		must(t, downloads.Create(&d))
+		must(t, downloads.Create(&d, &owner))
 	}
 
 	var w api.WatchTogether
@@ -399,23 +403,34 @@ func TestDeletingOwnAccountLeavesNoOrphans(t *testing.T) {
 
 	for _, q := range []struct {
 		sql  string
-		a, b int64
+		a, b uid.ID
 	}{
 		{`INSERT INTO household_member (household_id, account_id, created_at) VALUES (?,?,0)`, e.plain.household.ID, e.admin.account.ID},
 		{`INSERT INTO household_member (household_id, account_id, created_at) VALUES (?,?,0)`, e.admin.household.ID, owner},
-		{`INSERT INTO adult_link (a_id, b_id, created_at) VALUES (?,?,0)`, min(owner, e.admin.account.ID), max(owner, e.admin.account.ID)},
-		{`INSERT INTO adult_link (a_id, b_id, created_at) VALUES (?,?,0)`, min(owner, inv.Account.Id), max(owner, inv.Account.Id)},
 		{`INSERT INTO playlist_household_share (playlist_id, household_id, access, created_at) VALUES (?,?,'read',0)`, given.Id, e.plain.household.ID},
 	} {
 		_, err := e.db.Exec(q.sql, q.a, q.b)
+		must(t, err)
+	}
+	for _, other := range []uid.ID{e.admin.account.ID, inv.Account.Id} {
+		a, b := ordered(owner, other)
+		_, err := e.db.Exec(`INSERT INTO adult_link (a_id, b_id, created_at) VALUES (?,?,0)`, a, b)
 		must(t, err)
 	}
 	e.offer(201, e.plain.token, k.Id, e.admin.account.ID)
 	e.offer(201, e.admin.token, e.kid(e.admin, "Rex").Id, owner)
 	e.expect(201, "POST", admins+"/"+itoa(given.Id)+"/shares", e.admin.token, map[string]any{"profileId": owner, "access": "read"}, nil)
 
-	doomed := []int64{owner, k.Id, inv.Account.Id}
+	doomed := []uid.ID{owner, k.Id, inv.Account.Id}
 	rs := refs(t, e)
+	// Whoever made or last changed a row is named by it: the owner is, on
+	// a row of every such table.
+	for _, r := range rs {
+		if r.column == "created_by" || r.column == "modified_by" {
+			_, err := e.db.Exec(fmt.Sprintf(`UPDATE %q SET %q = ? WHERE rowid = (SELECT MIN(rowid) FROM %q)`, r.table, r.column, r.table), owner)
+			must(t, err)
+		}
+	}
 	for col, n := range naming(t, e, rs, doomed, e.plain.household.ID) {
 		if n == 0 {
 			t.Errorf("%s names none of what goes; seed a row of it", col)
@@ -451,7 +466,7 @@ func TestDeletingOwnAccountLeavesNoOrphans(t *testing.T) {
 	e.expect(200, "GET", admins+"/"+itoa(given.Id), e.admin.token, nil, nil)
 	var al api.AllowList
 	e.expect(200, "GET", "/profiles/"+itoa(ava.Id)+"/allowed-items", e.admin.token, nil, &al)
-	if !slices.Equal(al.ItemIds, []int64{m}) {
+	if !slices.Equal(al.ItemIds, []uid.ID{m}) {
 		t.Fatalf("the shared kid lost their allow list: %+v", al)
 	}
 }

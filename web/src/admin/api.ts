@@ -1,6 +1,12 @@
 // Glue between the generated client and the pages: unwrap results into
 // values or ApiError, and keep the device token.
-import { createApi as create, type Api, type ApiOptions, type Schemas } from "../api/client";
+import {
+  API_BASE,
+  createApi as create,
+  type Api,
+  type ApiOptions,
+  type Schemas,
+} from "../api/client";
 
 export class ApiError extends Error {
   constructor(
@@ -77,7 +83,7 @@ export type Ctx = {
   api: Api;
   me: Schemas["Me"];
   health: Schemas["Health"];
-  /** The route's segments after its slug: ["5"] for #/occasions/5. */
+  /** The route's segments after its slug: ["new"] for #/occasions/new. */
   path: string[];
   /** Runs fn now and every ms until the page is left. */
   every(fn: () => void, ms: number): void;
@@ -91,4 +97,4 @@ export type Ctx = {
 
 // Absolute so the same code runs under jsdom, where relative URLs do not parse.
 export const createApi = (o: ApiOptions = {}): Api =>
-  create({ baseUrl: `${location.origin}/api/v1`, ...o });
+  create({ baseUrl: `${location.origin}${API_BASE}`, ...o });

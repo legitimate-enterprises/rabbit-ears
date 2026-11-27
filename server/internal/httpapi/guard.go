@@ -21,6 +21,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/account"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/device"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/service"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // adminScope is the scope the spec lists on operations only admins may call.
@@ -148,6 +149,16 @@ func origin(ctx context.Context) string {
 func caller(ctx context.Context) principal {
 	p, _ := ctx.Value(principalKey{}).(principal)
 	return p
+}
+
+// actor is the acting profile a write is attributed to, nil outside an
+// authenticated request.
+func actor(ctx context.Context) *uid.ID {
+	if p := caller(ctx).profile; p != nil {
+		id := p.ID
+		return &id
+	}
+	return nil
 }
 
 func (g *guard) wrap(next http.Handler) http.Handler {

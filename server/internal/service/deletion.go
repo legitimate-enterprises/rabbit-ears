@@ -6,6 +6,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/account"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/household"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // Deletion is what deleting an adult's own account takes with it: the
@@ -45,7 +46,7 @@ func planDeletion(d db.DBTX, a *account.Account) (*Deletion, error) {
 // DeleteOwn deletes a as PlanDeletion says, signing out the devices of
 // every account it takes. Ownership passes in the same transaction before
 // the delete, which would otherwise cascade to the household.
-func (s *AccountService) DeleteOwn(a *account.Account) (*SignedOut, error) {
+func (s *AccountService) DeleteOwn(a *account.Account, by *uid.ID) (*SignedOut, error) {
 	out := &SignedOut{}
 	return out, db.InTx(s.d, func(d db.DBTX) error {
 		plan, err := planDeletion(d, a)
@@ -53,11 +54,11 @@ func (s *AccountService) DeleteOwn(a *account.Account) (*SignedOut, error) {
 			return err
 		}
 		if plan.NewOwner != nil {
-			if err := household.New(d).SetAdult(*a.HouseholdID, plan.NewOwner.ID); err != nil {
+			if err := household.New(d).SetAdult(*a.HouseholdID, plan.NewOwner.ID, by); err != nil {
 				return err
 			}
 		}
-		return deleteAccount(d, a.ID, out)
+		return deleteAccount(d, a.ID, out, by)
 	})
 }
 

@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { boot } from "./app";
 import { setToken } from "./api";
+import { uid } from "../api/uid";
 
 type Handler = (body: unknown, url: URL) => unknown;
 const calls: { key: string; body: unknown }[] = [];
@@ -9,7 +10,7 @@ const calls: { key: string; body: unknown }[] = [];
 function mockFetch(routes: Record<string, Handler | unknown>) {
   return async (req: Request) => {
     const url = new URL(req.url, "http://x");
-    const key = `${req.method} ${url.pathname.replace("/api/v1", "")}`;
+    const key = `${req.method} ${url.pathname.replace("/api/v2", "")}`;
     const body =
       req.method === "GET" || req.method === "DELETE"
         ? undefined
@@ -32,25 +33,25 @@ function mockFetch(routes: Record<string, Handler | unknown>) {
 }
 
 const adult = {
-  id: 1,
+  id: uid(1),
   kind: "adult",
   name: "Ada",
   email: "ada@example.com",
   isAdmin: true,
-  householdId: 1,
+  householdId: uid(1),
   hasPin: false,
   pinLocked: false,
   pending: false,
   filterMode: "ratings",
   createdAt: "2026-01-01T00:00:00Z",
-  updatedAt: "2026-01-01T00:00:00Z",
+  modifiedAt: "2026-01-01T00:00:00Z",
 };
 const device = {
-  id: 9,
+  id: uid(9),
   name: "Admin web",
   platform: "web",
-  accountId: 1,
-  householdId: 1,
+  accountId: uid(1),
+  householdId: uid(1),
   createdAt: "2026-01-01T00:00:00Z",
 };
 const page = (items: unknown[]) => ({ items });
@@ -60,9 +61,9 @@ const settle = async () => {
 const at = "2026-11-16T08:00:00Z";
 
 const conflicting = {
-  id: 1,
-  libraryId: 2,
-  itemId: 7,
+  id: uid(1),
+  libraryId: uid(2),
+  itemId: uid(7),
   itemKind: "show",
   title: "The Office",
   reason: "conflicting_identity",
@@ -86,9 +87,9 @@ const conflicting = {
   ],
 };
 const tied = {
-  id: 2,
-  libraryId: 1,
-  itemId: 8,
+  id: uid(2),
+  libraryId: uid(1),
+  itemId: uid(8),
   itemKind: "movie",
   title: "Crash",
   reason: "tied_candidates",
@@ -113,9 +114,9 @@ const tied = {
   ],
 };
 const moved = {
-  id: 3,
-  libraryId: 1,
-  itemId: 9,
+  id: uid(3),
+  libraryId: uid(1),
+  itemId: uid(9),
   itemKind: "movie",
   title: "Heat",
   reason: "ambiguous_move",
@@ -127,11 +128,11 @@ const moved = {
   ],
 };
 const file = (id: number, over: Record<string, unknown>) => ({
-  id,
-  itemId: 8,
-  libraryId: 1,
+  id: uid(id),
+  itemId: uid(8),
+  libraryId: uid(1),
   sizeBytes: 1,
-  modifiedAt: at,
+  fileModifiedAt: at,
   tracks: [],
   chapters: [],
   ...over,
@@ -143,7 +144,7 @@ const noDuration = file(21, {
 });
 const unreadable = file(22, {
   path: "/tv/Old Show/S01E01.avi",
-  libraryId: 2,
+  libraryId: uid(2),
   title: "Pilot",
   probeFailedAt: at,
   probeError:
@@ -151,23 +152,23 @@ const unreadable = file(22, {
 });
 const missing = file(23, { path: "/movies/Gone.mkv", title: "Gone", missingAt: at });
 const run = (status: string, error?: string) => ({
-  id: 1,
-  taskId: 1,
+  id: uid(1),
+  taskId: uid(1),
   status,
   progress: 0,
   startedAt: at,
   error,
 });
 const scanMovies = {
-  id: 2,
+  id: uid(2),
   name: "Scan Movies",
-  kind: "scan:1",
+  kind: `scan:${uid(1)}`,
   enabled: true,
   createdAt: at,
   lastRun: run("succeeded"),
 };
 const refresh = {
-  id: 5,
+  id: uid(5),
   name: "Refresh metadata",
   kind: "metadata",
   enabled: true,
@@ -175,8 +176,8 @@ const refresh = {
   lastRun: run("failed", "TMDB rate limit"),
 };
 const conversion = {
-  id: 4,
-  mediaFileId: 11,
+  id: uid(4),
+  mediaFileId: uid(11),
   status: "failed",
   verdict: "video_transcode",
   container: "mp4",
@@ -211,8 +212,8 @@ const routes = () => {
     "GET /me": {
       device,
       account: adult,
-      activeProfileId: 1,
-      household: { id: 1, name: "Ada", adultId: 1, createdAt: at },
+      activeProfileId: uid(1),
+      household: { id: uid(1), name: "Ada", adultId: uid(1), createdAt: at },
       profiles: [adult],
     },
     "GET /attention": () => counts(),
@@ -221,12 +222,12 @@ const routes = () => {
     "GET /tasks": () => page(tasks),
     "GET /conversions": () => page(conversions),
     "GET /libraries": page([
-      { id: 1, name: "Movies", kind: "movies" },
-      { id: 2, name: "TV", kind: "tv" },
+      { id: uid(1), name: "Movies", kind: "movies" },
+      { id: uid(2), name: "TV", kind: "tv" },
     ]),
-    "GET /media-files/11": file(11, { path: "/movies/Dune.mkv" }),
-    "GET /items/8": {
-      id: 8,
+    [`GET /media-files/${uid(11)}`]: file(11, { path: "/movies/Dune.mkv" }),
+    [`GET /items/${uid(8)}`]: {
+      id: uid(8),
       kind: "movie",
       parsedTitle: "dune",
       metadata: { title: "Dune: Part Two" },
@@ -358,10 +359,10 @@ describe("needs attention page", () => {
 });
 
 describe("needs attention actions", () => {
-  const rematch = (body: unknown) => ({ id: 7, kind: "show", parsedTitle: "x", body });
+  const rematch = (body: unknown) => ({ id: uid(7), kind: "show", parsedTitle: "x", body });
 
   it("rematches to the folder's ID, then reloads the page and the nav count", async () => {
-    extra = { "PUT /items/7/metadata": rematch };
+    extra = { [`PUT /items/${uid(7)}/metadata`]: rematch };
     await open();
     const before = [count("GET /attention"), count("GET /identity-reviews")];
     const row = cardOf("Identity")!.querySelector("tbody tr")!;
@@ -372,7 +373,7 @@ describe("needs attention actions", () => {
     reviews = [tied, moved];
     button(row, "Use the folder's ID")!.click();
     await settle();
-    expect(calls.find((c) => c.key === "PUT /items/7/metadata")?.body).toEqual({
+    expect(calls.find((c) => c.key === `PUT /items/${uid(7)}/metadata`)?.body).toEqual({
       provider: "tmdb",
       providerId: 2996,
       status: "matched",
@@ -385,7 +386,7 @@ describe("needs attention actions", () => {
   });
 
   it("offers each tied candidate by title, year and country", async () => {
-    extra = { "PUT /items/8/metadata": rematch };
+    extra = { [`PUT /items/${uid(8)}/metadata`]: rematch };
     await open();
     const row = cardOf("Identity")!.querySelectorAll("tbody tr")[1];
     expect([...row.querySelectorAll("button")].map((b) => b.textContent)).toEqual([
@@ -395,59 +396,62 @@ describe("needs attention actions", () => {
     ]);
     button(row, "Crash (2004, US)")!.click();
     await settle();
-    expect(calls.find((c) => c.key === "PUT /items/8/metadata")?.body).toMatchObject({
+    expect(calls.find((c) => c.key === `PUT /items/${uid(8)}/metadata`)?.body).toMatchObject({
       providerId: 21,
     });
   });
 
   it("dismisses a review, and offers only that for an ambiguous move", async () => {
-    extra = { "PUT /identity-reviews/3": (b: unknown) => ({ ...moved, body: b }) };
+    extra = { [`PUT /identity-reviews/${uid(3)}`]: (b: unknown) => ({ ...moved, body: b }) };
     await open();
     const row = cardOf("Identity")!.querySelectorAll("tbody tr")[2];
     expect([...row.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Dismiss"]);
     expect(row.textContent).toContain("/movies/Heat (1995) alt.mkv");
     button(row, "Dismiss")!.click();
     await settle();
-    expect(calls.find((c) => c.key === "PUT /identity-reviews/3")?.body).toEqual({
+    expect(calls.find((c) => c.key === `PUT /identity-reviews/${uid(3)}`)?.body).toEqual({
       dismissed: true,
     });
   });
 
   it("reads a file again", async () => {
-    extra = { "POST /media-files/22/probe": null };
+    extra = { [`POST /media-files/${uid(22)}/probe`]: null };
     await open();
     const before = count("GET /attention");
     const row = cardOf("Cannot be streamed")!.querySelectorAll("tbody tr")[1];
     button(row, "Read again")!.click();
     await settle();
-    expect(count("POST /media-files/22/probe")).toBe(1);
+    expect(count(`POST /media-files/${uid(22)}/probe`)).toBe(1);
     expect(count("GET /attention")).toBeGreaterThan(before);
   });
 
   it("scans a missing file's library and removes its record after asking in the page", async () => {
-    extra = { "POST /tasks/2/runs": scanMovies, "DELETE /media-files/23": null };
+    extra = {
+      [`POST /tasks/${uid(2)}/runs`]: scanMovies,
+      [`DELETE /media-files/${uid(23)}`]: null,
+    };
     await open();
     const row = cardOf("Missing")!.querySelector("tbody tr")!;
     button(row, "Scan now")!.click();
     await settle();
-    expect(count("POST /tasks/2/runs")).toBe(1);
+    expect(count(`POST /tasks/${uid(2)}/runs`)).toBe(1);
     const missingRow = cardOf("Missing")!.querySelector("tbody tr")!;
     button(missingRow, "Remove")!.click();
-    expect(count("DELETE /media-files/23")).toBe(0);
+    expect(count(`DELETE /media-files/${uid(23)}`)).toBe(0);
     problems.missing = [];
     button(missingRow, "Remove")!.click();
     await settle();
-    expect(count("DELETE /media-files/23")).toBe(1);
+    expect(count(`DELETE /media-files/${uid(23)}`)).toBe(1);
     expect(cardOf("Missing")).toBeNull();
   });
 
   it("runs a failed task again and removes a failed conversion", async () => {
-    extra = { "POST /tasks/5/runs": refresh, "DELETE /conversions/4": null };
+    extra = { [`POST /tasks/${uid(5)}/runs`]: refresh, [`DELETE /conversions/${uid(4)}`]: null };
     await open();
     const failed = cardOf("Failed")!;
     button(failed, "Run now")!.click();
     await settle();
-    expect(count("POST /tasks/5/runs")).toBe(1);
+    expect(count(`POST /tasks/${uid(5)}/runs`)).toBe(1);
     const row = [...cardOf("Failed")!.querySelectorAll("tbody tr")].find((r) =>
       r.textContent?.includes("Dune"),
     )!;
@@ -455,13 +459,13 @@ describe("needs attention actions", () => {
     conversions = [];
     button(row, "Remove")!.click();
     await settle();
-    expect(count("DELETE /conversions/4")).toBe(1);
+    expect(count(`DELETE /conversions/${uid(4)}`)).toBe(1);
     expect(cardOf("Failed")!.textContent).not.toContain("Dune");
   });
 
   it("shows a failed action in the page", async () => {
     extra = {
-      "PUT /identity-reviews/1": new Response(
+      [`PUT /identity-reviews/${uid(1)}`]: new Response(
         JSON.stringify({ code: "internal", message: "boom" }),
         {
           status: 500,

@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { boot } from "./app";
 import { setToken } from "./api";
+import { uid } from "../api/uid";
 
 type Handler = (url: URL) => unknown;
 const calls: string[] = [];
@@ -9,7 +10,7 @@ const calls: string[] = [];
 function mockFetch(routes: Record<string, Handler | unknown>) {
   return async (req: Request) => {
     const url = new URL(req.url, "http://x");
-    const key = `${req.method} ${url.pathname.replace("/api/v1", "")}`;
+    const key = `${req.method} ${url.pathname.replace("/api/v2", "")}`;
     calls.push(`${key}${url.search}`);
     const r = routes[key];
     if (r === undefined)
@@ -26,25 +27,25 @@ function mockFetch(routes: Record<string, Handler | unknown>) {
 }
 
 const adult = {
-  id: 1,
+  id: uid(1),
   kind: "adult",
   name: "Ada",
   email: "ada@example.com",
   isAdmin: true,
-  householdId: 1,
+  householdId: uid(1),
   hasPin: false,
   pinLocked: false,
   pending: false,
   filterMode: "ratings",
   createdAt: "2026-01-01T00:00:00Z",
-  updatedAt: "2026-01-01T00:00:00Z",
+  modifiedAt: "2026-01-01T00:00:00Z",
 };
 const device = {
-  id: 9,
+  id: uid(9),
   name: "Admin web",
   platform: "web",
-  accountId: 1,
-  householdId: 1,
+  accountId: uid(1),
+  householdId: uid(1),
   createdAt: "2026-01-01T00:00:00Z",
 };
 const page = (items: unknown[]) => ({ items });
@@ -53,8 +54,8 @@ const settle = async () => {
 };
 
 const conversion = (id: number, mediaFileId: number, over: Record<string, unknown>) => ({
-  id,
-  mediaFileId,
+  id: uid(id),
+  mediaFileId: uid(mediaFileId),
   status: "queued",
   verdict: "video_transcode",
   container: "mp4",
@@ -68,23 +69,23 @@ const conversion = (id: number, mediaFileId: number, over: Record<string, unknow
   ...over,
 });
 const file = (id: number, itemId: number) => ({
-  id,
-  itemId,
+  id: uid(id),
+  itemId: uid(itemId),
   path: "f",
   sizeBytes: 1,
-  modifiedAt: "",
+  fileModifiedAt: "",
   tracks: [],
   chapters: [],
 });
 const scan = {
-  id: 2,
+  id: uid(2),
   name: "Scan Movies",
-  kind: "scan:1",
+  kind: `scan:${uid(1)}`,
   enabled: true,
   createdAt: "",
   lastRun: {
-    id: 3,
-    taskId: 2,
+    id: uid(3),
+    taskId: uid(2),
     status: "running",
     progress: 0.5,
     startedAt: "2026-01-01T00:00:00Z",
@@ -101,8 +102,8 @@ const fetch = (extra: Record<string, Handler | unknown> = {}) => {
     "GET /me": {
       device,
       account: adult,
-      activeProfileId: 1,
-      household: { id: 1, name: "Ada", adultId: 1, createdAt: "2026-01-01T00:00:00Z" },
+      activeProfileId: uid(1),
+      household: { id: uid(1), name: "Ada", adultId: uid(1), createdAt: "2026-01-01T00:00:00Z" },
       profiles: [adult],
     },
     "GET /stats": {
@@ -121,12 +122,17 @@ const fetch = (extra: Record<string, Handler | unknown> = {}) => {
     "GET /devices": page([device]),
     "GET /conversions": (url: URL) =>
       url.searchParams.get("active") === "true" ? page(active) : page([]),
-    "GET /media-files/11": file(11, 8),
-    "GET /media-files/12": file(12, 20),
-    "GET /media-files/13": file(13, 30),
-    "GET /items/8": { id: 8, kind: "movie", parsedTitle: "Heat" },
-    "GET /items/20": { id: 20, kind: "episode", parsedTitle: "Show", metadata: { title: "Pilot" } },
-    "GET /music/songs/30": { id: 30, title: "Blue Monday" },
+    [`GET /media-files/${uid(11)}`]: file(11, 8),
+    [`GET /media-files/${uid(12)}`]: file(12, 20),
+    [`GET /media-files/${uid(13)}`]: file(13, 30),
+    [`GET /items/${uid(8)}`]: { id: uid(8), kind: "movie", parsedTitle: "Heat" },
+    [`GET /items/${uid(20)}`]: {
+      id: uid(20),
+      kind: "episode",
+      parsedTitle: "Show",
+      metadata: { title: "Pilot" },
+    },
+    [`GET /music/songs/${uid(30)}`]: { id: uid(30), title: "Blue Monday" },
     ...extra,
   });
 };
@@ -161,6 +167,14 @@ describe("dashboard running tasks", () => {
       ["Pilot · Download · 1080p · Queued", "0"],
     ]);
     expect(root.querySelector("[aria-label='Transcodes']")?.textContent).toContain("0 of 3");
+  });
+
+  it("names a conversion of a file in no item as the UI names an unknown title", async () => {
+    active = [conversion(7, 14, { height: 720 })];
+    const loose = { ...file(14, 0), itemId: undefined };
+    await boot(root, { fetch: fetch({ [`GET /media-files/${uid(14)}`]: loose }) });
+    await settle();
+    expect(rows()).toEqual([["Untitled · Download · 720p · Queued", "0"]]);
   });
 
   it("says Nothing running with neither", async () => {
@@ -210,11 +224,11 @@ describe("dashboard running tasks", () => {
     try {
       active = [conversion(5, 11, { status: "converting", height: 720, progress: 0.25 })];
       const playing = {
-        id: 4,
-        deviceId: 9,
-        accountId: 1,
-        itemId: 8,
-        mediaFileId: 11,
+        id: uid(4),
+        deviceId: uid(9),
+        accountId: uid(1),
+        itemId: uid(8),
+        mediaFileId: uid(11),
         positionMs: 0,
         currentEntry: 0,
         plan: [],
@@ -232,8 +246,8 @@ describe("dashboard running tasks", () => {
       expect(root.querySelector("[aria-label='Now playing']")!.textContent).toContain("Ada");
       expect(count("GET /accounts")).toBe(1);
       expect(count("GET /devices")).toBe(1);
-      expect(count("GET /items/8")).toBe(1);
-      expect(count("GET /media-files/11")).toBe(1);
+      expect(count(`GET /items/${uid(8)}`)).toBe(1);
+      expect(count(`GET /media-files/${uid(11)}`)).toBe(1);
     } finally {
       vi.useRealTimers();
     }
@@ -243,11 +257,11 @@ describe("dashboard running tasks", () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     try {
       const playing = (id: number, accountId: number) => ({
-        id,
-        deviceId: 9,
-        accountId,
-        itemId: 8,
-        mediaFileId: 11,
+        id: uid(id),
+        deviceId: uid(9),
+        accountId: uid(accountId),
+        itemId: uid(8),
+        mediaFileId: uid(11),
         positionMs: 0,
         currentEntry: 0,
         plan: [],
@@ -262,7 +276,7 @@ describe("dashboard running tasks", () => {
         }),
       });
       await settle();
-      accounts = [adult, { ...adult, id: 2, name: "Grace" }];
+      accounts = [adult, { ...adult, id: uid(2), name: "Grace" }];
       sessions = [playing(4, 1), playing(5, 2)];
       vi.advanceTimersByTime(5000);
       await settle();

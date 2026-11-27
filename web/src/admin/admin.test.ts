@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { boot } from "./app";
 import { setToken } from "./api";
 import { bytes } from "./format";
+import { uid } from "../api/uid";
 
 type Handler = (body: unknown, url: URL) => unknown;
 const calls: { key: string; body: unknown }[] = [];
@@ -10,7 +11,7 @@ const calls: { key: string; body: unknown }[] = [];
 function mockFetch(routes: Record<string, Handler | unknown>) {
   return async (req: Request) => {
     const url = new URL(req.url, "http://x");
-    const key = `${req.method} ${url.pathname.replace("/api/v1", "")}`;
+    const key = `${req.method} ${url.pathname.replace("/api/v2", "")}`;
     const body =
       req.method === "GET" || req.method === "DELETE"
         ? undefined
@@ -43,32 +44,32 @@ const health = (setupRequired = false) => ({
   serverName: "Den",
 });
 const adult = {
-  id: 1,
+  id: uid(1),
   kind: "adult",
   name: "Ada",
   email: "ada@example.com",
   isAdmin: true,
-  householdId: 1,
+  householdId: uid(1),
   hasPin: false,
   pinLocked: false,
   pending: false,
   filterMode: "ratings",
   createdAt: "2026-01-01T00:00:00Z",
-  updatedAt: "2026-01-01T00:00:00Z",
+  modifiedAt: "2026-01-01T00:00:00Z",
 };
 const device = {
-  id: 9,
+  id: uid(9),
   name: "Admin web",
   platform: "web",
-  accountId: 1,
-  householdId: 1,
+  accountId: uid(1),
+  householdId: uid(1),
   createdAt: "2026-01-01T00:00:00Z",
 };
 const me = (isAdmin = true) => ({
   device,
   account: { ...adult, isAdmin },
-  activeProfileId: 1,
-  household: { id: 1, name: "Ada", adultId: 1, createdAt: "2026-01-01T00:00:00Z" },
+  activeProfileId: uid(1),
+  household: { id: uid(1), name: "Ada", adultId: uid(1), createdAt: "2026-01-01T00:00:00Z" },
   profiles: [adult],
 });
 const page = (items: unknown[]) => ({ items });
@@ -113,7 +114,10 @@ describe("auth guard", () => {
     const leave = vi.fn();
     await boot(root, {
       leave,
-      fetch: mockFetch({ "GET /health": health(), "GET /me": { ...me(), activeProfileId: 2 } }),
+      fetch: mockFetch({
+        "GET /health": health(),
+        "GET /me": { ...me(), activeProfileId: uid(2) },
+      }),
     });
     expect(leave).toHaveBeenCalled();
     expect(root.querySelector("aside")).toBeNull();
@@ -264,7 +268,7 @@ describe("first run", () => {
       "GET /health": health(true),
       "POST /setup": { token: "tok", me: me() },
       "POST /libraries": {
-        id: 5,
+        id: uid(5),
         name: "Movies",
         kind: "movies",
         scanHour: 3,
@@ -272,9 +276,9 @@ describe("first run", () => {
         folders: [],
         stats: { movies: 0, shows: 0, seasons: 0, episodes: 0, files: 0, bytes: 0, unmatched: 0 },
         createdAt: "",
-        updatedAt: "",
+        modifiedAt: "",
       },
-      "POST /libraries/5/folders": { id: 1, libraryId: 5, path: "/m" },
+      [`POST /libraries/${uid(5)}/folders`]: { id: uid(1), libraryId: uid(5), path: "/m" },
     });
     await boot(root, { fetch });
     const go = byText("button", "Create admin account") as HTMLButtonElement;
@@ -303,7 +307,7 @@ describe("first run", () => {
     root.querySelector("form")!.dispatchEvent(new Event("submit", { cancelable: true }));
     await settle();
     expect(calls.map((c) => c.key)).toEqual(
-      expect.arrayContaining(["POST /libraries", "POST /libraries/5/folders"]),
+      expect.arrayContaining(["POST /libraries", `POST /libraries/${uid(5)}/folders`]),
     );
   });
 
@@ -314,10 +318,10 @@ describe("first run", () => {
       "GET /health": () => health(setup),
       "GET /me": me(),
       "POST /setup": () => ((setup = false), { token: "tok", me: me() }),
-      "POST /libraries": { id: 5 },
-      "POST /libraries/5/folders": (b: unknown) =>
+      "POST /libraries": { id: uid(5) },
+      [`POST /libraries/${uid(5)}/folders`]: (b: unknown) =>
         (b as { path: string }).path === "/m"
-          ? { id: 1, libraryId: 5, path: "/m" }
+          ? { id: uid(1), libraryId: uid(5), path: "/m" }
           : err(400, "bad_request", "path: not a folder"),
     });
     await boot(root, { fetch });
@@ -337,8 +341,8 @@ describe("first run", () => {
     await settle();
     expect(calls.filter((c) => c.key.startsWith("POST /libraries")).map((c) => c.key)).toEqual([
       "POST /libraries",
-      "POST /libraries/5/folders",
-      "POST /libraries/5/folders",
+      `POST /libraries/${uid(5)}/folders`,
+      `POST /libraries/${uid(5)}/folders`,
     ]);
   });
 });
@@ -403,11 +407,11 @@ const noContent = () => new Response(null, { status: 204 });
 
 describe("dashboard", () => {
   const session = {
-    id: 4,
-    deviceId: 9,
-    accountId: 1,
-    itemId: 8,
-    mediaFileId: 1,
+    id: uid(4),
+    deviceId: uid(9),
+    accountId: uid(1),
+    itemId: uid(8),
+    mediaFileId: uid(1),
     positionMs: 84_000,
     currentEntry: 0,
     plan: [
@@ -423,7 +427,7 @@ describe("dashboard", () => {
     encoder: "videotoolbox",
     transcodeReason: "HEVC Main10 is not decodable here",
     startedAt: "",
-    updatedAt: "",
+    modifiedAt: "",
   };
   const routes = {
     "GET /stats": serverStats,
@@ -432,7 +436,7 @@ describe("dashboard", () => {
     "GET /sessions": page([session]),
     "GET /accounts": page([adult]),
     "GET /devices": page([device]),
-    "GET /items/8": { id: 8, kind: "movie", parsedTitle: "Heat" },
+    [`GET /items/${uid(8)}`]: { id: uid(8), kind: "movie", parsedTitle: "Heat" },
   };
 
   it("shows four server gauges from the stats endpoint", async () => {
@@ -523,7 +527,7 @@ describe("dashboard", () => {
       const inner = signedIn({
         ...routes,
         "GET /sessions": () => page([{ ...session, positionMs: ++n * 60_000 }]),
-        "DELETE /sessions/4": new Response(null, { status: 204 }),
+        [`DELETE /sessions/${uid(4)}`]: new Response(null, { status: 204 }),
       });
       await boot(root, {
         fetch: async (req) => {
@@ -572,18 +576,18 @@ describe("dashboard", () => {
       fetch: signedIn({
         ...routes,
         "GET /sessions": page([
-          { ...session, id: 2, itemId: 12 },
-          { ...session, id: 3, itemId: 13 },
+          { ...session, id: uid(2), itemId: uid(12) },
+          { ...session, id: uid(3), itemId: uid(13) },
         ]),
-        "GET /music/songs/12": { id: 12, title: "Roygbiv" },
-        "GET /youtube/videos/13": { id: 13, title: "Lathe turning basics" },
+        [`GET /music/songs/${uid(12)}`]: { id: uid(12), title: "Roygbiv" },
+        [`GET /youtube/videos/${uid(13)}`]: { id: uid(13), title: "Lathe turning basics" },
       }),
     });
     await settle();
     const text = root.querySelector("[aria-label='Now playing']")!.textContent;
     expect(text).toContain("Roygbiv");
     expect(text).toContain("Lathe turning basics");
-    expect(text).not.toContain("Item 1");
+    expect(text).not.toContain("Item ");
   });
 
   it("now playing shows the verdict, position, encoder and reason", async () => {
@@ -602,20 +606,20 @@ describe("libraries", () => {
   it("Scan now requests a run of the library's scan task", async () => {
     location.hash = "#/libraries";
     const lib = {
-      id: 5,
+      id: uid(5),
       name: "Movies",
       kind: "movies",
       scanHour: 3,
       watchFiles: true,
-      folders: [{ id: 1, libraryId: 5, path: "/m" }],
+      folders: [{ id: uid(1), libraryId: uid(5), path: "/m" }],
       stats,
       createdAt: "",
-      updatedAt: "",
+      modifiedAt: "",
     };
     const task = {
-      id: 7,
+      id: uid(7),
       name: "Scan Movies",
-      kind: "scan:5",
+      kind: `scan:${uid(5)}`,
       enabled: true,
       intervalSeconds: 86400,
       createdAt: "",
@@ -624,7 +628,7 @@ describe("libraries", () => {
       fetch: signedIn({
         "GET /libraries": page([lib]),
         "GET /tasks": page([task]),
-        "POST /tasks/7/runs": () => new Response(JSON.stringify(task), { status: 202 }),
+        [`POST /tasks/${uid(7)}/runs`]: () => new Response(JSON.stringify(task), { status: 202 }),
       }),
     });
     await settle();
@@ -636,20 +640,20 @@ describe("libraries", () => {
     );
     click(byText("button", "Scan now"));
     await settle();
-    expect(calls.map((c) => c.key)).toContain("POST /tasks/7/runs");
+    expect(calls.map((c) => c.key)).toContain(`POST /tasks/${uid(7)}/runs`);
     expect(byText("button", "Queued")).toBeTruthy();
   });
 
   const lib = {
-    id: 5,
+    id: uid(5),
     name: "Movies",
     kind: "movies",
     scanHour: 3,
     watchFiles: true,
-    folders: [{ id: 1, libraryId: 5, path: "/wrong" }],
+    folders: [{ id: uid(1), libraryId: uid(5), path: "/wrong" }],
     stats,
     createdAt: "",
-    updatedAt: "",
+    modifiedAt: "",
   };
   const card = () => root.querySelector<HTMLElement>("[aria-label='Movies library']")!;
   const inCard = (t: string) =>
@@ -658,9 +662,9 @@ describe("libraries", () => {
   it("a failed Scan now shows the error and lets the admin try again", async () => {
     location.hash = "#/libraries";
     const task = {
-      id: 7,
+      id: uid(7),
       name: "Scan Movies",
-      kind: "scan:5",
+      kind: `scan:${uid(5)}`,
       enabled: true,
       intervalSeconds: 86400,
       createdAt: "",
@@ -669,7 +673,7 @@ describe("libraries", () => {
       fetch: signedIn({
         "GET /libraries": page([lib]),
         "GET /tasks": page([task]),
-        "POST /tasks/7/runs": () => err(500, "internal", "queue is full"),
+        [`POST /tasks/${uid(7)}/runs`]: () => err(500, "internal", "queue is full"),
       }),
     });
     await settle();
@@ -694,9 +698,13 @@ describe("libraries", () => {
       fetch: signedIn({
         "GET /libraries": page([lib]),
         "GET /tasks": page([]),
-        "PUT /libraries/5": lib,
-        "PUT /libraries/5/folders/1": { id: 1, libraryId: 5, path: "/m" },
-        "POST /libraries/5/folders": { id: 2, libraryId: 5, path: "/n" },
+        [`PUT /libraries/${uid(5)}`]: lib,
+        [`PUT /libraries/${uid(5)}/folders/${uid(1)}`]: {
+          id: uid(1),
+          libraryId: uid(5),
+          path: "/m",
+        },
+        [`POST /libraries/${uid(5)}/folders`]: { id: uid(2), libraryId: uid(5), path: "/n" },
       }),
     });
     await settle();
@@ -709,8 +717,12 @@ describe("libraries", () => {
     type("Folder path", "/m ");
     type("Add folder", " /n");
     await save();
-    expect(calls.find((c) => c.key === "PUT /libraries/5/folders/1")?.body).toEqual({ path: "/m" });
-    expect(calls.find((c) => c.key === "POST /libraries/5/folders")?.body).toEqual({ path: "/n" });
+    expect(calls.find((c) => c.key === `PUT /libraries/${uid(5)}/folders/${uid(1)}`)?.body).toEqual(
+      { path: "/m" },
+    );
+    expect(calls.find((c) => c.key === `POST /libraries/${uid(5)}/folders`)?.body).toEqual({
+      path: "/n",
+    });
     expect(document.querySelector(".dialog")).toBeNull();
   });
 
@@ -720,13 +732,13 @@ describe("libraries", () => {
       fetch: signedIn({
         "GET /libraries": page([lib]),
         "GET /tasks": page([]),
-        "PUT /libraries/5": lib,
+        [`PUT /libraries/${uid(5)}`]: lib,
       }),
     });
     await settle();
     click(inCard("Edit")[0]);
     await save();
-    expect(calls.map((c) => c.key)).toContain("PUT /libraries/5");
+    expect(calls.map((c) => c.key)).toContain(`PUT /libraries/${uid(5)}`);
     expect(calls.filter((c) => c.key.includes("/folders"))).toEqual([]);
     expect(document.querySelector(".dialog")).toBeNull();
   });
@@ -737,8 +749,9 @@ describe("libraries", () => {
       fetch: signedIn({
         "GET /libraries": page([lib]),
         "GET /tasks": page([]),
-        "PUT /libraries/5": lib,
-        "PUT /libraries/5/folders/1": () => err(400, "bad_request", "path: not a folder"),
+        [`PUT /libraries/${uid(5)}`]: lib,
+        [`PUT /libraries/${uid(5)}/folders/${uid(1)}`]: () =>
+          err(400, "bad_request", "path: not a folder"),
       }),
     });
     await settle();
@@ -757,21 +770,26 @@ describe("libraries", () => {
       fetch: signedIn({
         "GET /libraries": page([lib]),
         "GET /tasks": page([]),
-        "PUT /libraries/5": lib,
-        "DELETE /libraries/5/folders/1": () => new Response(null, { status: 204 }),
+        [`PUT /libraries/${uid(5)}`]: lib,
+        [`DELETE /libraries/${uid(5)}/folders/${uid(1)}`]: () =>
+          new Response(null, { status: 204 }),
       }),
     });
     await settle();
     click(inCard("Edit")[0]);
     click(inDialog("Remove")[0]);
-    expect(calls.find((c) => c.key === "DELETE /libraries/5/folders/1")).toBeUndefined();
+    expect(
+      calls.find((c) => c.key === `DELETE /libraries/${uid(5)}/folders/${uid(1)}`),
+    ).toBeUndefined();
     expect(document.querySelector(".dialog")!.textContent).toContain("marks its files missing");
     click(inDialog("Remove").at(-1));
     await settle();
-    expect(calls.find((c) => c.key === "DELETE /libraries/5/folders/1")).toBeTruthy();
+    expect(
+      calls.find((c) => c.key === `DELETE /libraries/${uid(5)}/folders/${uid(1)}`),
+    ).toBeTruthy();
     expect(inDialog("Remove")).toEqual([]);
     await save();
-    expect(calls.filter((c) => c.key.startsWith("PUT /libraries/5/folders"))).toEqual([]);
+    expect(calls.filter((c) => c.key.startsWith(`PUT /libraries/${uid(5)}/folders`))).toEqual([]);
   });
 
   it("Delete library says what goes and what stays, then deletes it", async () => {
@@ -780,7 +798,7 @@ describe("libraries", () => {
       fetch: signedIn({
         "GET /libraries": page([lib]),
         "GET /tasks": page([]),
-        "DELETE /libraries/5": () => new Response(null, { status: 204 }),
+        [`DELETE /libraries/${uid(5)}`]: () => new Response(null, { status: 204 }),
       }),
     });
     await settle();
@@ -791,17 +809,17 @@ describe("libraries", () => {
     const text = document.querySelector(".dialog")!.textContent;
     expect(text).toContain("watch state");
     expect(text).toContain("stay on disk");
-    expect(calls.find((c) => c.key === "DELETE /libraries/5")).toBeUndefined();
+    expect(calls.find((c) => c.key === `DELETE /libraries/${uid(5)}`)).toBeUndefined();
     click(btn("Delete library").at(-1));
     await settle();
-    expect(calls.find((c) => c.key === "DELETE /libraries/5")).toBeTruthy();
+    expect(calls.find((c) => c.key === `DELETE /libraries/${uid(5)}`)).toBeTruthy();
     expect(document.querySelector(".dialog")).toBeNull();
   });
 });
 
 describe("youtube libraries", () => {
   const yt = {
-    id: 8,
+    id: uid(8),
     name: "YouTube",
     kind: "youtube",
     scanHour: 3,
@@ -809,7 +827,7 @@ describe("youtube libraries", () => {
     folders: [],
     stats: { ...stats, channels: 14, videos: 2118 },
     createdAt: "",
-    updatedAt: "",
+    modifiedAt: "",
   };
 
   it("Add library sends name, kind and schedule, then the folder", async () => {
@@ -819,7 +837,7 @@ describe("youtube libraries", () => {
         "GET /libraries": page([]),
         "GET /tasks": page([]),
         "POST /libraries": yt,
-        "POST /libraries/8/folders": { id: 1, libraryId: 8, path: "/y" },
+        [`POST /libraries/${uid(8)}/folders`]: { id: uid(1), libraryId: uid(8), path: "/y" },
       }),
     });
     await settle();
@@ -842,7 +860,9 @@ describe("youtube libraries", () => {
       scanHour: 3,
       watchFiles: true,
     });
-    expect(calls.find((c) => c.key === "POST /libraries/8/folders")?.body).toEqual({ path: "/y" });
+    expect(calls.find((c) => c.key === `POST /libraries/${uid(8)}/folders`)?.body).toEqual({
+      path: "/y",
+    });
   });
 
   it("Add library keeps the library when its folder is refused, lists it and sends only the folder again", async () => {
@@ -853,9 +873,9 @@ describe("youtube libraries", () => {
         "GET /libraries": () => page(made ? [yt] : []),
         "GET /tasks": page([]),
         "POST /libraries": () => ((made = true), yt),
-        "POST /libraries/8/folders": (b: unknown) =>
+        [`POST /libraries/${uid(8)}/folders`]: (b: unknown) =>
           (b as { path: string }).path === "/y"
-            ? { id: 1, libraryId: 8, path: "/y" }
+            ? { id: uid(1), libraryId: uid(8), path: "/y" }
             : err(400, "bad_request", "path: not a folder"),
       }),
     });
@@ -873,8 +893,8 @@ describe("youtube libraries", () => {
     await settle();
     expect(calls.filter((c) => c.key.startsWith("POST /libraries")).map((c) => c.key)).toEqual([
       "POST /libraries",
-      "POST /libraries/8/folders",
-      "POST /libraries/8/folders",
+      `POST /libraries/${uid(8)}/folders`,
+      `POST /libraries/${uid(8)}/folders`,
     ]);
     expect(document.querySelector(".dialog")).toBeNull();
   });
@@ -890,7 +910,7 @@ describe("youtube libraries", () => {
 
 describe("library stats", () => {
   const tv = {
-    id: 6,
+    id: uid(6),
     name: "Shows",
     kind: "tv",
     scanHour: 3,
@@ -898,9 +918,9 @@ describe("library stats", () => {
     folders: [],
     stats: tvStats,
     createdAt: "",
-    updatedAt: "",
+    modifiedAt: "",
   };
-  const movies = { ...tv, id: 5, name: "Movies", kind: "movies", stats };
+  const movies = { ...tv, id: uid(5), name: "Movies", kind: "movies", stats };
 
   it("the Libraries card shows shows, seasons, episodes and size for TV", async () => {
     location.hash = "#/libraries";
@@ -931,9 +951,9 @@ describe("library stats", () => {
 
 describe("users", () => {
   const users = {
-    "GET /households": page([{ id: 1, name: "Ada", adultId: 1, createdAt: "" }]),
+    "GET /households": page([{ id: uid(1), name: "Ada", adultId: uid(1), createdAt: "" }]),
     "GET /accounts": page([adult]),
-    "GET /devices": page([device, { ...device, id: 10, name: "Living room" }]),
+    "GET /devices": page([device, { ...device, id: uid(10), name: "Living room" }]),
     "GET /adult-links": page([]),
   };
 
@@ -941,7 +961,7 @@ describe("users", () => {
     location.hash = "#/users";
     const acct = {
       ...adult,
-      id: 2,
+      id: uid(2),
       name: "Heidi",
       email: "h@example.com",
       isAdmin: false,
@@ -949,10 +969,10 @@ describe("users", () => {
       pending: true,
     };
     const jc = {
-      id: 3,
+      id: uid(3),
       code: "7KQ4-MNP2",
       link: "/join/7KQ4-MNP2",
-      accountId: 2,
+      accountId: uid(2),
       expiresAt: "2026-12-01T00:00:00Z",
       createdAt: "",
     };
@@ -975,14 +995,14 @@ describe("users", () => {
     ).toMatch(/\/join\/7KQ4-MNP2$/);
     expect(document.querySelector(".code")?.textContent).toBe("7KQ4-MNP2");
     expect(calls.find((c) => c.key === "POST /join-codes")?.body).toEqual({
-      accountId: 2,
+      accountId: uid(2),
       expiresInDays: 7,
     });
   });
 
   const kid = {
     ...adult,
-    id: 2,
+    id: uid(2),
     kind: "kid",
     name: "Aaron",
     email: undefined,
@@ -1012,7 +1032,7 @@ describe("users", () => {
 
   it("Edit on a kid saves name, birthday and ceilings through the accounts API", async () => {
     const sheet = await edit("Aaron", {
-      "PUT /accounts/2": (b: unknown) => ({ ...kid, ...(b as object) }),
+      [`PUT /accounts/${uid(2)}`]: (b: unknown) => ({ ...kid, ...(b as object) }),
       "GET /ratings/suggestion": { age: 9, movieCeiling: "PG", tvCeiling: "TV-PG" },
     });
     expect(sheet.getAttribute("role")).toBe("dialog");
@@ -1024,7 +1044,7 @@ describe("users", () => {
     choose(sheet, "TV up to", "TV-G");
     submit(sheet);
     await settle();
-    expect(calls.find((c) => c.key === "PUT /accounts/2")?.body).toEqual({
+    expect(calls.find((c) => c.key === `PUT /accounts/${uid(2)}`)?.body).toEqual({
       kind: "kid",
       name: "Aaron B",
       birthday: "2017-08-19",
@@ -1038,7 +1058,7 @@ describe("users", () => {
 
   it("Edit on an adult saves email and the admin flag, and shows a server refusal", async () => {
     const sheet = await edit("Ada", {
-      "PUT /accounts/1": () => err(409, "conflict", "the last admin cannot be removed"),
+      [`PUT /accounts/${uid(1)}`]: () => err(409, "conflict", "the last admin cannot be removed"),
     });
     type("Email", "ada@new.example");
     const admin = [...sheet.querySelectorAll("label")]
@@ -1047,7 +1067,7 @@ describe("users", () => {
     admin.checked = false;
     submit(sheet);
     await settle();
-    expect(calls.find((c) => c.key === "PUT /accounts/1")?.body).toEqual({
+    expect(calls.find((c) => c.key === `PUT /accounts/${uid(1)}`)?.body).toEqual({
       kind: "adult",
       name: "Ada",
       email: "ada@new.example",
@@ -1060,7 +1080,7 @@ describe("users", () => {
   });
 
   it("Reset password in the Edit sheet sets and shows a temporary password", async () => {
-    await edit("Ada", { "PUT /accounts/1/password": noContent });
+    await edit("Ada", { [`PUT /accounts/${uid(1)}/password`]: noContent });
     click(byText("button", "Reset password"));
     click(
       [...document.querySelectorAll("button")]
@@ -1068,7 +1088,7 @@ describe("users", () => {
         .at(-1),
     );
     await settle();
-    const sent = calls.find((c) => c.key === "PUT /accounts/1/password")?.body as {
+    const sent = calls.find((c) => c.key === `PUT /accounts/${uid(1)}/password`)?.body as {
       password: string;
     };
     expect(sent.password).toMatch(/^[2-9A-Z]{4}-[2-9A-Z]{4}-[2-9A-Z]{4}$/);
@@ -1077,13 +1097,13 @@ describe("users", () => {
 
   it("Remove in the Edit sheet asks in the page, then deletes the account", async () => {
     const confirm = vi.spyOn(window, "confirm");
-    const sheet = await edit("Aaron", { "DELETE /accounts/2": noContent });
+    const sheet = await edit("Aaron", { [`DELETE /accounts/${uid(2)}`]: noContent });
     click(byText("button", "Remove"));
-    expect(calls.find((c) => c.key === "DELETE /accounts/2")).toBeUndefined();
+    expect(calls.find((c) => c.key === `DELETE /accounts/${uid(2)}`)).toBeUndefined();
     expect(sheet.textContent).toContain("Remove Aaron and their watch history?");
     click([...sheet.querySelectorAll("button")].filter((b) => b.textContent === "Remove").at(-1));
     await settle();
-    expect(calls.find((c) => c.key === "DELETE /accounts/2")).toBeTruthy();
+    expect(calls.find((c) => c.key === `DELETE /accounts/${uid(2)}`)).toBeTruthy();
     expect(confirm).not.toHaveBeenCalled();
   });
 
@@ -1095,18 +1115,18 @@ describe("users", () => {
   it("Revoke on a device asks in the page, then revokes it", async () => {
     location.hash = "#/users";
     const confirm = vi.spyOn(window, "confirm");
-    await boot(root, { fetch: signedIn({ ...users, "PUT /devices/10": device }) });
+    await boot(root, { fetch: signedIn({ ...users, [`PUT /devices/${uid(10)}`]: device }) });
     await settle();
     expect(root.textContent).toContain("This browser");
     const row = [...root.querySelectorAll("tr")].find((r) =>
       r.textContent?.includes("Living room"),
     )!;
     click(row.querySelector("button"));
-    expect(calls.find((c) => c.key === "PUT /devices/10")).toBeUndefined();
+    expect(calls.find((c) => c.key === `PUT /devices/${uid(10)}`)).toBeUndefined();
     expect(row.textContent).toContain("Revoke Living room?");
     click([...row.querySelectorAll("button")].at(-1));
     await settle();
-    expect(calls.find((c) => c.key === "PUT /devices/10")?.body).toEqual({
+    expect(calls.find((c) => c.key === `PUT /devices/${uid(10)}`)?.body).toEqual({
       name: "Living room",
       revoked: true,
     });
@@ -1132,7 +1152,7 @@ describe("users", () => {
     await boot(root, {
       fetch: signedIn({
         ...users,
-        "PUT /devices/10": () => err(500, "internal", "database is locked"),
+        [`PUT /devices/${uid(10)}`]: () => err(500, "internal", "database is locked"),
       }),
     });
     await settle();
@@ -1147,7 +1167,7 @@ describe("users", () => {
 
   it("reads every page of devices, so a long-idle one is listed and signed out with its household", async () => {
     location.hash = "#/users";
-    const oldest = { ...device, id: 11, name: "Attic TV" };
+    const oldest = { ...device, id: uid(11), name: "Attic TV" };
     await boot(root, {
       fetch: signedIn({
         ...users,
@@ -1155,8 +1175,8 @@ describe("users", () => {
           url.searchParams.get("offset") === "1"
             ? page([oldest])
             : { items: [device], nextOffset: 1 },
-        "PUT /devices/9": device,
-        "PUT /devices/11": oldest,
+        [`PUT /devices/${uid(9)}`]: device,
+        [`PUT /devices/${uid(11)}`]: oldest,
       }),
     });
     await settle();
@@ -1169,8 +1189,8 @@ describe("users", () => {
     );
     await settle();
     expect(calls.filter((c) => c.key.startsWith("PUT /devices/")).map((c) => c.key)).toEqual([
-      "PUT /devices/11",
-      "PUT /devices/9",
+      `PUT /devices/${uid(11)}`,
+      `PUT /devices/${uid(9)}`,
     ]);
   });
 
@@ -1180,13 +1200,13 @@ describe("users", () => {
     const held = new Promise<void>((r) => (release = r));
     const inner = signedIn({
       ...users,
-      "PUT /devices/10": { ...device, id: 10 },
-      "PUT /devices/9": device,
+      [`PUT /devices/${uid(10)}`]: { ...device, id: uid(10) },
+      [`PUT /devices/${uid(9)}`]: device,
     });
     await boot(root, {
       fetch: async (req) => {
         const res = await inner(req);
-        if (req.url.endsWith("/devices/10")) await held;
+        if (req.url.endsWith(`/devices/${uid(10)}`)) await held;
         return res;
       },
     });
@@ -1198,26 +1218,26 @@ describe("users", () => {
         .at(-1),
     );
     await settle();
-    expect(calls.some((c) => c.key === "PUT /devices/10")).toBe(true);
-    expect(calls.some((c) => c.key === "PUT /devices/9")).toBe(false);
+    expect(calls.some((c) => c.key === `PUT /devices/${uid(10)}`)).toBe(true);
+    expect(calls.some((c) => c.key === `PUT /devices/${uid(9)}`)).toBe(false);
     release();
     await settle();
     expect(calls.filter((c) => c.key.startsWith("PUT /devices/")).map((c) => c.key)).toEqual([
-      "PUT /devices/10",
-      "PUT /devices/9",
+      `PUT /devices/${uid(10)}`,
+      `PUT /devices/${uid(9)}`,
     ]);
     expect(localStorage.length).toBe(0);
   });
 
   it("Revoke on this browser's own device signs out instead of reloading the page", async () => {
     location.hash = "#/users";
-    await boot(root, { fetch: signedIn({ ...users, "PUT /devices/9": device }) });
+    await boot(root, { fetch: signedIn({ ...users, [`PUT /devices/${uid(9)}`]: device }) });
     await settle();
     const row = [...root.querySelectorAll("tr")].find((r) => r.textContent?.includes("Admin web"))!;
     click(row.querySelector("button"));
     click([...row.querySelectorAll("button")].at(-1));
     await settle();
-    expect(calls.find((c) => c.key === "PUT /devices/9")?.body).toEqual({
+    expect(calls.find((c) => c.key === `PUT /devices/${uid(9)}`)?.body).toEqual({
       name: "Admin web",
       revoked: true,
     });
@@ -1226,21 +1246,21 @@ describe("users", () => {
 
   describe("shared profiles and connected adults", () => {
     const hhs = page([
-      { id: 1, name: "Ada", adultId: 1, createdAt: "" },
-      { id: 2, name: "Mark", adultId: 3, createdAt: "" },
+      { id: uid(1), name: "Ada", adultId: uid(1), createdAt: "" },
+      { id: uid(2), name: "Mark", adultId: uid(3), createdAt: "" },
     ]);
-    const claire = { ...kid, name: "Claire", householdIds: [1, 2] };
+    const claire = { ...kid, name: "Claire", householdIds: [uid(1), uid(2)] };
     const mark = {
       ...adult,
-      id: 3,
+      id: uid(3),
       name: "Mark",
       email: "c@example.com",
       isAdmin: false,
-      householdId: 2,
-      householdIds: [2, 1],
+      householdId: uid(2),
+      householdIds: [uid(2), uid(1)],
     };
-    const ada = { ...adult, householdIds: [1] };
-    const link = { accountId: 1, otherAccountId: 3, tv: false, createdAt: "" };
+    const ada = { ...adult, householdIds: [uid(1)] };
+    const link = { accountId: uid(1), otherAccountId: uid(3), tv: false, createdAt: "" };
     const open = async (extra: Record<string, Handler | unknown> = {}) => {
       location.hash = "#/users";
       await boot(root, {
@@ -1284,7 +1304,7 @@ describe("users", () => {
     });
 
     it("Remove from household asks, then takes the profile out of that household only", async () => {
-      await open({ "DELETE /households/1/members/2": noContent });
+      await open({ [`DELETE /households/${uid(1)}/members/${uid(2)}`]: noContent });
       const r = row(card("Household of Ada"), "Claire");
       click(
         [...r.querySelectorAll("button")].find((b) => b.textContent === "Remove from household"),
@@ -1292,16 +1312,18 @@ describe("users", () => {
       expect(r.textContent).toContain("Remove Claire from Ada's household?");
       click([...r.querySelectorAll("button")].at(-1));
       await settle();
-      expect(calls.some((c) => c.key === "DELETE /households/1/members/2")).toBe(true);
-      expect(calls.some((c) => c.key === "DELETE /accounts/2")).toBe(false);
+      expect(calls.some((c) => c.key === `DELETE /households/${uid(1)}/members/${uid(2)}`)).toBe(
+        true,
+      );
+      expect(calls.some((c) => c.key === `DELETE /accounts/${uid(2)}`)).toBe(false);
     });
 
     it("Add existing profile puts a joined profile not yet there into the household", async () => {
-      const pending = { ...adult, id: 4, name: "Dee", pending: true, householdId: undefined };
+      const pending = { ...adult, id: uid(4), name: "Dee", pending: true, householdId: undefined };
       await open({
         "GET /accounts": page([ada, claire, mark, pending]),
         "GET /join-codes": page([]),
-        "PUT /households/2/members/1": noContent,
+        [`PUT /households/${uid(2)}/members/${uid(1)}`]: noContent,
       });
       click(
         [...card("Household of Mark").querySelectorAll("button")].find(
@@ -1316,14 +1338,14 @@ describe("users", () => {
       expect([...pick.options].map((o) => o.textContent)).toEqual(["Ada"]);
       dlg.querySelector("form")!.dispatchEvent(new Event("submit", { cancelable: true }));
       await settle();
-      expect(calls.some((c) => c.key === "PUT /households/2/members/1")).toBe(true);
+      expect(calls.some((c) => c.key === `PUT /households/${uid(2)}/members/${uid(1)}`)).toBe(true);
       expect(document.querySelector("[role=dialog]")).toBeNull();
     });
 
     it("lists connected adults with their households, and switches TVs and disconnects", async () => {
       await open({
-        "PUT /adult-links/1/3": (b: unknown) => ({ ...link, ...(b as object) }),
-        "DELETE /adult-links/1/3": noContent,
+        [`PUT /adult-links/${uid(1)}/${uid(3)}`]: (b: unknown) => ({ ...link, ...(b as object) }),
+        [`DELETE /adult-links/${uid(1)}/${uid(3)}`]: noContent,
       });
       const c = card("Connected adults");
       expect(c.textContent).toContain(
@@ -1337,15 +1359,19 @@ describe("users", () => {
       expect(sw.checked).toBe(false);
       click(sw);
       await settle();
-      expect(calls.find((c) => c.key === "PUT /adult-links/1/3")?.body).toEqual({ tv: true });
+      expect(calls.find((c) => c.key === `PUT /adult-links/${uid(1)}/${uid(3)}`)?.body).toEqual({
+        tv: true,
+      });
       click([...r.querySelectorAll("button")].find((b) => b.textContent === "Disconnect"));
       click([...r.querySelectorAll("button")].at(-1));
       await settle();
-      expect(calls.some((c) => c.key === "DELETE /adult-links/1/3")).toBe(true);
+      expect(calls.some((c) => c.key === `DELETE /adult-links/${uid(1)}/${uid(3)}`)).toBe(true);
     });
 
     it("puts the switch back when the server refuses it", async () => {
-      await open({ "PUT /adult-links/1/3": () => err(500, "internal", "database is locked") });
+      await open({
+        [`PUT /adult-links/${uid(1)}/${uid(3)}`]: () => err(500, "internal", "database is locked"),
+      });
       const c = card("Connected adults");
       const sw = c.querySelector<HTMLInputElement>("[role=switch]")!;
       click(sw);
@@ -1362,8 +1388,8 @@ describe("users", () => {
       const dlg = document.querySelector<HTMLElement>("[role=dialog]")!;
       const [one, other] = dlg.querySelectorAll("select");
       expect([...one.options].map((o) => o.textContent)).toEqual(["Ada", "Mark"]);
-      one.value = "1";
-      other.value = "1";
+      one.value = uid(1);
+      other.value = uid(1);
       const submit = () =>
         dlg.querySelector("form")!.dispatchEvent(new Event("submit", { cancelable: true }));
       submit();
@@ -1372,12 +1398,12 @@ describe("users", () => {
         "Pick two adults of different households.",
       );
       expect(calls.some((c) => c.key === "POST /adult-links")).toBe(false);
-      other.value = "3";
+      other.value = uid(3);
       submit();
       await settle();
       expect(calls.find((c) => c.key === "POST /adult-links")?.body).toEqual({
-        accountId: 1,
-        otherAccountId: 3,
+        accountId: uid(1),
+        otherAccountId: uid(3),
         tv: false,
       });
       expect(document.querySelector("[role=dialog]")).toBeNull();
@@ -1426,8 +1452,10 @@ describe("tasks", () => {
       const slow = new Promise<void>((r) => (release = r));
       const inner = signedIn({
         "GET /tasks": () =>
-          page([{ id: 1, name: `Poll ${++n}`, kind: "metadata", enabled: true, createdAt: "" }]),
-        "GET /tasks/1/runs": page([]),
+          page([
+            { id: uid(1), name: `Poll ${++n}`, kind: "metadata", enabled: true, createdAt: "" },
+          ]),
+        [`GET /tasks/${uid(1)}/runs`]: page([]),
         "GET /settings": serverSettings,
       });
       await boot(root, {
@@ -1465,14 +1493,14 @@ describe("tasks", () => {
   it("a failed task offers Retry with its error", async () => {
     location.hash = "#/tasks";
     const t = {
-      id: 1,
+      id: uid(1),
       name: "Refresh metadata",
       kind: "metadata",
       enabled: true,
       createdAt: "",
       lastRun: {
-        id: 1,
-        taskId: 1,
+        id: uid(1),
+        taskId: uid(1),
         status: "failed",
         progress: 0,
         error: "TMDB 429",
@@ -1482,7 +1510,7 @@ describe("tasks", () => {
     await boot(root, {
       fetch: signedIn({
         "GET /tasks": page([t]),
-        "GET /tasks/1/runs": page([t.lastRun]),
+        [`GET /tasks/${uid(1)}/runs`]: page([t.lastRun]),
         "GET /settings": serverSettings,
       }),
     });
@@ -1493,24 +1521,24 @@ describe("tasks", () => {
 
   it("shows what a scan did in Scheduled, History and the Dashboard", async () => {
     const run = {
-      id: 3,
-      taskId: 2,
+      id: uid(3),
+      taskId: uid(2),
       status: "succeeded",
       progress: 1,
       summary: "2 shows, 6 episodes added",
       startedAt: "2026-01-01T00:00:00Z",
     };
     const t = {
-      id: 2,
+      id: uid(2),
       name: "Scan Shows",
-      kind: "scan:6",
+      kind: `scan:${uid(6)}`,
       enabled: true,
       createdAt: "",
       lastRun: run,
     };
     const routes = {
       "GET /tasks": page([t]),
-      "GET /tasks/2/runs": page([run]),
+      [`GET /tasks/${uid(2)}/runs`]: page([run]),
       "GET /settings": serverSettings,
       "GET /stats": serverStats,
       "GET /libraries": page([]),
@@ -1536,23 +1564,29 @@ describe("tasks", () => {
 describe("logs", () => {
   const entries = [
     {
-      id: 3,
+      id: uid(3),
       at: "2026-03-01T12:02:00Z",
       level: "info",
       source: "playback",
       message: "Session 7 started: video_transcode",
-      sessionId: 7,
+      sessionId: uid(7),
       ffmpegCommand: "ffmpeg -i /m/a.mkv out.m3u8",
       transcodeReason: "HEVC Main10 is not decodable here",
     },
     {
-      id: 2,
+      id: uid(2),
       at: "2026-03-01T12:01:00Z",
       level: "warn",
       source: "tmdb",
       message: "TMDB returned 429",
     },
-    { id: 1, at: "2026-03-01T12:00:00Z", level: "error", source: "task", message: "Task failed" },
+    {
+      id: uid(1),
+      at: "2026-03-01T12:00:00Z",
+      level: "error",
+      source: "task",
+      message: "Task failed",
+    },
   ];
   const boot_ = async (routes: Record<string, Handler | unknown> = {}) => {
     location.hash = "#/logs";
@@ -1649,7 +1683,7 @@ describe("logs", () => {
         return url.searchParams.get("offset") === "100"
           ? page([
               {
-                id: 0,
+                id: uid(0),
                 at: "2026-03-01T11:00:00Z",
                 level: "info",
                 source: "scan",
@@ -2071,19 +2105,19 @@ describe("settings", () => {
 
 describe("stations", () => {
   const st = (id: number, name: string, extra = {}) => ({
-    id,
+    id: uid(id),
     name,
     kind: "movies",
-    ownerId: 1,
-    householdId: 1,
-    playlistId: 9,
+    ownerId: uid(1),
+    householdId: uid(1),
+    playlistId: uid(9),
     order: "playlist",
     visibility: "household",
     days: [],
     times: [],
     onAir: { status: "off_schedule" },
     createdAt: "",
-    updatedAt: "",
+    modifiedAt: "",
     ...extra,
   });
 
@@ -2096,8 +2130,12 @@ describe("stations", () => {
           st(5, "Kitchen Radio", { kind: "music", visibility: "server" }),
         ]),
         "GET /accounts": page([adult]),
-        "GET /households": page([{ id: 1, name: "Ada's household", adultId: 1, createdAt: "" }]),
-        "PUT /admin/stations/4/server-wide": st(4, "The Big Screen", { visibility: "server" }),
+        "GET /households": page([
+          { id: uid(1), name: "Ada's household", adultId: uid(1), createdAt: "" },
+        ]),
+        [`PUT /admin/stations/${uid(4)}/server-wide`]: st(4, "The Big Screen", {
+          visibility: "server",
+        }),
       }),
     });
     await settle();
@@ -2127,7 +2165,7 @@ describe("stations", () => {
     ).toBe(true);
     click(sw);
     await settle();
-    expect(calls.find((c) => c.key === "PUT /admin/stations/4/server-wide")!.body).toEqual({
+    expect(calls.find((c) => c.key === `PUT /admin/stations/${uid(4)}/server-wide`)!.body).toEqual({
       serverWide: true,
     });
     expect(root.querySelector("tbody tr")!.textContent).toContain("Server");
@@ -2139,12 +2177,12 @@ describe("single sign-on", () => {
     await boot(root, {
       fetch: mockFetch({
         "GET /health": health(),
-        "GET /auth/sso-providers": [{ id: 3, name: "Keyhole" }],
+        "GET /auth/sso-providers": [{ id: uid(3), name: "Keyhole" }],
       }),
     });
     await settle();
     const a = byText("a", "Sign in with Keyhole") as HTMLAnchorElement;
-    expect(a.getAttribute("href")).toBe("/api/v1/auth/sso/3/start?returnTo=admin");
+    expect(a.getAttribute("href")).toBe(`/api/v2/auth/sso/${uid(3)}/start?returnTo=admin`);
     expect(root.querySelector("form")!.contains(a)).toBe(true);
   });
 
@@ -2179,7 +2217,7 @@ describe("single sign-on", () => {
   });
 
   const provider = (id: number, name: string, extra = {}) => ({
-    id,
+    id: uid(id),
     name,
     issuer: "https://id.example.com",
     clientId: "rabbit-ears",
@@ -2187,7 +2225,7 @@ describe("single sign-on", () => {
     linksByEmail: false,
     enabled: true,
     createdAt: "",
-    updatedAt: "",
+    modifiedAt: "",
     ...extra,
   });
   const open = async (extra: Record<string, Handler | unknown> = {}) => {
@@ -2216,7 +2254,7 @@ describe("single sign-on", () => {
     const nav = [...root.querySelectorAll("nav a")].map((a) => a.textContent);
     expect(nav.indexOf("Single sign-on")).toBe(nav.indexOf("Users & profiles") + 1);
     expect(root.querySelector<HTMLInputElement>("input[aria-label='Callback URL']")!.value).toBe(
-      `${location.origin}/api/v1/auth/sso/callback`,
+      `${location.origin}/api/v2/auth/sso/callback`,
     );
     const rows = [...root.querySelectorAll("tbody tr")].map((tr) => tr.textContent);
     expect(rows[0]).toContain("Keyhole");
@@ -2252,7 +2290,7 @@ describe("single sign-on", () => {
   it("edits a provider keeping its secret, and shows an issuer refusal on the field", async () => {
     let refuse = true;
     await open({
-      "PUT /admin/sso-providers/3": () =>
+      [`PUT /admin/sso-providers/${uid(3)}`]: () =>
         refuse
           ? new Response(
               JSON.stringify({
@@ -2277,7 +2315,9 @@ describe("single sign-on", () => {
     refuse = false;
     submit();
     await settle();
-    expect(calls.filter((c) => c.key === "PUT /admin/sso-providers/3").at(-1)?.body).toEqual({
+    expect(
+      calls.filter((c) => c.key === `PUT /admin/sso-providers/${uid(3)}`).at(-1)?.body,
+    ).toEqual({
       name: "Keyhole",
       issuer: "https://id.example.com",
       clientId: "rabbit-ears",
@@ -2289,12 +2329,12 @@ describe("single sign-on", () => {
 
   it("enables, disables and deletes a provider", async () => {
     await open({
-      "PUT /admin/sso-providers/4": (b: unknown) => provider(4, "Attic", b as object),
-      "DELETE /admin/sso-providers/4": noContent,
+      [`PUT /admin/sso-providers/${uid(4)}`]: (b: unknown) => provider(4, "Attic", b as object),
+      [`DELETE /admin/sso-providers/${uid(4)}`]: noContent,
     });
     click(root.querySelector("[role=switch][aria-label='Enabled: Attic']"));
     await settle();
-    const put = calls.find((c) => c.key === "PUT /admin/sso-providers/4")!.body as Record<
+    const put = calls.find((c) => c.key === `PUT /admin/sso-providers/${uid(4)}`)!.body as Record<
       string,
       unknown
     >;
@@ -2304,29 +2344,29 @@ describe("single sign-on", () => {
     click([...row.querySelectorAll("button")].find((b) => b.textContent === "Delete"));
     click([...row.querySelectorAll("button")].filter((b) => b.textContent === "Delete").at(-1));
     await settle();
-    expect(calls.find((c) => c.key === "DELETE /admin/sso-providers/4")).toBeTruthy();
+    expect(calls.find((c) => c.key === `DELETE /admin/sso-providers/${uid(4)}`)).toBeTruthy();
   });
 
   it("unlinks an adult's single sign-on identity from their Edit sheet", async () => {
     location.hash = "#/users";
     await boot(root, {
       fetch: signedIn({
-        "GET /households": page([{ id: 1, name: "Ada", adultId: 1, createdAt: "" }]),
+        "GET /households": page([{ id: uid(1), name: "Ada", adultId: uid(1), createdAt: "" }]),
         "GET /accounts": page([adult]),
         "GET /devices": page([device]),
         "GET /adult-links": page([]),
-        "GET /accounts/1/identities": page([
+        [`GET /accounts/${uid(1)}/identities`]: page([
           {
-            id: 7,
-            accountId: 1,
-            providerId: 3,
+            id: uid(7),
+            accountId: uid(1),
+            providerId: uid(3),
             subject: "u1",
             email: "ada@id.example.com",
             createdAt: "",
           },
         ]),
         "GET /admin/sso-providers": page([provider(3, "Keyhole")]),
-        "DELETE /accounts/1/identities/7": noContent,
+        [`DELETE /accounts/${uid(1)}/identities/${uid(7)}`]: noContent,
       }),
     });
     await settle();
@@ -2339,6 +2379,8 @@ describe("single sign-on", () => {
     click([...sheet.querySelectorAll("button")].find((b) => b.textContent === "Unlink"));
     click([...sheet.querySelectorAll("button")].filter((b) => b.textContent === "Unlink").at(-1));
     await settle();
-    expect(calls.find((c) => c.key === "DELETE /accounts/1/identities/7")).toBeTruthy();
+    expect(
+      calls.find((c) => c.key === `DELETE /accounts/${uid(1)}/identities/${uid(7)}`),
+    ).toBeTruthy();
   });
 });

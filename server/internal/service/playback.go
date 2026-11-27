@@ -20,6 +20,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/playback"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/session"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/transcode"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // ErrNothingPlayable means no plan entry fits what the client reported.
@@ -46,7 +47,7 @@ type PlaybackService struct {
 	channels *ChannelService
 
 	mu   sync.Mutex
-	live map[int64]*liveSession
+	live map[uid.ID]*liveSession
 }
 
 type liveSession struct {
@@ -59,11 +60,11 @@ type liveSession struct {
 
 // NewPlaybackService returns a PlaybackService over the repositories and engine.
 func NewPlaybackService(sessions *session.Repo, files *mediafile.Repo, devices *device.Repo, engine *transcode.Manager) *PlaybackService {
-	return &PlaybackService{sessions: sessions, files: files, devices: devices, Engine: engine, Hardware: transcode.Hardware(), live: map[int64]*liveSession{}}
+	return &PlaybackService{sessions: sessions, files: files, devices: devices, Engine: engine, Hardware: transcode.Hardware(), live: map[uid.ID]*liveSession{}}
 }
 
 // Media loads a file and its probed tracks in the decision's terms.
-func (p *PlaybackService) Media(fileID int64) (*mediafile.File, playback.Media, error) {
+func (p *PlaybackService) Media(fileID uid.ID) (*mediafile.File, playback.Media, error) {
 	f, err := p.files.File(fileID)
 	if err != nil {
 		return nil, playback.Media{}, err
@@ -84,7 +85,7 @@ func (p *PlaybackService) Media(fileID int64) (*mediafile.File, playback.Media, 
 
 // Live returns an open session's snapshot and track choice, if this process
 // started it.
-func (p *PlaybackService) Live(id int64) (playback.Snapshot, playback.Selection, bool) {
+func (p *PlaybackService) Live(id uid.ID) (playback.Snapshot, playback.Selection, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	l, ok := p.live[id]
@@ -96,7 +97,7 @@ func (p *PlaybackService) Live(id int64) (playback.Snapshot, playback.Selection,
 
 // Plan decides how a client would play a file now; it opens nothing and
 // holds no transcode slot.
-func (p *PlaybackService) Plan(fileID int64, snap playback.Snapshot, sel playback.Selection) ([]*session.PlanEntry, error) {
+func (p *PlaybackService) Plan(fileID uid.ID, snap playback.Snapshot, sel playback.Selection) ([]*session.PlanEntry, error) {
 	_, m, err := p.Media(fileID)
 	if err != nil {
 		return nil, err
@@ -186,7 +187,7 @@ func (p *PlaybackService) logDecision(s *session.Session, what string, snap play
 	if err != nil {
 		return
 	}
-	logstore.Log("playback").Info(fmt.Sprintf("Session %d %s: %s", s.ID, what, e.Verdict),
+	logstore.Log("playback").Info(fmt.Sprintf("Session %s %s: %s", s.ID, what, e.Verdict),
 		"session_id", s.ID, "item_id", s.ItemID, "transcode_reason", playback.Reason(m, snap, sel, e))
 }
 
@@ -221,9 +222,6 @@ func (p *PlaybackService) open(s *session.Session, plan []*session.PlanEntry, sn
 	if err := p.sessions.Create(s, plan); err != nil {
 		return err
 	}
-	// SQLite reuses the id of a row deleted with its device, account or
-	// item, whose encoder, segments and slot were never freed.
-	p.Forget(s.ID)
 	p.mu.Lock()
 	p.live[s.ID] = &liveSession{snap: snap, sel: sel}
 	p.mu.Unlock()
@@ -237,7 +235,7 @@ const PlayingWithin = 30 * time.Second
 
 // Playing lists what an account plays now on any device, newest first:
 // its open sessions that reported within PlayingWithin, stations aside.
-func (p *PlaybackService) Playing(accountID int64) ([]*session.Session, error) {
+func (p *PlaybackService) Playing(accountID uid.ID) ([]*session.Session, error) {
 	return p.sessions.Playing(accountID, time.Now().Add(-PlayingWithin))
 }
 
@@ -250,12 +248,12 @@ func (p *PlaybackService) announce(s *session.Session, change string) {
 	if _, m, err := p.Media(s.MediaFileID); err == nil && playback.Song(m) {
 		return
 	}
-	p.Events.Publish(live.Event{Kind: live.Playback, Change: change, AccountIDs: []int64{s.AccountID}, ItemID: s.ItemID, SessionID: s.ID,
-		DeviceID: s.DeviceID})
+	p.Events.Publish(live.Event{Kind: live.Playback, Change: change, AccountIDs: []uid.ID{s.AccountID}, ItemID: ref(s.ItemID), SessionID: ref(s.ID),
+		DeviceID: ref(s.DeviceID)})
 }
 
 // ended frees an ended session's encoder and slot and announces it.
-func (p *PlaybackService) ended(id int64, change string, err error) error {
+func (p *PlaybackService) ended(id uid.ID, change string, err error) error {
 	p.Forget(id)
 	if err != nil {
 		return err
@@ -267,7 +265,7 @@ func (p *PlaybackService) ended(id int64, change string, err error) error {
 }
 
 // Move ends a session because the device toDeviceID takes its title over.
-func (p *PlaybackService) Move(id, toDeviceID int64) error {
+func (p *PlaybackService) Move(id, toDeviceID uid.ID) error {
 	return p.ended(id, live.Moved, p.sessions.Move(id, toDeviceID, time.Now().UTC()))
 }
 
@@ -379,7 +377,7 @@ func (p *PlaybackService) ClientFailed(s *session.Session, reason string) error 
 		model = d.Platform + " " + d.Name
 	}
 	log := logstore.Log("playback").With("session_id", s.ID, "item_id", s.ItemID)
-	log.Warn(fmt.Sprintf("Session %d: client failed on %s (%s)", s.ID, verdict, model), "device_id", s.DeviceID, "reason", reason)
+	log.Warn(fmt.Sprintf("Session %s: client failed on %s (%s)", s.ID, verdict, model), "device_id", s.DeviceID, "reason", reason)
 	if p.channels != nil && p.channels.Tuned(s.ID) {
 		return p.channels.failed(s)
 	}
@@ -391,10 +389,10 @@ func (p *PlaybackService) ClientFailed(s *session.Session, reason string) error 
 		return nil
 	}
 	if err != nil {
-		log.Warn(fmt.Sprintf("Session %d: no entries left to fall back to", s.ID))
+		log.Warn(fmt.Sprintf("Session %s: no entries left to fall back to", s.ID))
 		return err
 	}
-	log.Info(fmt.Sprintf("Session %d: falling back to plan entry %d", s.ID, next))
+	log.Info(fmt.Sprintf("Session %s: falling back to plan entry %d", s.ID, next))
 	s.CurrentEntry = next
 	p.Engine.Stop(s.ID)
 	return p.activate(s)
@@ -407,14 +405,14 @@ func (p *PlaybackService) ServerFailed(s *session.Session, entry int, cause erro
 		return
 	}
 	log := logstore.Log("playback").With("session_id", s.ID, "item_id", s.ItemID)
-	log.Error(fmt.Sprintf("Session %d: encoder failure on plan entry %d", s.ID, entry), "err", cause)
+	log.Error(fmt.Sprintf("Session %s: encoder failure on plan entry %d", s.ID, entry), "err", cause)
 	next, err := p.sessions.FailEntry(s.ID, entry, session.ServerFailure+cause.Error())
 	if errors.Is(err, session.ErrMoved) {
 		return // another report moved it, and the encoder is the new entry's
 	}
 	p.Engine.Stop(s.ID)
 	if errors.Is(err, db.ErrNotFound) {
-		log.Error(fmt.Sprintf("Session %d: no entries left to fall back to", s.ID))
+		log.Error(fmt.Sprintf("Session %s: no entries left to fall back to", s.ID))
 		_ = p.End(s.ID)
 		return
 	}
@@ -428,7 +426,7 @@ func (p *PlaybackService) ServerFailed(s *session.Session, entry int, cause erro
 	p.mu.Unlock()
 	s.CurrentEntry = next
 	if err := p.activate(s); err != nil {
-		log.Error(fmt.Sprintf("Session %d: no fallback available", s.ID), "err", err)
+		log.Error(fmt.Sprintf("Session %s: no fallback available", s.ID), "err", err)
 	}
 }
 
@@ -476,12 +474,12 @@ func (p *PlaybackService) floorDue(s *session.Session) (bool, error) {
 
 // End closes a session and frees its encoder and slot. The row ends first so
 // a segment request in between cannot start an encoder for it.
-func (p *PlaybackService) End(id int64) error {
+func (p *PlaybackService) End(id uid.ID) error {
 	return p.ended(id, live.Ended, p.sessions.End(id, time.Now().UTC()))
 }
 
 // EndDevice ends every open session of a device.
-func (p *PlaybackService) EndDevice(deviceID int64) error {
+func (p *PlaybackService) EndDevice(deviceID uid.ID) error {
 	open, err := p.sessions.ActiveByDevice(deviceID)
 	if err != nil {
 		return err
@@ -496,7 +494,7 @@ func (p *PlaybackService) EndDevice(deviceID int64) error {
 
 // Forget frees a session's encoder, slot and live state without touching
 // its row.
-func (p *PlaybackService) Forget(id int64) {
+func (p *PlaybackService) Forget(id uid.ID) {
 	if p.channels != nil {
 		p.channels.leave(id)
 	}
@@ -511,8 +509,8 @@ func (p *PlaybackService) Forget(id int64) {
 // not hold an encoder or a transcode slot, and forgets those whose row is
 // gone, those started before a restart included.
 func (p *PlaybackService) Reap(cutoff time.Time) error {
-	// Taken before the rows are read, so a session started in between, even
-	// on a reused id, is not mistaken for one whose row is gone.
+	// Taken before the rows are read, so a session started in between is not
+	// mistaken for one whose row is gone.
 	p.mu.Lock()
 	gone := maps.Clone(p.live)
 	p.mu.Unlock()
@@ -523,7 +521,7 @@ func (p *PlaybackService) Reap(cutoff time.Time) error {
 	}
 	for _, s := range active {
 		delete(gone, s.ID)
-		encoding = slices.DeleteFunc(encoding, func(id int64) bool { return id == s.ID })
+		encoding = slices.DeleteFunc(encoding, func(id uid.ID) bool { return id == s.ID })
 	}
 	for id, l := range gone {
 		p.mu.Lock()
@@ -537,13 +535,13 @@ func (p *PlaybackService) Reap(cutoff time.Time) error {
 		p.mu.Lock()
 		_, live := p.live[id]
 		p.mu.Unlock()
-		// A negative id is a channel's source, which its listeners keep.
-		if !live && id > 0 {
+		// A channel's source is its listeners' to keep.
+		if !live && (p.channels == nil || !p.channels.sourcing(id)) {
 			p.Forget(id)
 		}
 	}
 	for _, s := range active {
-		if s.UpdatedAt.Before(cutoff) {
+		if s.ModifiedAt.Before(cutoff) {
 			if err := p.End(s.ID); err != nil && !errors.Is(err, db.ErrNotFound) {
 				return err
 			}

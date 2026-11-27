@@ -7,17 +7,18 @@ import (
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/api"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/genre"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // hideFixture is kids' content of each kind (a G film, a film an adult
 // marked for kids, a TV-Y show) beside a PG film and a TV-MA show, spread
 // over collections, genres, people, a playlist and stations.
 type hideFixture struct {
-	g, g2, override, pg, kidShow, adultShow int64
-	kidsSaga, mixedSaga, empty              int64
-	family, drama, kidActor, both           int64
-	playlist                                int64
-	kidsStation, mixedStation               int64
+	g, g2, override, pg, kidShow, adultShow uid.ID
+	kidsSaga, mixedSaga, empty              uid.ID
+	family, drama, kidActor, both           uid.ID
+	playlist                                uid.ID
+	kidsStation, mixedStation               uid.ID
 }
 
 func (e *env) hideFixture() hideFixture {
@@ -54,7 +55,7 @@ func (e *env) hideFixture() hideFixture {
 	e.expect(201, "POST", "/people", e.admin.token, map[string]any{"name": "Kid Actor"}, &kidActor)
 	e.expect(201, "POST", "/people", e.admin.token, map[string]any{"name": "Both Actor"}, &both)
 	f.kidActor, f.both = kidActor.Id, both.Id
-	cast := func(ids ...int64) map[string]any {
+	cast := func(ids ...uid.ID) map[string]any {
 		var cs []map[string]any
 		for _, id := range ids {
 			cs = append(cs, map[string]any{"personId": id})
@@ -64,13 +65,13 @@ func (e *env) hideFixture() hideFixture {
 	e.expect(200, "PUT", "/items/"+itoa(f.g)+"/credits", e.admin.token, cast(f.kidActor, f.both), nil)
 	e.expect(200, "PUT", "/items/"+itoa(f.pg)+"/credits", e.admin.token, cast(f.both), nil)
 
-	f.playlist = e.nightsPlaylist(map[int64]int64{f.g: 90, f.pg: 90})
-	f.kidsStation = e.station("Cartoons", e.nightsPlaylist(map[int64]int64{f.g: 90, f.override: 90}))
+	f.playlist = e.nightsPlaylist(map[uid.ID]int64{f.g: 90, f.pg: 90})
+	f.kidsStation = e.station("Cartoons", e.nightsPlaylist(map[uid.ID]int64{f.g: 90, f.override: 90}))
 	f.mixedStation = e.station("Mixed", f.playlist)
 	return f
 }
 
-func (e *env) station(name string, playlist int64) int64 {
+func (e *env) station(name string, playlist uid.ID) uid.ID {
 	e.t.Helper()
 	var st api.Station
 	e.expect(201, "POST", "/stations", e.plain.token, map[string]any{"name": name, "playlistId": playlist, "visibility": "household"}, &st)
@@ -95,9 +96,9 @@ func TestHideKidsContentOnEveryBrowseRoute(t *testing.T) {
 		var cols api.CollectionPage
 		e.expect(200, "GET", "/collections", tok, nil, &cols)
 		got := collectionIDs(cols)
-		for id, shown := range map[int64]bool{f.kidsSaga: !hidden, f.mixedSaga: true, f.empty: true} {
+		for id, shown := range map[uid.ID]bool{f.kidsSaga: !hidden, f.mixedSaga: true, f.empty: true} {
 			if slices.Contains(got, id) != shown {
-				t.Errorf("hidden=%v: collection %d listed=%v in %v", hidden, id, !shown, got)
+				t.Errorf("hidden=%v: collection %s listed=%v in %v", hidden, id, !shown, got)
 			}
 		}
 		for _, c := range cols.Items {
@@ -171,7 +172,7 @@ func TestHideKidsContentOnEveryBrowseRoute(t *testing.T) {
 
 		var found api.SearchResult
 		e.expect(200, "GET", "/search?q=kite", tok, nil, &found)
-		var movieIDs []int64
+		var movieIDs []uid.ID
 		for _, m := range found.Movies {
 			movieIDs = append(movieIDs, m.Id)
 		}
@@ -204,11 +205,11 @@ func TestHideKidsContentOnEveryBrowseRoute(t *testing.T) {
 		t.Errorf("kids' films: %v", got)
 	}
 	e.expect(200, "GET", "/items?kind=show&kidsContent=true", tok, nil, &kids)
-	if got := itemIDs(kids); !slices.Equal(got, []int64{f.kidShow}) {
+	if got := itemIDs(kids); !slices.Equal(got, []uid.ID{f.kidShow}) {
 		t.Errorf("kids' shows: %v", got)
 	}
 	e.expect(200, "GET", "/items?kind=movie", tok, nil, &kids)
-	if got := itemIDs(kids); !slices.Equal(got, []int64{f.pg}) {
+	if got := itemIDs(kids); !slices.Equal(got, []uid.ID{f.pg}) {
 		t.Errorf("Hide still applies without the filter: %v", got)
 	}
 }
@@ -312,7 +313,7 @@ func TestAdminInterfaceIgnoresTheActiveProfilesFilter(t *testing.T) {
 	r := e.film(pg.LibraryID, "Kite R", "2005-01-01", "R")
 	e.hideKids(e.admin, true)
 	kid := e.kidDevice(e.admin, e.kid(e.admin, "Kid").Id)
-	movies := func(path, tok string) []int64 {
+	movies := func(path, tok string) []uid.ID {
 		t.Helper()
 		var res api.SearchResult
 		e.expect(200, "GET", path, tok, nil, &res)

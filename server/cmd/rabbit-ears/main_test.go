@@ -23,6 +23,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/discovery"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/service"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 func TestListenAddr(t *testing.T) {
@@ -95,7 +96,7 @@ func serve(t *testing.T, dir string) (*exec.Cmd, <-chan error, string) {
 	// The port is taken before startup ends; an answer means serving.
 	addr := "127.0.0.1:" + itoa(port)
 	for deadline := time.Now().Add(15 * time.Second); ; time.Sleep(50 * time.Millisecond) {
-		if res, err := http.Get("http://" + addr + "/api/v1/health"); err == nil {
+		if res, err := http.Get("http://" + addr + "/api/v2/health"); err == nil {
 			_ = res.Body.Close()
 			return cmd, exited, addr
 		}
@@ -134,7 +135,7 @@ func itoa(n int) string { return strconv.Itoa(n) }
 // live transcode is, goes when the next server starts.
 func TestStartKillsAnOrphanedConversion(t *testing.T) {
 	dir := t.TempDir()
-	part := filepath.Join(dir, "cache", "downloads", "1.mp4.part")
+	part := filepath.Join(dir, "cache", "downloads", uid.N(1).String()+".mp4.part")
 	if err := os.MkdirAll(filepath.Dir(part), 0o750); err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +181,7 @@ func TestASecondStartLeavesTheRunningServerAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
-	seg := filepath.Join(dir, "transcode", "1", "0-0", "0.m4s")
+	seg := filepath.Join(dir, "transcode", uid.N(1).String(), "0-0", "0.m4s")
 	if err := os.MkdirAll(filepath.Dir(seg), 0o750); err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +222,7 @@ func TestResetPasswordPrintsALink(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := &account.Account{Kind: account.Adult, Email: "ada@example.test", Name: "Ada", IsAdmin: true, PasswordHash: "x"}
-	if err := account.New(d).Create(a); err != nil {
+	if err := account.New(d).Create(a, nil); err != nil {
 		t.Fatal(err)
 	}
 	_ = d.Close()
@@ -284,7 +285,7 @@ func TestDiscoveryAnswersOnTheHTTPPortAndABindFailureIsNotFatal(t *testing.T) {
 func TestRoutesSplitTheAPIFromTheWebClient(t *testing.T) {
 	api := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTeapot) })
 	h := routes(api, fstest.MapFS{"index.html": {Data: []byte("viewer")}})
-	for path, want := range map[string]int{"/api/v1/health": 418, "/api/v9/nope": 418, "/": 200, "/link": 200} {
+	for path, want := range map[string]int{"/api/v2/health": 418, "/api/v9/nope": 418, "/": 200, "/link": 200} {
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
 		if w.Code != want {

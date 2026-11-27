@@ -13,7 +13,7 @@ func splitEnv(t *testing.T) (*env, string) {
 	t.Helper()
 	e := newEnv(t, library.TV, "")
 	second := t.TempDir()
-	_, err := e.s.Libraries.AddFolder(e.lib.ID, second)
+	err := e.s.Libraries.AddFolder(&library.Folder{LibraryID: e.lib.ID, Path: second}, nil)
 	must(t, err)
 	return e, second
 }
@@ -22,7 +22,7 @@ func splitEnv(t *testing.T) (*env, string) {
 func (e *env) paths() string {
 	e.t.Helper()
 	var s string
-	must(e.t, e.d.QueryRow(`SELECT group_concat(id || '=' || COALESCE(path, ''), ' ') FROM
+	must(e.t, e.d.QueryRow(`SELECT group_concat(hex(id) || '=' || COALESCE(path, ''), ' ') FROM
 		(SELECT * FROM item WHERE kind IN ('show','season') ORDER BY id)`).Scan(&s))
 	return s
 }

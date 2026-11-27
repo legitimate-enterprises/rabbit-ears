@@ -5,6 +5,7 @@ import { createApi, setToken } from "../admin/api";
 import { boot } from "./app";
 import { follow, onLive, type LiveEvent } from "./live";
 import { type Handler, calls, json, mockFetch, none } from "./testSupport";
+import { uid } from "../api/uid";
 
 vi.mock("hls.js", () => ({
   default: class {
@@ -80,11 +81,11 @@ describe("follow", () => {
   it("asks for a cursor, then holds a poll from each answer's cursor and tells what it hears", async () => {
     const s = stream();
     start({ "GET /events": s.route });
-    await s.say([{ kind: "watch_state", itemId: 10 }]);
+    await s.say([{ kind: "watch_state", itemId: uid(10) }]);
     await until(() => heard.length === 1);
-    expect(heard[0]).toEqual([{ kind: "watch_state", itemId: 10 }]);
+    expect(heard[0]).toEqual([{ kind: "watch_state", itemId: uid(10) }]);
     await s.say([]);
-    await s.say([{ kind: "station", stationId: 4 }, { kind: "playlist" }]);
+    await s.say([{ kind: "station", stationId: uid(4) }, { kind: "playlist" }]);
     await until(() => heard.length === 2);
     expect(heard[1].map((e) => e.kind)).toEqual(["station", "playlist"]);
     await until(() => s.asked.length > 3);
@@ -100,7 +101,7 @@ describe("follow", () => {
         s.route(b, url)
       ),
     });
-    await s.say([{ kind: "library", libraryId: 1 }]);
+    await s.say([{ kind: "library", libraryId: uid(1) }]);
     await until(() => heard.length === 1);
     expect(kinds.slice(0, 2)).toEqual([
       ["library", "household"],
@@ -200,7 +201,7 @@ describe("follow", () => {
 
 const ts = "2026-01-01T00:00:00Z";
 const acct = (id: number, name: string, kind = "adult") => ({
-  id,
+  id: uid(id),
   kind,
   name,
   isAdmin: false,
@@ -209,13 +210,13 @@ const acct = (id: number, name: string, kind = "adult") => ({
   pending: false,
   filterMode: "ratings",
   createdAt: ts,
-  updatedAt: ts,
+  modifiedAt: ts,
 });
 const me = (active: number) => ({
-  device: { id: 1 },
+  device: { id: uid(1) },
   account: acct(1, "Bea"),
-  activeProfileId: active,
-  household: { id: 1, name: "Bea", adultId: 1, createdAt: ts },
+  activeProfileId: uid(active),
+  household: { id: uid(1), name: "Bea", adultId: uid(1), createdAt: ts },
   profiles: [acct(1, "Bea"), acct(2, "Jax", "kid")],
 });
 const page = (items: unknown[]) => ({ items });
@@ -225,12 +226,12 @@ const at = async (hash: string) => {
 };
 const root = () => document.body.appendChild(document.createElement("div"));
 const movie = {
-  id: 10,
-  libraryId: 1,
+  id: uid(10),
+  libraryId: uid(1),
   kind: "movie",
   parsedTitle: "Dune",
   addedAt: ts,
-  updatedAt: ts,
+  modifiedAt: ts,
 };
 const shell = {
   "GET /health": { status: "ok", version: "1.0.0", setupRequired: false },
@@ -243,21 +244,21 @@ describe("pages", () => {
     "GET /events": s.route,
     "GET /items": (_b: unknown, url: URL) =>
       page(url.searchParams.get("kind") === "movie" ? [movie] : []),
-    "GET /items/10": movie,
-    "GET /profiles/1/watch-state": () => page(state()),
-    "GET /profiles/1/show-progress": page([]),
-    "GET /profiles/2/show-progress": page([]),
+    [`GET /items/${uid(10)}`]: movie,
+    [`GET /profiles/${uid(1)}/watch-state`]: () => page(state()),
+    [`GET /profiles/${uid(1)}/show-progress`]: page([]),
+    [`GET /profiles/${uid(2)}/show-progress`]: page([]),
     "GET /youtube/videos": page([]),
     "GET /stations": page([]),
   });
   const state = (positionMs: number) => ({
-    accountId: 1,
-    itemId: 10,
+    accountId: uid(1),
+    itemId: uid(10),
     positionMs,
     watched: false,
     playCount: 0,
     lastPlayedAt: ts,
-    updatedAt: ts,
+    changedAt: ts,
   });
 
   it("Home takes a title started on another device into Continue watching, with no Loading and no scroll jump", async () => {
@@ -275,7 +276,7 @@ describe("pages", () => {
     watch.observe(r, { childList: true, subtree: true });
 
     states = [state(60_000)];
-    await s.say([{ kind: "watch_state", itemId: 10 }]);
+    await s.say([{ kind: "watch_state", itemId: uid(10) }]);
     await until(() => r.textContent!.includes("Continue watching"));
     watch.disconnect();
     expect(seen.some((t) => t === "Loading")).toBe(false);
@@ -294,7 +295,7 @@ describe("pages", () => {
       fetch: mockFetch({
         ...routes,
         "GET /genres": page([]),
-        "GET /profiles/1/playlists": page([]),
+        [`GET /profiles/${uid(1)}/playlists`]: page([]),
         "GET /items": (b: unknown, url: URL) =>
           url.searchParams.get("kind") === "movie"
             ? page([movie, ...added])
@@ -302,14 +303,14 @@ describe("pages", () => {
       }),
     });
     await until(() => r.querySelector(".grid")?.textContent!.includes("Dune"));
-    added = [{ ...movie, id: 11, parsedTitle: "Arrival", addedAt: "2026-02-01T00:00:00Z" }];
-    await s.say([{ kind: "watch_state", itemId: 10 }]);
-    await until(() => count("GET /profiles/1/watch-state") === 2);
+    added = [{ ...movie, id: uid(11), parsedTitle: "Arrival", addedAt: "2026-02-01T00:00:00Z" }];
+    await s.say([{ kind: "watch_state", itemId: uid(10) }]);
+    await until(() => count(`GET /profiles/${uid(1)}/watch-state`) === 2);
     expect(r.textContent).not.toContain("Arrival");
-    await s.say([{ kind: "library", libraryId: 1 }]);
+    await s.say([{ kind: "library", libraryId: uid(1) }]);
     await until(() => r.textContent!.includes("Arrival"));
     // A resync may have missed a scan's event.
-    added.push({ ...movie, id: 12, parsedTitle: "Sicario", addedAt: "2026-02-02T00:00:00Z" });
+    added.push({ ...movie, id: uid(12), parsedTitle: "Sicario", addedAt: "2026-02-02T00:00:00Z" });
     await s.say([], true);
     await until(() => r.textContent!.includes("Sicario"));
   });
@@ -330,15 +331,15 @@ describe("pages", () => {
     await until(() => r.querySelector(".members li"));
     incoming = [
       {
-        id: 3,
-        profileId: 7,
+        id: uid(3),
+        profileId: uid(7),
         profileName: "Mia",
         profileKind: "kid",
-        householdId: 5,
+        householdId: uid(5),
         householdName: "Mark",
-        fromProfileId: 8,
+        fromProfileId: uid(8),
         fromName: "Mark",
-        toProfileId: 1,
+        toProfileId: uid(1),
         toName: "Bea",
         createdAt: ts,
       },
@@ -399,7 +400,7 @@ describe("pages", () => {
       fetch: mockFetch({
         ...home(s, () => []),
         "GET /me": me(2),
-        "GET /profiles/2/watch-state": page([]),
+        [`GET /profiles/${uid(2)}/watch-state`]: page([]),
       }),
     });
     await Promise.all([first, second]);
@@ -415,24 +416,24 @@ describe("pages", () => {
     const r = root();
     await boot(r, { fetch: mockFetch(home(s, () => [])) });
     await until(() => r.querySelector("main")!.textContent!.includes("Recently added"));
-    const before = count("GET /profiles/1/watch-state");
-    await s.say([{ kind: "playlist", playlistId: 3 }]);
+    const before = count(`GET /profiles/${uid(1)}/watch-state`);
+    await s.say([{ kind: "playlist", playlistId: uid(3) }]);
     await s.say([]);
-    expect(count("GET /profiles/1/watch-state")).toBe(before);
+    expect(count(`GET /profiles/${uid(1)}/watch-state`)).toBe(before);
 
     const scrim = document.body.appendChild(document.createElement("div"));
     scrim.className = "scrim";
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
-      await s.say([{ kind: "watch_state", itemId: 10 }]);
+      await s.say([{ kind: "watch_state", itemId: uid(10) }]);
       await vi.advanceTimersByTimeAsync(1000);
-      expect(count("GET /profiles/1/watch-state")).toBe(before);
+      expect(count(`GET /profiles/${uid(1)}/watch-state`)).toBe(before);
       scrim.remove();
       await vi.advanceTimersByTimeAsync(2500);
     } finally {
       vi.useRealTimers();
     }
-    await until(() => count("GET /profiles/1/watch-state") === before + 1);
+    await until(() => count(`GET /profiles/${uid(1)}/watch-state`) === before + 1);
   });
 
   it("paints artwork in a dialog, which sits outside the app's root", async () => {
@@ -444,16 +445,16 @@ describe("pages", () => {
       fetch: mockFetch({
         ...home(s, () => []),
         "GET /genres": page([]),
-        "GET /profiles/1/playlists": page([]),
+        [`GET /profiles/${uid(1)}/playlists`]: page([]),
         "GET /items": page([]),
-        "GET /items/10/artwork/poster": () =>
+        [`GET /items/${uid(10)}/artwork/poster`]: () =>
           new Response(new Blob(["jpg"]), { headers: { "content-type": "image/jpeg" } }),
       }),
     });
     const scrim = document.body.appendChild(document.createElement("div"));
     scrim.className = "scrim";
     const pick = scrim.appendChild(document.createElement("div"));
-    pick.dataset.art = "10/poster";
+    pick.dataset.art = `${uid(10)}/poster`;
     await until(() => pick.style.backgroundImage === `url("blob:pick")`);
   });
 
@@ -461,10 +462,10 @@ describe("pages", () => {
     const s = stream();
     const movies = [
       { ...movie, addedAt: "2026-01-01T00:00:00Z" },
-      { ...movie, id: 11, parsedTitle: "Arrival", addedAt: "2026-02-01T00:00:00Z" },
-      { ...movie, id: 12, parsedTitle: "Sicario", addedAt: "2026-03-01T00:00:00Z" },
+      { ...movie, id: uid(11), parsedTitle: "Arrival", addedAt: "2026-02-01T00:00:00Z" },
+      { ...movie, id: uid(12), parsedTitle: "Sicario", addedAt: "2026-03-01T00:00:00Z" },
     ];
-    const seen = (itemId: number) => ({ ...state(0), itemId, watched: true });
+    const seen = (itemId: number) => ({ ...state(0), itemId: uid(itemId), watched: true });
     let watched = [seen(10)];
     await at("#/movies");
     const r = root();
@@ -473,7 +474,7 @@ describe("pages", () => {
       fetch: mockFetch({
         ...routes,
         "GET /genres": page([]),
-        "GET /profiles/1/playlists": page([]),
+        [`GET /profiles/${uid(1)}/playlists`]: page([]),
         "GET /items": (_: unknown, url: URL) =>
           page(url.searchParams.get("kind") === "movie" ? movies : []),
       }),
@@ -497,7 +498,7 @@ describe("pages", () => {
     expect(count("GET /items")).toBe(asked);
 
     watched = [seen(10), seen(12)];
-    await s.say([{ kind: "watch_state", itemId: 12 }]);
+    await s.say([{ kind: "watch_state", itemId: uid(12) }]);
     await until(() => titles().join() === "Arrival");
     expect(r.querySelector(".chip[aria-pressed=true]")!.textContent).toBe("Unwatched");
     expect(
@@ -509,16 +510,16 @@ describe("pages", () => {
   it("keeps the Music albums genre and sort across a redraw", async () => {
     const s = stream();
     const album = (id: number, title: string, genre: string, addedAt: string) => ({
-      id,
-      libraryId: 3,
-      artistId: 50,
+      id: uid(id),
+      libraryId: uid(3),
+      artistId: uid(50),
       artistName: "Radiohead",
       title,
       year: 2007,
       songCount: 4,
       durationMs: 1_000_000,
       lossless: true,
-      genres: [{ id: genre.length, name: genre }],
+      genres: [{ id: uid(genre.length), name: genre }],
       addedAt,
     });
     const albums = [
@@ -531,7 +532,7 @@ describe("pages", () => {
     await boot(r, {
       fetch: mockFetch({
         ...home(s, () => []),
-        "GET /profiles/1/playlists": page([]),
+        [`GET /profiles/${uid(1)}/playlists`]: page([]),
         "GET /music/albums": () => page(albums),
       }),
     });
@@ -564,9 +565,9 @@ describe("pages", () => {
     const s = stream();
     let first = "First";
     const video = (id: number, title: string) => ({
-      id,
-      libraryId: 5,
-      channelId: 40,
+      id: uid(id),
+      libraryId: uid(5),
+      channelId: uid(40),
       channelTitle: "Workbench Weekly",
       title,
       durationMs: 60_000,
@@ -581,8 +582,8 @@ describe("pages", () => {
         ...home(s, () => []),
         "GET /youtube/channels": page([
           {
-            id: 40,
-            libraryId: 5,
+            id: uid(40),
+            libraryId: uid(5),
             title: "Workbench Weekly",
             videoCount: 2,
             unwatchedCount: 2,
@@ -601,7 +602,7 @@ describe("pages", () => {
     await until(() => titles().length === 2);
 
     first = "First, again";
-    await s.say([{ kind: "watch_state", itemId: 60 }]);
+    await s.say([{ kind: "watch_state", itemId: uid(60) }]);
     await until(() => titles()[0] === "First, again");
     expect(titles()).toEqual(["First, again", "Second"]);
   });
@@ -609,9 +610,9 @@ describe("pages", () => {
   it("keeps a channel page's Sort across a redraw", async () => {
     const s = stream();
     const video = (id: number, title: string) => ({
-      id,
-      libraryId: 5,
-      channelId: 40,
+      id: uid(id),
+      libraryId: uid(5),
+      channelId: uid(40),
       channelTitle: "Workbench Weekly",
       title,
       durationMs: 60_000,
@@ -619,20 +620,20 @@ describe("pages", () => {
       positionMs: 0,
       addedAt: ts,
     });
-    await at("#/channel/40");
+    await at(`#/channel/${uid(40)}`);
     const r = root();
     await boot(r, {
       fetch: mockFetch({
         ...home(s, () => []),
-        "GET /youtube/channels/40": {
-          id: 40,
-          libraryId: 5,
+        [`GET /youtube/channels/${uid(40)}`]: {
+          id: uid(40),
+          libraryId: uid(5),
           title: "Workbench Weekly",
           videoCount: 1,
           unwatchedCount: 1,
           addedAt: ts,
         },
-        "GET /youtube/channels/40/allowed-profiles": page([]),
+        [`GET /youtube/channels/${uid(40)}/allowed-profiles`]: page([]),
         "GET /youtube/videos": (_: unknown, url: URL) =>
           page([video(60, `by ${url.searchParams.get("sort")}`)]),
       }),
@@ -646,11 +647,11 @@ describe("pages", () => {
     await until(() => titles()[0] === "by oldest");
     expect(history.length).toBe(entries);
 
-    await s.say([{ kind: "watch_state", itemId: 60 }]);
-    await until(() => count("GET /youtube/channels/40") === 2 && titles().length === 1);
+    await s.say([{ kind: "watch_state", itemId: uid(60) }]);
+    await until(() => count(`GET /youtube/channels/${uid(40)}`) === 2 && titles().length === 1);
     expect(titles()).toEqual(["by oldest"]);
     expect(r.querySelector<HTMLSelectElement>("select")!.value).toBe("Oldest");
-    expect(location.hash).toBe("#/channel/40?sort=oldest");
+    expect(location.hash).toBe(`#/channel/${uid(40)}?sort=oldest`);
   });
 });
 
@@ -669,7 +670,7 @@ describe("player", () => {
     });
   });
   const playing = (id: number) => ({
-    sessionId: id,
+    sessionId: uid(id),
     entry: {
       position: 0,
       verdict: "direct_play",
@@ -678,7 +679,7 @@ describe("player", () => {
       subtitleAction: "none",
       bad: false,
     },
-    streamUrl: "/api/v1/streams/k/0/file",
+    streamUrl: "/api/v2/streams/k/0/file",
     streamKind: "file",
     positionMs: 0,
     negotiated: { verdict: "direct_play" },
@@ -686,24 +687,24 @@ describe("player", () => {
     sidecars: [],
   });
   const there = {
-    id: 7,
-    itemId: 10,
-    deviceId: 2,
+    id: uid(7),
+    itemId: uid(10),
+    deviceId: uid(2),
     deviceName: "Living Room",
     platform: "roku",
     thisDevice: false,
     positionMs: 2_472_000,
-    updatedAt: ts,
+    modifiedAt: ts,
   };
   const routes = (extra: Record<string, Handler | unknown> = {}) => ({
     ...shell,
-    "GET /items/10": movie,
+    [`GET /items/${uid(10)}`]: movie,
     "GET /media-files": page([]),
     "GET /watch-together": page([]),
     "GET /playback/sessions": page([there]),
     "POST /playback/sessions": () => json(playing(8), 201),
-    "PUT /playback/sessions/8/position": none,
-    "DELETE /playback/sessions/8": none,
+    [`PUT /playback/sessions/${uid(8)}/position`]: none,
+    [`DELETE /playback/sessions/${uid(8)}`]: none,
     ...extra,
   });
   const prompt = () => document.querySelector<HTMLElement>(".dialog");
@@ -711,11 +712,13 @@ describe("player", () => {
     [...prompt()!.querySelectorAll("button")].find((b) => b.textContent === label)!.click();
 
   it("asks before playing a title that plays on another device, and Move here takes it over where it is", async () => {
-    await at("#/play/10");
+    await at(`#/play/${uid(10)}`);
     const r = root();
     void boot(r, {
       fetch: mockFetch(
-        routes({ "POST /playback/sessions/7/move": () => json({ ...there, endedAt: ts }, 200) }),
+        routes({
+          [`POST /playback/sessions/${uid(7)}/move`]: () => json({ ...there, endedAt: ts }, 200),
+        }),
       ),
     });
     await until(prompt);
@@ -726,55 +729,55 @@ describe("player", () => {
       "Cancel",
     ]);
     expect(document.activeElement!.textContent).toBe("Move here");
-    expect(calls.find((c) => c.key === "GET /playback/sessions")!.query).toBe("?itemId=10");
+    expect(calls.find((c) => c.key === "GET /playback/sessions")!.query).toBe(`?itemId=${uid(10)}`);
     expect(count("POST /playback/sessions")).toBe(0);
     press("Move here");
     await until(() => count("POST /playback/sessions") === 1);
-    expect(count("POST /playback/sessions/7/move")).toBe(1);
+    expect(count(`POST /playback/sessions/${uid(7)}/move`)).toBe(1);
     expect(calls.find((c) => c.key === "POST /playback/sessions")!.body).toMatchObject({
-      itemId: 10,
+      itemId: uid(10),
       positionMs: 2_472_000,
     });
     expect(prompt()).toBeNull();
   });
 
   it("Cancel plays nothing and leaves the player", async () => {
-    await at("#/movie/10");
-    await at("#/play/10");
+    await at(`#/movie/${uid(10)}`);
+    await at(`#/play/${uid(10)}`);
     const r = root();
     void boot(r, { fetch: mockFetch(routes()) });
     await until(prompt);
     press("Cancel");
     await until(() => !location.hash.startsWith("#/play"));
     expect(count("POST /playback/sessions")).toBe(0);
-    expect(count("POST /playback/sessions/7/move")).toBe(0);
+    expect(count(`POST /playback/sessions/${uid(7)}/move`)).toBe(0);
   });
 
   it("Watch together opens one from the other device's session, then plays", async () => {
-    await at("#/play/10");
+    await at(`#/play/${uid(10)}`);
     const r = root();
     void boot(r, { fetch: mockFetch(routes({ "POST /watch-together": () => json({}, 201) })) });
     await until(prompt);
     press("Watch together");
     await until(() => count("POST /playback/sessions") === 1);
     expect(calls.find((c) => c.key === "POST /watch-together")!.body).toEqual({
-      itemId: 10,
-      fromSessionId: 7,
+      itemId: uid(10),
+      fromSessionId: uid(7),
     });
-    expect(count("POST /playback/sessions/7/move")).toBe(0);
+    expect(count(`POST /playback/sessions/${uid(7)}/move`)).toBe(0);
   });
 
   it("ends the session of a player that a new boot replaces without a navigation", async () => {
-    await at("#/play/10");
+    await at(`#/play/${uid(10)}`);
     void boot(root(), { fetch: mockFetch(routes({ "GET /playback/sessions": page([]) })) });
     await until(() => count("POST /playback/sessions") === 1);
     // A sign-out or a profile pick boots again where the viewer stands.
     void boot(root(), { fetch: mockFetch(routes({ "GET /playback/sessions": page([]) })) });
-    await until(() => count("DELETE /playback/sessions/8") === 1);
+    await until(() => count(`DELETE /playback/sessions/${uid(8)}`) === 1);
   });
 
   it("does not ask for this device's own session, and offers a kid Watch together too", async () => {
-    await at("#/play/10");
+    await at(`#/play/${uid(10)}`);
     let r = root();
     void boot(r, {
       fetch: mockFetch(
@@ -797,17 +800,17 @@ describe("player", () => {
 
   it("closes with Moved to the device that took its session over", async () => {
     const s = stream();
-    await at("#/movie/10");
-    await at("#/play/10");
+    await at(`#/movie/${uid(10)}`);
+    await at(`#/play/${uid(10)}`);
     const r = root();
     void boot(r, {
       fetch: mockFetch(
         routes({
           "GET /events": s.route,
           "GET /playback/sessions": page([]),
-          "GET /playback/sessions/8": {
+          [`GET /playback/sessions/${uid(8)}`]: {
             ...there,
-            id: 8,
+            id: uid(8),
             thisDevice: true,
             endedAt: ts,
             movedToDeviceName: "Kitchen iPad",
@@ -816,38 +819,46 @@ describe("player", () => {
       ),
     });
     await until(() => count("POST /playback/sessions") === 1);
-    await s.say([{ kind: "playback", change: "moved", sessionId: 99, itemId: 10 }]);
-    await s.say([{ kind: "playback", change: "moved", sessionId: 8, itemId: 10 }]);
+    await s.say([{ kind: "playback", change: "moved", sessionId: uid(99), itemId: uid(10) }]);
+    await s.say([{ kind: "playback", change: "moved", sessionId: uid(8), itemId: uid(10) }]);
     await until(() => document.querySelector(".toast"));
     expect(document.querySelector(".toast")!.textContent).toBe("Moved to Kitchen iPad");
     expect(document.querySelector(".toast")!.getAttribute("role")).toBe("status");
     await until(() => !location.hash.startsWith("#/play"));
-    expect(count("GET /playback/sessions/99")).toBe(0);
+    expect(count(`GET /playback/sessions/${uid(99)}`)).toBe(0);
   });
 
   it("joins the Watch together another device opened from its session, and plays for both", async () => {
     const s = stream();
-    await at("#/play/10");
+    await at(`#/play/${uid(10)}`);
     const r = root();
     void boot(r, {
       fetch: mockFetch(
         routes({
           "GET /events": s.route,
           "GET /playback/sessions": page([]),
-          "POST /watch-together/3/join": () => json({}, 200),
-          "PUT /watch-together/3/state": () => json({}, 200),
+          [`POST /watch-together/${uid(3)}/join`]: () => json({}, 200),
+          [`PUT /watch-together/${uid(3)}/state`]: () => json({}, 200),
         }),
       ),
     });
     await until(() => count("POST /playback/sessions") === 1);
-    await s.say([{ kind: "watch_together", change: "opened", watchTogetherId: 2, itemId: 10 }]);
     await s.say([
-      { kind: "watch_together", change: "opened", watchTogetherId: 3, itemId: 10, sessionId: 8 },
+      { kind: "watch_together", change: "opened", watchTogetherId: uid(2), itemId: uid(10) },
     ]);
-    await until(() => count("PUT /watch-together/3/state") === 1);
-    expect(count("POST /watch-together/3/join")).toBe(1);
-    expect(count("POST /watch-together/2/join")).toBe(0);
-    expect(calls.find((c) => c.key === "PUT /watch-together/3/state")!.body).toMatchObject({
+    await s.say([
+      {
+        kind: "watch_together",
+        change: "opened",
+        watchTogetherId: uid(3),
+        itemId: uid(10),
+        sessionId: uid(8),
+      },
+    ]);
+    await until(() => count(`PUT /watch-together/${uid(3)}/state`) === 1);
+    expect(count(`POST /watch-together/${uid(3)}/join`)).toBe(1);
+    expect(count(`POST /watch-together/${uid(2)}/join`)).toBe(0);
+    expect(calls.find((c) => c.key === `PUT /watch-together/${uid(3)}/state`)!.body).toMatchObject({
       playing: true,
     });
     // The player starts over, which finds the Watch together it is now in.

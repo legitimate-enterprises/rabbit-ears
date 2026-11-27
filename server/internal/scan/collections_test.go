@@ -23,13 +23,14 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/mediafile"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/person"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/tmdb"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 type collectionEnv struct {
 	s           *Scanner
 	items       *item.Repo
 	collections *collection.Repo
-	lib         int64
+	lib         uid.ID
 	clock       time.Time
 	imageDir    string
 	// collectionsDown makes /collection/ answer 503 while movies still answer.
@@ -66,7 +67,7 @@ func newCollectionEnv(t *testing.T) *collectionEnv {
 	t.Cleanup(srv.Close)
 	libs := library.New(d)
 	lib := &library.Library{Name: "Movies", Kind: library.Movies}
-	if err := libs.Create(lib); err != nil {
+	if err := libs.Create(lib, nil); err != nil {
 		t.Fatal(err)
 	}
 	e := &collectionEnv{items: item.New(d), collections: collection.New(d), lib: lib.ID, clock: time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
@@ -79,7 +80,7 @@ func newCollectionEnv(t *testing.T) *collectionEnv {
 }
 
 // matched adds a movie already matched to tmdbID and due for a refresh.
-func (e *collectionEnv) matched(t *testing.T, title string, tmdbID int64) int64 {
+func (e *collectionEnv) matched(t *testing.T, title string, tmdbID int64) uid.ID {
 	t.Helper()
 	it := &item.Item{LibraryID: e.lib, Kind: item.Movie, ParsedTitle: title}
 	if err := e.items.Create(it); err != nil {
@@ -89,7 +90,7 @@ func (e *collectionEnv) matched(t *testing.T, title string, tmdbID int64) int64 
 	return it.ID
 }
 
-func (e *collectionEnv) due(t *testing.T, id, tmdbID int64) {
+func (e *collectionEnv) due(t *testing.T, id uid.ID, tmdbID int64) {
 	t.Helper()
 	if err := e.items.SetMetadata(&item.Metadata{ItemID: id, ProviderID: &tmdbID, Status: item.Matched, RetryAt: &e.clock}); err != nil {
 		t.Fatal(err)
@@ -103,9 +104,12 @@ func (e *collectionEnv) refresh(t *testing.T) {
 	}
 }
 
+// nobody is a household that holds no collection of its own.
+var nobody = uid.N(999)
+
 func (e *collectionEnv) tmdb(t *testing.T) []*collection.View {
 	t.Helper()
-	vs, err := e.collections.List(0, item.Audience{}, 100, 0)
+	vs, err := e.collections.List(nobody, item.Audience{}, 100, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,10 +127,10 @@ func TestRefreshRecordsTMDBCollections(t *testing.T) {
 		vs[0].Overview != "Every film about the last lantern." || vs[0].PosterPath != "/lanternSaga.jpg" || vs[0].MovieCount != 2 {
 		t.Fatalf("%+v", vs)
 	}
-	if got, _ := e.collections.Movies(vs[0].ID, item.Audience{}, 10, 0); !slices.Equal(got, []int64{one, two}) {
+	if got, _ := e.collections.Movies(vs[0].ID, item.Audience{}, 10, 0); !slices.Equal(got, []uid.ID{one, two}) {
 		t.Fatalf("only the library's movies, by release date: %v", got)
 	}
-	if of, _ := e.collections.ForMovie(0, solo, item.Audience{}); len(of) != 0 {
+	if of, _ := e.collections.ForMovie(nobody, solo, item.Audience{}); len(of) != 0 {
 		t.Fatalf("%+v", of)
 	}
 	for _, p := range []string{"w500/lanternSaga.jpg", "w1280/lanternSagaWide.jpg"} {
@@ -139,7 +143,7 @@ func TestRefreshRecordsTMDBCollections(t *testing.T) {
 	// collection goes with its last movie.
 	e.due(t, one, 9103)
 	e.refresh(t)
-	if got, _ := e.collections.Movies(vs[0].ID, item.Audience{}, 10, 0); !slices.Equal(got, []int64{two}) {
+	if got, _ := e.collections.Movies(vs[0].ID, item.Audience{}, 10, 0); !slices.Equal(got, []uid.ID{two}) {
 		t.Fatalf("%v", got)
 	}
 	e.due(t, two, 9103)

@@ -12,6 +12,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/serverinfo"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/service"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/transcode"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 func (s *Server) settings() (api.Settings, error) {
@@ -122,7 +123,7 @@ func (s *Server) ClearTranscodeCache(ctx context.Context, _ api.ClearTranscodeCa
 	if err != nil {
 		return nil, err
 	}
-	keep := map[int64]bool{}
+	keep := map[uid.ID]bool{}
 	for _, v := range active {
 		keep[v.ID] = true
 	}

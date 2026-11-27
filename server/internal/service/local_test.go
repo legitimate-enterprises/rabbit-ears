@@ -11,6 +11,7 @@ import (
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/service"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 func localProof(t *testing.T, key, side, nonce string) string {
@@ -33,11 +34,11 @@ func TestLocalCheck(t *testing.T) {
 	s.Now = func() time.Time { return now }
 	const nonce = "0123456789abcdef"
 
-	c, err := s.Start(7)
+	c, err := s.Start(uid.N(7))
 	if err != nil || c.ID == "" || !c.ExpiresAt.Equal(now.Add(service.LocalCheckTTL)) {
 		t.Fatalf("%+v %v", c, err)
 	}
-	if s.Home(7) {
+	if s.Home(uid.N(7)) {
 		t.Fatal("an open check is no proof")
 	}
 	if _, err := s.Confirm(c.ID, nonce, localProof(t, c.Key, "server", nonce), true); !errors.Is(err, service.ErrNotLocal) {
@@ -46,14 +47,14 @@ func TestLocalCheck(t *testing.T) {
 	if _, err := s.Confirm(c.ID, nonce, localProof(t, c.Key, "client", nonce), false); !errors.Is(err, service.ErrNotLocal) {
 		t.Fatalf("a proof from outside the server's network: %v", err)
 	}
-	if s.Home(7) {
+	if s.Home(uid.N(7)) {
 		t.Fatal("a refused confirmation is no proof")
 	}
 	got, err := s.Confirm(c.ID, nonce, localProof(t, c.Key, "client", nonce), true)
 	if err != nil || got != localProof(t, c.Key, "server", nonce) {
 		t.Fatalf("%q %v", got, err)
 	}
-	if !s.Home(7) || s.Home(8) {
+	if !s.Home(uid.N(7)) || s.Home(uid.N(8)) {
 		t.Fatal("the device that confirmed is at home, and only that one")
 	}
 	if _, err := s.Confirm(c.ID, nonce, localProof(t, c.Key, "client", nonce), true); !errors.Is(err, db.ErrNotFound) {
@@ -61,10 +62,10 @@ func TestLocalCheck(t *testing.T) {
 	}
 
 	now = now.Add(service.LocalHomeTTL)
-	if s.Home(7) {
+	if s.Home(uid.N(7)) {
 		t.Fatal("the standing lapses")
 	}
-	c, err = s.Start(7)
+	c, err = s.Start(uid.N(7))
 	must(t, err)
 	now = now.Add(service.LocalCheckTTL)
 	if _, err := s.Confirm(c.ID, nonce, localProof(t, c.Key, "client", nonce), true); !errors.Is(err, db.ErrNotFound) {

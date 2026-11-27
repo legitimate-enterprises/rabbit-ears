@@ -12,6 +12,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/library"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/mediafile"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/youtube"
 )
 
@@ -31,7 +32,7 @@ func youtubeEnv(t *testing.T) *env {
 
 func (e *env) videos() map[string]*youtube.VideoView {
 	e.t.Helper()
-	vs, err := e.s.YouTube.Videos(youtube.VideoFilter{LibraryID: e.lib.ID, Limit: -1})
+	vs, err := e.s.YouTube.Videos(youtube.VideoFilter{LibraryID: &e.lib.ID, Limit: -1})
 	if err != nil {
 		e.t.Fatal(err)
 	}
@@ -42,7 +43,7 @@ func (e *env) videos() map[string]*youtube.VideoView {
 	return out
 }
 
-func (e *env) chapters(videoID int64) []string {
+func (e *env) chapters(videoID uid.ID) []string {
 	e.t.Helper()
 	fs, err := e.files.FilesForItem(videoID)
 	if err != nil || len(fs) != 1 {
@@ -85,7 +86,7 @@ func TestScanYouTubeFolder(t *testing.T) {
 		t.Fatalf("the scan changed the folder:\n%v\n%v", before, after)
 	}
 
-	chs, err := e.s.YouTube.Channels(youtube.ChannelFilter{LibraryID: e.lib.ID})
+	chs, err := e.s.YouTube.Channels(youtube.ChannelFilter{LibraryID: &e.lib.ID})
 	if err != nil || len(chs) != 2 {
 		t.Fatalf("channels %+v %v", chs, err)
 	}
@@ -165,7 +166,7 @@ func TestScanYouTubeFolder(t *testing.T) {
 	if sum, err = e.s.Scan(context.Background(), e.lib, nil); err != nil || sum.String() != "No changes; 2 videos checked; 1 file missing" {
 		t.Fatalf("after removal %q %v", sum, err)
 	}
-	chs, _ = e.s.YouTube.Channels(youtube.ChannelFilter{LibraryID: e.lib.ID})
+	chs, _ = e.s.YouTube.Channels(youtube.ChannelFilter{LibraryID: &e.lib.ID})
 	if len(chs) != 2 || chs[0].ID != clock.ID || chs[0].Overview != "Gears, one at a time." || chs[0].ExternalID != "PLclockworkcorner00000b" ||
 		chs[0].VideoCount != 1 || !e.missing(base+".mp4") {
 		t.Fatalf("channels after removal %+v, missing %v", chs, e.missing(base+".mp4"))
@@ -232,7 +233,7 @@ func TestSyncSchedulesYouTubeScans(t *testing.T) {
 		kinds = append(kinds, x.Kind)
 	}
 	slices.Sort(kinds)
-	if want := []string{"local", "metadata", "previews", "scan:" + strconv.FormatInt(e.lib.ID, 10)}; !slices.Equal(kinds, want) {
+	if want := []string{"local", "metadata", "previews", "scan:" + e.lib.ID.String()}; !slices.Equal(kinds, want) {
 		t.Fatalf("tasks %v, want %v", kinds, want)
 	}
 }
@@ -249,5 +250,32 @@ func TestUnchangedVideosAreFingerprinted(t *testing.T) {
 	must(t, e.d.QueryRow(`SELECT COUNT(*), COUNT(fingerprint) FROM media_file`).Scan(&n, &with))
 	if n == 0 || with != n {
 		t.Fatalf("%d files, %d fingerprinted", n, with)
+	}
+}
+
+// A probed file filed under no item is filed under its video and its
+// sidecars read, without probing it again; the next scan changes nothing.
+func TestAProbedFileWithNoItemIsFiledWithItsSidecars(t *testing.T) {
+	e := youtubeEnv(t)
+	base := filepath.Join(e.root, "Clockwork Corner", "Gear Trains")
+	must(t, os.WriteFile(base+".info.json", []byte(`{"id":"Clock000001","title":"Gear Trains Explained","timestamp":1700000000}`), 0o600))
+	st, err := os.Stat(base + ".mp4")
+	must(t, err)
+	probed := time.Now()
+	f := &mediafile.File{Path: base + ".mp4", SizeBytes: st.Size(), FileModifiedAt: st.ModTime(), Container: "mp4", ProbedAt: &probed}
+	must(t, e.files.CreateFile(f))
+	e.mustScan()
+	if *e.probes != 2 {
+		t.Errorf("probed %d files, want the 2 unprobed", *e.probes)
+	}
+	gt := e.videos()["Gear Trains Explained"]
+	if gt == nil || gt.ExternalID != "Clock000001" {
+		t.Fatalf("sidecars not read: %+v", gt)
+	}
+	if fs, err := e.files.FilesForItem(gt.ID); err != nil || len(fs) != 1 || fs[0].ID != f.ID {
+		t.Fatalf("files %v %v", fs, err)
+	}
+	if sum, err := e.s.Scan(context.Background(), e.lib, nil); err != nil || *e.probes != 2 || sum.String() != "No changes; 3 videos checked" {
+		t.Fatalf("rescan %q %v", sum, err)
 	}
 }

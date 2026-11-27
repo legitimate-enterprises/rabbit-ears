@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // Reasons a review is raised for.
@@ -47,11 +48,13 @@ const (
 
 // Review is one title, or one file without a title, that needs an admin.
 type Review struct {
-	ID        int64
-	LibraryID int64
+	ID         uid.ID
+	CreatedAt  time.Time
+	ModifiedAt time.Time
+	LibraryID  uid.ID
 	// ItemID is the title; nil for a file no title was made for, which
 	// Path then names.
-	ItemID      *int64
+	ItemID      *uid.ID
 	Path        string
 	Reason      string
 	RaisedAt    time.Time
@@ -75,7 +78,7 @@ type Evidence struct {
 
 // Filter narrows List. Zero values mean no constraint.
 type Filter struct {
-	LibraryID int64
+	LibraryID *uid.ID
 	Reason    string
 	// Dismissed keeps only dismissed reviews, or only open ones; nil keeps both.
 	Dismissed *bool
@@ -88,21 +91,19 @@ type Repo struct{ d db.DBTX }
 func New(d db.DBTX) *Repo { return &Repo{d} }
 
 const cols = `r.id, r.library_id, r.item_id, r.path, r.reason, r.raised_at, r.dismissed_at, COALESCE(i.kind, ''),
-	COALESCE((SELECT m.title FROM item_shown m WHERE m.item_id = i.id), i.parsed_title, '')`
+	COALESCE((SELECT m.title FROM item_shown m WHERE m.item_id = i.id), i.parsed_title, ''), r.created_at, r.modified_at`
 
 const from = ` FROM identity_review r LEFT JOIN item i ON i.id = r.item_id `
 
 func scan(s db.Scanner) (*Review, error) {
 	var r Review
-	var item, dismissed sql.NullInt64
+	var dismissed sql.NullInt64
 	var path sql.NullString
-	var raised int64
-	if err := s.Scan(&r.ID, &r.LibraryID, &item, &path, &r.Reason, &raised, &dismissed, &r.ItemKind, &r.Title); err != nil {
+	var raised, created, modified int64
+	if err := s.Scan(&r.ID, &r.LibraryID, &r.ItemID, &path, &r.Reason, &raised, &dismissed, &r.ItemKind, &r.Title, &created, &modified); err != nil {
 		return nil, db.Wrap(err)
 	}
-	if item.Valid {
-		r.ItemID = &item.Int64
-	}
+	r.CreatedAt, r.ModifiedAt = db.FromMs(created), db.FromMs(modified)
 	r.Path, r.RaisedAt, r.DismissedAt = path.String, db.FromMs(raised), db.FromNullMs(dismissed)
 	return &r, nil
 }
@@ -126,7 +127,7 @@ func (r *Repo) evidence(rv *Review) error {
 }
 
 // Get returns one review with its evidence, or db.ErrNotFound.
-func (r *Repo) Get(id int64) (*Review, error) {
+func (r *Repo) Get(id uid.ID) (*Review, error) {
 	rv, err := scan(r.d.QueryRow(`SELECT `+cols+from+`WHERE r.id = ?`, id))
 	if err != nil {
 		return nil, err
@@ -135,7 +136,7 @@ func (r *Repo) Get(id int64) (*Review, error) {
 }
 
 // kept is the condition for the reviews a Filter keeps, its fields in order.
-const kept = `WHERE (?1 = 0 OR r.library_id = ?1) AND (?2 = '' OR r.reason = ?2) AND (?3 IS NULL OR (r.dismissed_at IS NOT NULL) = ?3)`
+const kept = `WHERE (?1 IS NULL OR r.library_id = ?1) AND (?2 = '' OR r.reason = ?2) AND (?3 IS NULL OR (r.dismissed_at IS NOT NULL) = ?3)`
 
 // List returns the reviews f keeps with their evidence, newest first.
 func (r *Repo) List(f Filter) ([]*Review, error) {
@@ -157,14 +158,17 @@ func (r *Repo) Count(f Filter) (int, error) {
 }
 
 // SetDismissed dismisses a review at at, or with nil opens it again.
-func (r *Repo) SetDismissed(id int64, at *time.Time) error {
-	return db.ExecOne(r.d, `UPDATE identity_review SET dismissed_at = ? WHERE id = ?`, db.NullMs(at), id)
+func (r *Repo) SetDismissed(id uid.ID, at *time.Time) error {
+	return db.ExecOne(r.d, `UPDATE identity_review SET dismissed_at = ?, modified_at = ? WHERE id = ?`, db.NullMs(at), db.Ms(now()), id)
 }
+
+func now() time.Time { return time.Now().UTC().Truncate(time.Millisecond) }
 
 // Raise records rv, of an item or else of a path, with its evidence. A
 // review of the same subject and reason is kept, with when it was raised
 // and whether it was dismissed, and takes the new evidence.
 func (r *Repo) Raise(rv *Review) error {
+	t := db.Ms(now())
 	return db.InTx(r.d, func(d db.DBTX) error {
 		err := d.QueryRow(`SELECT id FROM identity_review WHERE reason = ?1 AND (item_id = ?2 OR ?2 IS NULL AND item_id IS NULL
 			AND library_id = ?3 AND path = ?4)`, rv.Reason, rv.ItemID, rv.LibraryID, rv.Path).Scan(&rv.ID)
@@ -174,12 +178,13 @@ func (r *Repo) Raise(rv *Review) error {
 			if rv.ItemID == nil {
 				path = rv.Path
 			}
-			res, err := d.Exec(`INSERT INTO identity_review (library_id, item_id, path, reason, raised_at) VALUES (?,?,?,?,?)`,
-				rv.LibraryID, rv.ItemID, path, rv.Reason, db.Ms(rv.RaisedAt))
-			if err != nil {
+			if rv.ID.IsZero() {
+				rv.ID = uid.New()
+			}
+			if _, err := d.Exec(`INSERT INTO identity_review (id, library_id, item_id, path, reason, raised_at, created_at, modified_at)
+				VALUES (?,?,?,?,?,?,?,?)`, rv.ID, rv.LibraryID, rv.ItemID, path, rv.Reason, db.Ms(rv.RaisedAt), t, t); err != nil {
 				return db.Wrap(err)
 			}
-			rv.ID, _ = res.LastInsertId()
 		case err != nil:
 			return db.Wrap(err)
 		}
@@ -187,9 +192,9 @@ func (r *Repo) Raise(rv *Review) error {
 			return db.Wrap(err)
 		}
 		for i, e := range rv.Evidence {
-			if _, err := d.Exec(`INSERT INTO identity_evidence (review_id, position, role, provider, external_id, title, year, country, path)
-				VALUES (?,?,?,?,?,?,?,?,?)`, rv.ID, i, e.Role, db.NullStr(e.Provider), db.NullStr(e.ExternalID), db.NullStr(e.Title),
-				e.Year, db.NullStr(e.Country), db.NullStr(e.Path)); err != nil {
+			if _, err := d.Exec(`INSERT INTO identity_evidence (id, review_id, position, role, provider, external_id, title, year, country, path,
+				created_at, modified_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, uid.New(), rv.ID, i, e.Role, db.NullStr(e.Provider),
+				db.NullStr(e.ExternalID), db.NullStr(e.Title), e.Year, db.NullStr(e.Country), db.NullStr(e.Path), t, t); err != nil {
 				return db.Wrap(err)
 			}
 		}
@@ -199,7 +204,7 @@ func (r *Repo) Raise(rv *Review) error {
 
 // Settle deletes the item's reviews of these reasons but the one of
 // reason keep; "" keeps none.
-func (r *Repo) Settle(itemID int64, keep string, reasons ...string) error {
+func (r *Repo) Settle(itemID uid.ID, keep string, reasons ...string) error {
 	for _, reason := range reasons {
 		if reason == keep {
 			continue
@@ -212,7 +217,7 @@ func (r *Repo) Settle(itemID int64, keep string, reasons ...string) error {
 }
 
 // Sweep deletes the library's reviews of reason that are not among keep.
-func (r *Repo) Sweep(libraryID int64, reason string, keep []int64) error {
+func (r *Repo) Sweep(libraryID uid.ID, reason string, keep []uid.ID) error {
 	in, args := db.In(keep)
 	_, err := r.d.Exec(`DELETE FROM identity_review WHERE library_id = ? AND reason = ? AND id NOT IN `+in,
 		append([]any{libraryID, reason}, args...)...)

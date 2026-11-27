@@ -40,6 +40,9 @@ type Table struct {
 type Col struct {
 	Name, Expr string
 	Watch      []string
+	// Type is the declared type of a column Expr derives, which no Source
+	// column of its name declares.
+	Type string
 }
 
 // Defines names the changes to a server table that alter a household's
@@ -57,7 +60,7 @@ type Defines struct {
 func plain(names ...string) []Col {
 	cols := make([]Col, len(names))
 	for i, n := range names {
-		cols[i] = Col{n, n, []string{n}}
+		cols[i] = Col{Name: n, Expr: n, Watch: []string{n}}
 	}
 	return cols
 }
@@ -71,8 +74,8 @@ func fileName(c string) string {
 // artPath is a metadata image as a member sees it: TMDB's path whole, since
 // it names TMDB's image, and any other, a file on the server, by its name.
 func artPath(c string) Col {
-	return Col{c, `CASE WHEN source = 'remote' AND provider = 'tmdb' THEN ` + c + ` ELSE ` + fileName(c) + ` END`,
-		[]string{c, "source", "provider"}}
+	return Col{Name: c, Expr: `CASE WHEN source = 'remote' AND provider = 'tmdb' THEN ` + c + ` ELSE ` + fileName(c) + ` END`,
+		Watch: []string{c, "source", "provider"}}
 }
 
 // Scope fragments, each a SELECT of ids for the household ?1.
@@ -136,7 +139,7 @@ var V1 = Schema{
 			"provider", "provider_id", "status", "title", "overview", "release_date", "runtime_minutes", "content_rating", "external_id",
 			"published_at"), artPath("poster_path"), artPath("backdrop_path"),
 			// item_shown reads them, and they change with every refresh.
-			Col{"fetched_at", "NULL", nil}, Col{"retry_at", "NULL", nil})},
+			Col{Name: "fetched_at", Expr: "NULL"}, Col{Name: "retry_at", Expr: "NULL"})},
 		{Name: "item_genre", Source: "item_genre", Key: []string{"item_id", "genre_id", "source"}, Cols: plain("item_id", "genre_id", "source")},
 		{Name: "genre", Source: "genre", Key: []string{"id"}, Cols: plain("id", "name", "tmdb_id")},
 		{Name: "person", Source: "person", Key: []string{"id"}, Cols: plain("id", "tmdb_id", "name", "profile_path")},
@@ -153,7 +156,7 @@ var V1 = Schema{
 			"subtitle_is_text")},
 		{Name: "chapter", Source: "chapter", Key: []string{"id"}, Cols: plain("id", "media_file_id", "position", "start_ms", "end_ms", "title")},
 		{Name: "occasion", Source: "occasion", Key: []string{"id"}, Cols: plain("id", "name", "holiday", "month", "day", "days_before",
-			"days_after", "color1", "color2", "color3")},
+			"days_after", "color1", "color2", "color3", "created_at", "modified_at", "created_by", "modified_by")},
 		{Name: "occasion_keyword", Source: "occasion_keyword", Key: []string{"occasion_id", "keyword_id"}, Cols: plain("occasion_id", "keyword_id")},
 		{Name: "occasion_item", Source: "occasion_item", Key: []string{"occasion_id", "item_id"}, Cols: plain("occasion_id", "item_id")},
 		{Name: "occasion_exclusion", Source: "occasion_exclusion", Key: []string{"occasion_id", "item_id"}, Cols: plain("occasion_id", "item_id")},
@@ -163,17 +166,18 @@ var V1 = Schema{
 		{Name: "server_info", Source: "server_info", Key: []string{"id"}, Cols: plain("id", "name", "metadata_source", "metadata_mode")},
 
 		{Name: "collection", Source: "collection", Key: []string{"id"}, Cols: plain("id", "source", "household_id", "tmdb_id", "name",
-			"overview", "created_at", "updated_at"), Scope: collections},
+			"overview", "created_at", "modified_at", "created_by", "modified_by"), Scope: collections},
 		{Name: "collection_movie", Source: "collection_movie", Key: []string{"collection_id", "item_id"},
 			Cols: plain("collection_id", "item_id", "position"), Scope: `collection_id IN (SELECT id FROM collection WHERE ` + collections + `)`,
 			TombScope: `k1 IN (SELECT id FROM collection WHERE ` + collections + `) OR ` + gone("k1", "collection")},
 
-		{Name: "household", Source: "household", Key: []string{"id"}, Cols: plain("id", "name", "adult_id", "created_at"),
+		{Name: "household", Source: "household", Key: []string{"id"}, Cols: plain("id", "name", "adult_id", "created_at", "modified_at", "created_by",
+			"modified_by"),
 			Scope: `id IN (` + households + `)`},
 		{Name: "account", Source: "account", Key: []string{"id"}, Cols: append(plain("id", "kind", "email", "name", "is_admin",
-			"household_id", "birthday", "filter_mode", "movie_ceiling", "tv_ceiling", "revoked_at", "created_at", "updated_at",
-			"hide_kids_content", "color", "no_autoplay"),
-			Col{"has_pin", `COALESCE(pin_hash, '') <> ''`, []string{"pin_hash"}}, pending),
+			"household_id", "birthday", "filter_mode", "movie_ceiling", "tv_ceiling", "revoked_at", "created_at", "modified_at",
+			"created_by", "modified_by", "hide_kids_content", "color", "no_autoplay"),
+			Col{Name: "has_pin", Expr: `COALESCE(pin_hash, '') <> ''`, Watch: []string{"pin_hash"}}, pending),
 			Scope: `id IN (` + members + `)`},
 		// The other accounts members see, as a share or an offer shows them.
 		{Name: "account_card", Source: "account", Key: []string{"id"}, Cols: append(plain("id", "name", "kind", "color", "household_id",
@@ -185,18 +189,18 @@ var V1 = Schema{
 			Scope:     `a_id IN (` + members + `) OR b_id IN (` + members + `)`,
 			TombScope: `k1 IN (` + known + `) OR k2 IN (` + known + `)`},
 		{Name: "profile_offer", Source: "profile_offer", Key: []string{"id"}, Cols: plain("id", "profile_id", "household_id", "from_id",
-			"to_id", "created_at"), Scope: `household_id = ?1 OR from_id IN (` + members + `) OR to_id IN (` + members + `)`},
+			"to_id", "created_at", "modified_at", "created_by", "modified_by"), Scope: `household_id = ?1 OR from_id IN (` + members + `) OR to_id IN (` + members + `)`},
 		{Name: "account_allow", Source: "account_allow", Key: []string{"account_id", "item_id"}, Cols: plain("account_id", "item_id"),
 			Scope: `account_id IN (` + members + `)`, TombScope: `k1 IN (` + members + `) OR ` + gone("k1", "account")},
 		{Name: "watch_state", Source: "watch_state", Key: []string{"account_id", "item_id"}, Cols: plain("account_id", "item_id",
-			"position_ms", "watched", "play_count", "last_played_at", "updated_at", "edition_id"),
+			"position_ms", "watched", "play_count", "last_played_at", "changed_at", "edition_id"),
 			Scope: `account_id IN (` + members + `)`, TombScope: `k1 IN (` + members + `) OR ` + gone("k1", "account")},
 		// station_owned is not in a response, but which playlists the lists
 		// leave out is.
 		{Name: "playlist", Source: "playlist", Key: []string{"id"}, Cols: plain("id", "account_id", "name", "kind", "last_played_at",
-			"created_at", "updated_at", "station_owned"), Scope: `id IN (` + playlists + ` UNION ` + aired + `)`},
+			"created_at", "modified_at", "created_by", "modified_by", "station_owned"), Scope: `id IN (` + playlists + ` UNION ` + aired + `)`},
 		{Name: "playlist_entry", Source: "playlist_entry", Key: []string{"id"}, Cols: plain("id", "playlist_id", "item_id",
-			"collection_id", "rank", "added_at", "edition_id"), Scope: `playlist_id IN (` + playlists + ` UNION ` + aired + `)`},
+			"collection_id", "rank", "added_at", "edition_id", "created_at", "modified_at", "created_by", "modified_by"), Scope: `playlist_id IN (` + playlists + ` UNION ` + aired + `)`},
 		{Name: "playlist_share", Source: "playlist_share", Key: []string{"playlist_id", "account_id"},
 			Cols:      plain("playlist_id", "account_id", "access", "created_at"),
 			Scope:     `account_id IN (` + members + `) OR playlist_id IN (` + owned + `)`,
@@ -209,8 +213,9 @@ var V1 = Schema{
 		// replica lacks; a change to it changes scope, so it reaches
 		// clients by snapshot.
 		{Name: "station", Source: "station", Key: []string{"id"}, Cols: append(plain("id", "account_id", "playlist_id", "name", "shuffled",
-			"visibility", "rating", "loop", "created_at", "updated_at", "timing"),
-			Col{"household_id", `(SELECT COALESCE(o.household_id, 0) FROM account o WHERE o.id = station.account_id)`, []string{"account_id"}}),
+			"visibility", "rating", "loop", "created_at", "modified_at", "created_by", "modified_by", "timing"),
+			Col{Name: "household_id", Expr: `(SELECT o.household_id FROM account o WHERE o.id = station.account_id)`, Watch: []string{"account_id"},
+				Type: "BLOB"}),
 			Scope: `id IN (` + stations + `)`},
 		{Name: "station_day", Source: "station_day", Key: []string{"station_id", "weekday"}, Cols: plain("station_id", "weekday"),
 			Scope: `station_id IN (` + stations + `)`, TombScope: `k1 IN (` + stations + `) OR ` + gone("k1", "station")},
@@ -226,24 +231,33 @@ var V1 = Schema{
 			"created_at"), Scope: `playlist_id IN (` + playlists + `) OR station_id IN (` + stations + `)`},
 		// The household's devices share one replica; each keeps its own.
 		{Name: "download", Source: "download", Key: []string{"id"}, Cols: plain("id", "device_id", "account_id", "item_id",
-			"edition_id", "media_file_id", "quality", "created_at"),
+			"edition_id", "media_file_id", "quality", "created_at", "modified_at", "created_by", "modified_by"),
 			Scope: `device_id IN (SELECT id FROM device WHERE household_id = ?1)`},
 	},
 	Unsynced: map[string][]string{
-		"library": {"scan_hour", "watch_files", "last_scanned_at", "created_at", "updated_at"},
-		// item.Update rewrites updated_at on every scan.
-		"item":          {"path", "updated_at"},
-		"item_metadata": {"fetched_at", "retry_at", "sidecar_stamp", "identity_stamp"},
-		"media_file":    {"path", "modified_at", "probed_at", "previews_failed_for", "probe_failed_at", "probe_error", "fingerprint"},
-		"track":         {"dv_profile"},
-		"chapter":       {"thumbnail_path"},
-		"server_info": {"created_at", "updated_at", "tasks_paused", "tmdb_key", "gravatar", "read_ahead_seconds", "max_transcodes",
+		"library": {"scan_hour", "watch_files", "last_scanned_at", "created_at", "modified_at", "created_by", "modified_by"},
+		// A system row's audit columns move with every scan and probe
+		// (item.Update rewrites modified_at on each), and no member reads them.
+		"item":            {"path", "created_at", "modified_at"},
+		"item_metadata":   {"fetched_at", "retry_at", "sidecar_stamp", "identity_stamp"},
+		"media_file":      {"path", "file_modified_at", "created_at", "modified_at", "probed_at", "previews_failed_for", "probe_failed_at", "probe_error", "fingerprint"},
+		"genre":           {"created_at", "modified_at"},
+		"person":          {"created_at", "modified_at"},
+		"credit":          {"created_at", "modified_at"},
+		"edition":         {"created_at", "modified_at"},
+		"track":           {"dv_profile", "created_at", "modified_at"},
+		"chapter":         {"thumbnail_path", "created_at", "modified_at"},
+		"station_program": {"created_at", "modified_at"},
+		"server_info": {"created_at", "modified_at", "tasks_paused", "tmdb_key", "gravatar", "read_ahead_seconds", "max_transcodes",
 			"transcode_cache_cap_bytes"},
 		"collection":       {"poster_path", "backdrop_path"},
 		"account":          {"pin_failures", "pin_locked_until"},
 		"household_member": {"created_at"},
-		"cover":            {"jpeg"},
-		"download":         {"conversion_id"},
+		// A station's time range and a cover show no audit field in a
+		// response.
+		"station_time": {"created_at", "modified_at", "created_by", "modified_by"},
+		"cover":        {"jpeg", "modified_at", "created_by", "modified_by"},
+		"download":     {"conversion_id"},
 	},
 	Defines: map[string]Defines{
 		"household_member":         {Rows: true},
@@ -261,7 +275,7 @@ var V1 = Schema{
 		"account_identity", "artwork_generation", "conversion", "device_link", "identity_evidence", "identity_review", "join_code",
 		"library_folder", "log_entry", "occasion_seed", "playback_session", "seek_preview", "session_plan_entry", "song_release",
 		"sso_provider", "task", "task_run", "throughput_sample", "watch_together", "watch_together_member",
-		"schema_migration", "sqlite_sequence", "sync_clock", "sync_tombstone", "sync_action",
+		"schema_migration", "sync_clock", "sync_tombstone", "sync_action",
 	},
 }
 
@@ -272,4 +286,4 @@ var V1 = Schema{
 func gone(k, table string) string { return k + ` NOT IN (SELECT id FROM ` + table + `)` }
 
 // pending marks an adult invited who has not yet joined.
-var pending = Col{"pending", `kind = 'adult' AND COALESCE(password_hash, '') = ''`, []string{"kind", "password_hash"}}
+var pending = Col{Name: "pending", Expr: `kind = 'adult' AND COALESCE(password_hash, '') = ''`, Watch: []string{"kind", "password_hash"}}

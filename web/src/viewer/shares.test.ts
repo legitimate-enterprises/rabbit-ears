@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setToken } from "../admin/api";
 import { boot } from "./app";
 import { at, calls, json, mockFetch, none, root, until } from "./testSupport";
+import { uid } from "../api/uid";
 
 vi.mock("hls.js", () => ({
   default: class {
@@ -15,7 +16,7 @@ const button = (r: ParentNode, label: string) =>
   [...r.querySelectorAll<HTMLElement>("button, a")].find((b) => b.textContent === label);
 const ts = "2026-01-01T00:00:00Z";
 const acct = (id: number, name: string, kind = "adult") => ({
-  id,
+  id: uid(id),
   kind,
   name,
   isAdmin: false,
@@ -24,52 +25,60 @@ const acct = (id: number, name: string, kind = "adult") => ({
   pending: false,
   filterMode: "ratings",
   createdAt: ts,
-  updatedAt: ts,
+  modifiedAt: ts,
 });
 const me = (active: number) => ({
-  device: { id: 1 },
+  device: { id: uid(1) },
   account: acct(1, "Heidi"),
-  activeProfileId: active,
-  household: { id: 1, name: "Heidi", adultId: 1, createdAt: ts },
+  activeProfileId: uid(active),
+  household: { id: uid(1), name: "Heidi", adultId: uid(1), createdAt: ts },
   profiles: [acct(1, "Heidi"), acct(2, "Jax", "kid")],
 });
 const page = (items: unknown[]) => ({ items });
 const base = (active = 1) => ({
   "GET /health": { status: "ok", version: "1.0.0", setupRequired: false },
   "GET /me": me(active),
-  "GET /profiles/1/watch-state": page([]),
-  "GET /profiles/2/watch-state": page([]),
-  "GET /profiles/1/show-progress": page([]),
-  "GET /profiles/2/show-progress": page([]),
+  [`GET /profiles/${uid(1)}/watch-state`]: page([]),
+  [`GET /profiles/${uid(2)}/watch-state`]: page([]),
+  [`GET /profiles/${uid(1)}/show-progress`]: page([]),
+  [`GET /profiles/${uid(2)}/show-progress`]: page([]),
   "GET /genres": page([]),
   "GET /items": page([]),
 });
 const pl = (id: number, name: string, extra = {}) => ({
-  id,
-  profileId: 1,
+  id: uid(id),
+  profileId: uid(1),
   access: "owner",
   name,
   kind: "movies",
   itemCount: 1,
   durationMs: 0,
   createdAt: ts,
-  updatedAt: ts,
+  modifiedAt: ts,
   ...extra,
 });
 const entry = {
-  id: 1,
-  playlistId: 5,
+  id: uid(1),
+  playlistId: uid(5),
   position: 0,
   itemCount: 1,
   durationMs: 0,
   addedAt: ts,
   kind: "movie",
-  itemId: 30,
-  item: { id: 30, libraryId: 1, kind: "movie", parsedTitle: "Dune", addedAt: ts, updatedAt: ts },
+  itemId: uid(30),
+  item: {
+    id: uid(30),
+    libraryId: uid(1),
+    kind: "movie",
+    parsedTitle: "Dune",
+    addedAt: ts,
+    createdAt: ts,
+    modifiedAt: ts,
+  },
 };
 const share = (profileId: number, name: string, access: string, kind = "adult", extra = {}) => ({
-  playlistId: 5,
-  profileId,
+  playlistId: uid(5),
+  profileId: uid(profileId),
   name,
   kind,
   access,
@@ -85,18 +94,21 @@ beforeEach(() => {
 
 describe("a playlist shared with the profile", () => {
   it("says who shared it and offers no edits on read access", async () => {
-    await at("#/playlist/5");
+    await at(`#/playlist/${uid(5)}`);
     const r = root();
     await boot(r, {
       fetch: mockFetch({
         ...base(),
-        "GET /profiles/1/playlists/5": pl(5, "Weekend", {
-          profileId: 7,
+        [`GET /profiles/${uid(1)}/playlists/${uid(5)}`]: pl(5, "Weekend", {
+          profileId: uid(7),
           access: "read",
           ownerName: "Ann",
         }),
-        "GET /profiles/1/playlists/5/entries": page([entry, { ...entry, id: 2, position: 1 }]),
-        "GET /profiles/1/playlists/5/play-order": page([]),
+        [`GET /profiles/${uid(1)}/playlists/${uid(5)}/entries`]: page([
+          entry,
+          { ...entry, id: uid(2), position: 1 },
+        ]),
+        [`GET /profiles/${uid(1)}/playlists/${uid(5)}/play-order`]: page([]),
       }),
     });
     await until(() => r.querySelector(".tracks"));
@@ -108,18 +120,18 @@ describe("a playlist shared with the profile", () => {
   });
 
   it("edits entries on write access but leaves the playlist itself to its owner", async () => {
-    await at("#/playlist/5");
+    await at(`#/playlist/${uid(5)}`);
     const r = root();
     await boot(r, {
       fetch: mockFetch({
         ...base(),
-        "GET /profiles/1/playlists/5": pl(5, "Weekend", {
-          profileId: 7,
+        [`GET /profiles/${uid(1)}/playlists/${uid(5)}`]: pl(5, "Weekend", {
+          profileId: uid(7),
           access: "write",
           ownerName: "Ann",
         }),
-        "GET /profiles/1/playlists/5/entries": page([entry]),
-        "GET /profiles/1/playlists/5/play-order": page([]),
+        [`GET /profiles/${uid(1)}/playlists/${uid(5)}/entries`]: page([entry]),
+        [`GET /profiles/${uid(1)}/playlists/${uid(5)}/play-order`]: page([]),
       }),
     });
     await until(() => r.querySelector(".tracks"));
@@ -133,8 +145,8 @@ describe("a playlist shared with the profile", () => {
     await boot(r, {
       fetch: mockFetch({
         ...base(2),
-        "GET /profiles/2/playlists": page([
-          pl(5, "Cartoons", { profileId: 1, access: "read", ownerName: "Heidi" }),
+        [`GET /profiles/${uid(2)}/playlists`]: page([
+          pl(5, "Cartoons", { profileId: uid(1), access: "read", ownerName: "Heidi" }),
         ]),
       }),
     });
@@ -152,7 +164,7 @@ describe("the Shared badge", () => {
     await boot(r, {
       fetch: mockFetch({
         ...base(),
-        "GET /profiles/1/playlists": page([
+        [`GET /profiles/${uid(1)}/playlists`]: page([
           pl(5, "Weekend", { shared: true }),
           pl(6, "Solo", { shared: false }),
           pl(7, "Stored"),
@@ -168,14 +180,14 @@ describe("the Shared badge", () => {
   });
 
   it("marks a shared playlist's artwork on its page", async () => {
-    await at("#/playlist/5");
+    await at(`#/playlist/${uid(5)}`);
     const r = root();
     await boot(r, {
       fetch: mockFetch({
         ...base(),
-        "GET /profiles/1/playlists/5": pl(5, "Weekend", { shared: true }),
-        "GET /profiles/1/playlists/5/entries": page([]),
-        "GET /profiles/1/playlists/5/play-order": page([]),
+        [`GET /profiles/${uid(1)}/playlists/${uid(5)}`]: pl(5, "Weekend", { shared: true }),
+        [`GET /profiles/${uid(1)}/playlists/${uid(5)}/entries`]: page([]),
+        [`GET /profiles/${uid(1)}/playlists/${uid(5)}/play-order`]: page([]),
       }),
     });
     await until(() => r.querySelector(".detail"));
@@ -184,29 +196,29 @@ describe("the Shared badge", () => {
 });
 
 const hshare = (householdId: number, name: string, access: string) => ({
-  playlistId: 5,
-  householdId,
+  playlistId: uid(5),
+  householdId: uid(householdId),
   name,
   access,
   createdAt: ts,
 });
 const households = [
-  { id: 1, name: "Heidi's household", profiles: 3 },
-  { id: 4, name: "Ann's household", profiles: 1 },
+  { id: uid(1), name: "Heidi's household", profiles: 3 },
+  { id: uid(4), name: "Ann's household", profiles: 1 },
 ];
 const owner = (routes: Record<string, unknown>) => ({
   ...base(),
-  "GET /profiles/1/playlists/5": pl(5, "Weekend"),
-  "GET /profiles/1/playlists/5/entries": page([]),
-  "GET /profiles/1/playlists/5/play-order": page([]),
-  "GET /profiles/1/share-households": { items: households },
-  "GET /profiles/1/playlists/5/household-shares": page([]),
-  "GET /profiles/1/playlists/5/shares": page([]),
-  "GET /profiles/1/share-candidates": page([]),
+  [`GET /profiles/${uid(1)}/playlists/${uid(5)}`]: pl(5, "Weekend"),
+  [`GET /profiles/${uid(1)}/playlists/${uid(5)}/entries`]: page([]),
+  [`GET /profiles/${uid(1)}/playlists/${uid(5)}/play-order`]: page([]),
+  [`GET /profiles/${uid(1)}/share-households`]: { items: households },
+  [`GET /profiles/${uid(1)}/playlists/${uid(5)}/household-shares`]: page([]),
+  [`GET /profiles/${uid(1)}/playlists/${uid(5)}/shares`]: page([]),
+  [`GET /profiles/${uid(1)}/share-candidates`]: page([]),
   ...routes,
 });
 const openShare = async (routes: Record<string, unknown>) => {
-  await at("#/playlist/5");
+  await at(`#/playlist/${uid(5)}`);
   const r = root();
   await boot(r, { fetch: mockFetch(owner(routes)) });
   await until(() => button(r, "Share"));
@@ -254,10 +266,10 @@ describe("the owner's Share sheet", () => {
 
   it("lists every household with its profiles and access, under a caption", async () => {
     const dlg = await openShare({
-      "GET /profiles/1/share-households": {
-        items: [...households, { id: 6, name: "Big house", profiles: 2 }],
+      [`GET /profiles/${uid(1)}/share-households`]: {
+        items: [...households, { id: uid(6), name: "Big house", profiles: 2 }],
       },
-      "GET /profiles/1/playlists/5/household-shares": page([
+      [`GET /profiles/${uid(1)}/playlists/${uid(5)}/household-shares`]: page([
         hshare(1, "Heidi's household", "read"),
         hshare(6, "Big house", "write"),
       ]),
@@ -282,35 +294,35 @@ describe("the owner's Share sheet", () => {
 
   it("lists candidates, then shares beyond them, a kid to view only", async () => {
     const dlg = await openShare({
-      "GET /profiles/1/share-candidates": page([
+      [`GET /profiles/${uid(1)}/share-candidates`]: page([
         {
-          profileId: 2,
+          profileId: uid(2),
           name: "Jax",
           kind: "kid",
           householdName: "Heidi's household",
-          householdId: 1,
+          householdId: uid(1),
         },
         // A household of the same name that is not one of the owner's is not named.
         {
-          profileId: 9,
+          profileId: uid(9),
           name: "Ola",
           kind: "adult",
           householdName: "Heidi's household",
-          householdId: 99,
+          householdId: uid(99),
         },
         {
-          profileId: 7,
+          profileId: uid(7),
           name: "Ann",
           kind: "adult",
           householdName: "Ann's household",
-          householdId: 4,
+          householdId: uid(4),
           color: "#6b3a2e",
         },
       ]),
-      "GET /profiles/1/playlists/5/shares": page([
-        share(7, "Ann", "write", "adult", { householdId: 4, color: "#6b3a2e" }),
-        share(3, "Sam", "read", "adult", { householdId: 1 }),
-        share(2, "Jax", "read", "kid", { householdId: 1 }),
+      [`GET /profiles/${uid(1)}/playlists/${uid(5)}/shares`]: page([
+        share(7, "Ann", "write", "adult", { householdId: uid(4), color: "#6b3a2e" }),
+        share(3, "Sam", "read", "adult", { householdId: uid(1) }),
+        share(2, "Jax", "read", "kid", { householdId: uid(1) }),
       ]),
     });
     await until(() => dlg.querySelector("[aria-label=Profiles] li"));
@@ -330,21 +342,21 @@ describe("the owner's Share sheet", () => {
 
   it("names no household when the owner is in only one", async () => {
     const dlg = await openShare({
-      "GET /profiles/1/share-households": { items: [households[0]] },
-      "GET /profiles/1/share-candidates": page([
+      [`GET /profiles/${uid(1)}/share-households`]: { items: [households[0]] },
+      [`GET /profiles/${uid(1)}/share-candidates`]: page([
         {
-          profileId: 2,
+          profileId: uid(2),
           name: "Jax",
           kind: "kid",
           householdName: "Heidi's household",
-          householdId: 1,
+          householdId: uid(1),
         },
         {
-          profileId: 3,
+          profileId: uid(3),
           name: "Sam",
           kind: "adult",
           householdName: "Heidi's household",
-          householdId: 1,
+          householdId: uid(1),
         },
       ]),
     });
@@ -362,56 +374,72 @@ describe("the owner's Share sheet", () => {
 
   it("shares, changes and stops sharing with a household at once", async () => {
     const dlg = await openShare({
-      "POST /profiles/1/playlists/5/household-shares": hshare(4, "Ann's household", "read"),
-      "PUT /profiles/1/playlists/5/household-shares/4": hshare(4, "Ann's household", "write"),
-      "DELETE /profiles/1/playlists/5/household-shares/4": none,
+      [`POST /profiles/${uid(1)}/playlists/${uid(5)}/household-shares`]: hshare(
+        4,
+        "Ann's household",
+        "read",
+      ),
+      [`PUT /profiles/${uid(1)}/playlists/${uid(5)}/household-shares/${uid(4)}`]: hshare(
+        4,
+        "Ann's household",
+        "write",
+      ),
+      [`DELETE /profiles/${uid(1)}/playlists/${uid(5)}/household-shares/${uid(4)}`]: none,
     });
     choose(dlg, "Ann's household", "read");
-    await until(() => sent("POST /profiles/1/playlists/5/household-shares"));
-    expect(sent("POST /profiles/1/playlists/5/household-shares")!.body).toEqual({
-      householdId: 4,
+    await until(() => sent(`POST /profiles/${uid(1)}/playlists/${uid(5)}/household-shares`));
+    expect(sent(`POST /profiles/${uid(1)}/playlists/${uid(5)}/household-shares`)!.body).toEqual({
+      householdId: uid(4),
       access: "read",
     });
     choose(dlg, "Ann's household", "write");
-    await until(() => sent("PUT /profiles/1/playlists/5/household-shares/4"));
-    expect(sent("PUT /profiles/1/playlists/5/household-shares/4")!.body).toEqual({
+    await until(() =>
+      sent(`PUT /profiles/${uid(1)}/playlists/${uid(5)}/household-shares/${uid(4)}`),
+    );
+    expect(
+      sent(`PUT /profiles/${uid(1)}/playlists/${uid(5)}/household-shares/${uid(4)}`)!.body,
+    ).toEqual({
       access: "write",
     });
     choose(dlg, "Ann's household", "");
-    await until(() => sent("DELETE /profiles/1/playlists/5/household-shares/4"));
+    await until(() =>
+      sent(`DELETE /profiles/${uid(1)}/playlists/${uid(5)}/household-shares/${uid(4)}`),
+    );
   });
 
   it("shares, changes and stops sharing with a profile at once", async () => {
     const dlg = await openShare({
-      "GET /profiles/1/share-candidates": page([
-        { profileId: 9, name: "Ola", kind: "adult", householdName: "Next door" },
+      [`GET /profiles/${uid(1)}/share-candidates`]: page([
+        { profileId: uid(9), name: "Ola", kind: "adult", householdName: "Next door" },
       ]),
-      "POST /profiles/1/playlists/5/shares": share(9, "Ola", "write"),
-      "PUT /profiles/1/playlists/5/shares/9": share(9, "Ola", "read"),
-      "DELETE /profiles/1/playlists/5/shares/9": none,
+      [`POST /profiles/${uid(1)}/playlists/${uid(5)}/shares`]: share(9, "Ola", "write"),
+      [`PUT /profiles/${uid(1)}/playlists/${uid(5)}/shares/${uid(9)}`]: share(9, "Ola", "read"),
+      [`DELETE /profiles/${uid(1)}/playlists/${uid(5)}/shares/${uid(9)}`]: none,
     });
     await until(() => dlg.querySelector("[aria-label='Access for Ola']"));
     choose(dlg, "Ola", "write");
-    await until(() => sent("POST /profiles/1/playlists/5/shares"));
-    expect(sent("POST /profiles/1/playlists/5/shares")!.body).toEqual({
-      profileId: 9,
+    await until(() => sent(`POST /profiles/${uid(1)}/playlists/${uid(5)}/shares`));
+    expect(sent(`POST /profiles/${uid(1)}/playlists/${uid(5)}/shares`)!.body).toEqual({
+      profileId: uid(9),
       access: "write",
     });
     choose(dlg, "Ola", "read");
-    await until(() => sent("PUT /profiles/1/playlists/5/shares/9"));
-    expect(sent("PUT /profiles/1/playlists/5/shares/9")!.body).toEqual({ access: "read" });
+    await until(() => sent(`PUT /profiles/${uid(1)}/playlists/${uid(5)}/shares/${uid(9)}`));
+    expect(sent(`PUT /profiles/${uid(1)}/playlists/${uid(5)}/shares/${uid(9)}`)!.body).toEqual({
+      access: "read",
+    });
     choose(dlg, "Ola", "");
-    await until(() => sent("DELETE /profiles/1/playlists/5/shares/9"));
+    await until(() => sent(`DELETE /profiles/${uid(1)}/playlists/${uid(5)}/shares/${uid(9)}`));
   });
 
   it("holds a row's control while its change is saved", async () => {
     let answer: (r: Response) => void = () => {};
     const dlg = await openShare({
-      "POST /profiles/1/playlists/5/household-shares": () =>
+      [`POST /profiles/${uid(1)}/playlists/${uid(5)}/household-shares`]: () =>
         new Promise<Response>((r) => (answer = r)),
     });
     const s = choose(dlg, "Ann's household", "read");
-    await until(() => sent("POST /profiles/1/playlists/5/household-shares"));
+    await until(() => sent(`POST /profiles/${uid(1)}/playlists/${uid(5)}/household-shares`));
     expect(s.disabled).toBe(true);
     expect(
       dlg.querySelector<HTMLSelectElement>('[aria-label="Access for Heidi\'s household"]')!
@@ -424,10 +452,10 @@ describe("the owner's Share sheet", () => {
 
   it("shows a failed change and puts the control back", async () => {
     const dlg = await openShare({
-      "GET /profiles/1/playlists/5/household-shares": page([
+      [`GET /profiles/${uid(1)}/playlists/${uid(5)}/household-shares`]: page([
         hshare(1, "Heidi's household", "read"),
       ]),
-      "PUT /profiles/1/playlists/5/household-shares/1": () =>
+      [`PUT /profiles/${uid(1)}/playlists/${uid(5)}/household-shares/${uid(1)}`]: () =>
         json({ code: "conflict", message: "Not now." }, 409),
     });
     const s = choose(dlg, "Heidi's household", "write");

@@ -40,7 +40,7 @@ function libraryDialog(ctx: Ctx, existing: Schemas["Library"] | undefined, reloa
     path: input("text", { required: true, value: f.path }),
   }));
   // Made before its folder was refused; the next try adds only the folder.
-  let libraryId: number | undefined;
+  let libraryId: string | undefined;
   const { box, close } = dialog(existing ? "Edit library" : "Add library");
   const form = h(
     "form",
@@ -82,7 +82,7 @@ function libraryDialog(ctx: Ctx, existing: Schemas["Library"] | undefined, reloa
           close();
           reload();
         } catch (x) {
-          if (libraryId) reload();
+          if (libraryId !== undefined) reload();
           showError(err, (x as Error).message);
         }
       },

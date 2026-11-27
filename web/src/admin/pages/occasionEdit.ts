@@ -22,7 +22,7 @@ const MONTHS = Array.from({ length: 12 }, (_, i) =>
 );
 
 /** Every member of an occasion, by title. */
-export const members = (api: Api, occasionId: number) =>
+export const members = (api: Api, occasionId: string) =>
   paged((offset) =>
     ok(
       api.GET("/occasions/{occasionId}/members", {
@@ -46,7 +46,7 @@ const whole = (el: HTMLInputElement, min: number, max: number) => {
   return v !== "" && Number.isInteger(n) && n >= min && n <= max ? n : undefined;
 };
 
-export async function occasionEdit(ctx: Ctx, id?: number): Promise<HTMLElement[]> {
+export async function occasionEdit(ctx: Ctx, id?: string): Promise<HTMLElement[]> {
   const { api } = ctx;
   const [holidays, saved, found] = await Promise.all([
     ok(api.GET("/holidays")).then((r) => r.items),
@@ -438,7 +438,7 @@ export async function occasionEdit(ctx: Ctx, id?: number): Promise<HTMLElement[]
 }
 
 /** Every member with its source, a search that adds titles by hand, and a remove per row. */
-function titlesCard(api: Api, occasionId: number, first: Member[]) {
+function titlesCard(api: Api, occasionId: string, first: Member[]) {
   let list = first;
   let all = false;
   const heading = h("h2");

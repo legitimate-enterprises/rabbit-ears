@@ -4,13 +4,17 @@ import { card, confirming, copy, formEnd, header, saveSwitch, table } from "../c
 import { dialog, errorLine, field, h, input, showError, sub, tag } from "../dom";
 import { age, local } from "../format";
 import { MOVIE_RATINGS, TV_RATINGS, type Schemas } from "../../api/client";
+import { tint } from "../../api/uid";
 
 type Account = Schemas["Account"];
 const AVATARS = ["#3c4170", "#2e6b8a", "#5a3a5a", "#5b6b3f", "#6b3a2e", "#2b5a4a"];
 const avatar = (a: Account) =>
   h(
     "span.avatar",
-    { style: `background:${AVATARS[a.id % AVATARS.length]}`, "aria-hidden": "true" },
+    {
+      style: `background:${AVATARS[tint(a.id, AVATARS.length)]}`,
+      "aria-hidden": "true",
+    },
     a.name.slice(0, 1).toUpperCase(),
   );
 
@@ -302,7 +306,7 @@ async function fill(ctx: Ctx, root: HTMLElement) {
       Number(b.id === ctx.me.household?.id) - Number(a.id === ctx.me.household?.id) ||
       adultName(a).localeCompare(adultName(b)),
   );
-  const named = (id?: number) => {
+  const named = (id?: string) => {
     const hh = hhs.find((x) => x.id === id);
     return hh ? `${adultName(hh)}'s household` : "";
   };
@@ -486,7 +490,8 @@ async function fill(ctx: Ctx, root: HTMLElement) {
 const members = (a: Account[]) => a.filter((x) => !x.pending).length;
 
 /** Every household a profile is in, its own first. */
-const inHouseholds = (a: Account) => a.householdIds ?? (a.householdId ? [a.householdId] : []);
+const inHouseholds = (a: Account) =>
+  a.householdIds ?? (a.householdId === undefined ? [] : [a.householdId]);
 
 /** Puts one of the joined profiles not yet in hh into it, as an accepted offer does. */
 function addExisting(
@@ -496,10 +501,7 @@ function addExisting(
   candidates: Account[],
   reload: () => void,
 ) {
-  const pick = select(
-    undefined,
-    ...candidates.map((a): [string, string] => [String(a.id), a.name]),
-  );
+  const pick = select(undefined, ...candidates.map((a): [string, string] => [a.id, a.name]));
   pick.required = true;
   const err = errorLine();
   const { box, close } = dialog(`Add an existing profile to ${name}`);
@@ -512,7 +514,7 @@ function addExisting(
           try {
             await ok(
               ctx.api.PUT("/households/{householdId}/members/{accountId}", {
-                params: { path: { householdId: hh.id, accountId: Number(pick.value) } },
+                params: { path: { householdId: hh.id, accountId: pick.value } },
               }),
             );
             close();
@@ -533,13 +535,13 @@ function addExisting(
 function connected(
   ctx: Ctx,
   links: Schemas["AdultLink"][],
-  byId: Map<number, Account>,
-  named: (householdId?: number) => string,
+  byId: Map<string, Account>,
+  named: (householdId?: string) => string,
   joined: Account[],
   reload: () => void,
 ) {
   const err = errorLine();
-  const who = (id: number) => {
+  const who = (id: string) => {
     const a = byId.get(id);
     return a ? h("span", avatar(a), h("b", a.name), sub(named(a.householdId))) : sub("-");
   };
@@ -594,7 +596,7 @@ function connected(
 }
 
 function connect(ctx: Ctx, adults: Account[], reload: () => void) {
-  const opts = adults.map((a): [string, string] => [String(a.id), a.name]);
+  const opts = adults.map((a): [string, string] => [a.id, a.name]);
   const one = select(opts[0]?.[0], ...opts);
   const other = select(opts[1]?.[0], ...opts);
   const err = errorLine();
@@ -605,7 +607,7 @@ function connect(ctx: Ctx, adults: Account[], reload: () => void) {
       {
         onsubmit: async (e: Event) => {
           e.preventDefault();
-          const [a, b] = [one, other].map((s) => adults.find((x) => String(x.id) === s.value));
+          const [a, b] = [one, other].map((s) => adults.find((x) => x.id === s.value));
           if (!a || !b || a.householdId === b.householdId)
             return showError(err, "Pick two adults of different households.");
           try {

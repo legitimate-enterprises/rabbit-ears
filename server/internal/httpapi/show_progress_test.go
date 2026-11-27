@@ -5,9 +5,10 @@ import (
 	"time"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/api"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
-func (e *env) child(lib, parent int64, kind string, number int) int64 {
+func (e *env) child(lib, parent uid.ID, kind string, number int) uid.ID {
 	e.t.Helper()
 	body := map[string]any{"libraryId": lib, "parentId": parent, "kind": kind, "parsedTitle": kind}
 	if kind == "season" {
@@ -20,7 +21,7 @@ func (e *env) child(lib, parent int64, kind string, number int) int64 {
 	return it.Id
 }
 
-func (e *env) showProgress(profile int64, query string) api.ShowProgressPage {
+func (e *env) showProgress(profile uid.ID, query string) api.ShowProgressPage {
 	e.t.Helper()
 	var page api.ShowProgressPage
 	e.expect(200, "GET", "/profiles/"+itoa(profile)+"/show-progress"+query, e.plain.token, nil, &page)
@@ -29,7 +30,7 @@ func (e *env) showProgress(profile int64, query string) api.ShowProgressPage {
 
 // mark sets one episode's state for the plain adult, a moment after the
 // last so the latest played is unambiguous.
-func (e *env) mark(ep int64, watched bool, positionMs int64) {
+func (e *env) mark(ep uid.ID, watched bool, positionMs int64) {
 	e.t.Helper()
 	time.Sleep(2 * time.Millisecond)
 	e.expect(200, "PUT", "/profiles/"+itoa(e.plain.account.ID)+"/watch-state/"+itoa(ep), e.plain.token,
@@ -40,13 +41,13 @@ func TestShowProgress(t *testing.T) {
 	e := newEnv(t)
 	tv := e.library("tv")
 	alpha, _ := e.show(tv, "Alpha", "TV-Y7")
-	var s1 int64
+	var s1 uid.ID
 	{
 		var page api.ItemPage
 		e.expect(200, "GET", "/items?parentId="+itoa(alpha), e.admin.token, nil, &page)
 		s1 = page.Items[0].Id
 	}
-	var s1e1 int64
+	var s1e1 uid.ID
 	{
 		var page api.ItemPage
 		e.expect(200, "GET", "/items?parentId="+itoa(s1), e.admin.token, nil, &page)
@@ -71,7 +72,7 @@ func TestShowProgress(t *testing.T) {
 		}
 		return page.Items[i]
 	}
-	next := func(want *int64) {
+	next := func(want *uid.ID) {
 		t.Helper()
 		got := at(e.showProgress(me, ""), 0)
 		if (got.NextEpisodeId == nil) != (want == nil) || want != nil && *got.NextEpisodeId != *want {

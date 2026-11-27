@@ -1,6 +1,6 @@
 // Single sign-on on the viewer's and the admin's sign-in pages: the provider
 // buttons, and the result the server's callback leaves in the fragment.
-import type { Api, Schemas } from "../api/client";
+import { API_BASE, type Api, type Schemas } from "../api/client";
 import { ok, setToken } from "./api";
 import { h } from "./dom";
 
@@ -58,7 +58,7 @@ export async function ssoButtons(api: Api, returnTo: "viewer" | "admin", spec: s
     h(
       spec,
       {
-        href: `/api/v1/auth/sso/${p.id}/start?returnTo=${returnTo}`,
+        href: `${API_BASE}/auth/sso/${p.id}/start?returnTo=${returnTo}`,
         onclick: () => {
           try {
             sessionStorage.setItem(FROM, location.pathname + location.search);

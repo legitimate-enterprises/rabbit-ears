@@ -21,6 +21,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/mediafile"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/playback"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/session"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // longClip synthesizes two minutes of small H.264 so there are enough segments
@@ -61,7 +62,7 @@ func TestLazySegments(t *testing.T) {
 	m := New(Config{Root: t.TempDir(), Ahead: 2, Reach: 2})
 	defer m.Close()
 	ctx := context.Background()
-	st := Stream{SessionID: 1, Key: "0-0", Job: convertJob(clip)}
+	st := Stream{SessionID: uid.N(1), Key: "0-0", Job: convertJob(clip)}
 	init, err := m.Init(ctx, st, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -95,8 +96,8 @@ func TestLazySegments(t *testing.T) {
 		names, _ := os.ReadDir(dir)
 		t.Fatalf("the gap before a seek must not be encoded; produced %d: %v", produced(dir), names)
 	}
-	m.Stop(1)
-	if _, err := os.Stat(filepath.Join(m.cfg.Root, "1")); !os.IsNotExist(err) {
+	m.Stop(uid.N(1))
+	if _, err := os.Stat(filepath.Join(m.cfg.Root, uid.N(1).String())); !os.IsNotExist(err) {
 		t.Fatal("stop removes the session's segments")
 	}
 }
@@ -140,7 +141,7 @@ func TestOneEncoderPerSession(t *testing.T) {
 	m := New(Config{Root: t.TempDir()})
 	defer m.Close()
 	ctx := context.Background()
-	a := Stream{SessionID: 1, Key: "0-0", Job: convertJob(clip)}
+	a := Stream{SessionID: uid.N(1), Key: "0-0", Job: convertJob(clip)}
 	b := a
 	b.Key = "0-1"
 	b.Job.Rung = playback.Rung{Width: 160, Height: 90, Bitrate: 100e3}
@@ -186,7 +187,7 @@ func TestRacingRequestsShareOneEncoder(t *testing.T) {
 	root := t.TempDir()
 	m := New(Config{Root: root})
 	defer m.Close()
-	a := Stream{SessionID: 1, Key: "0-0", Job: convertJob(clip)}
+	a := Stream{SessionID: uid.N(1), Key: "0-0", Job: convertJob(clip)}
 	b := a
 	b.Key = "0-1"
 	b.Job.Rung = playback.Rung{Width: 160, Height: 90, Bitrate: 100e3}
@@ -200,7 +201,7 @@ func TestRacingRequestsShareOneEncoder(t *testing.T) {
 	if n := ffmpegs(t, root); n > 1 || n != m.Running() {
 		t.Fatalf("%d encoders running, %d tracked", n, m.Running())
 	}
-	m.Stop(1)
+	m.Stop(uid.N(1))
 	if n := ffmpegs(t, root); n != 0 {
 		t.Fatalf("%d encoders outlived Stop", n)
 	}
@@ -212,7 +213,7 @@ func TestEncoderFailureIsReported(t *testing.T) {
 	}
 	m := New(Config{Root: t.TempDir()})
 	defer m.Close()
-	_, err := m.Segment(context.Background(), Stream{SessionID: 1, Key: "0-0", Job: convertJob("/nonexistent.mkv")}, 0)
+	_, err := m.Segment(context.Background(), Stream{SessionID: uid.N(1), Key: "0-0", Job: convertJob("/nonexistent.mkv")}, 0)
 	if !errors.Is(err, ErrEncoder) {
 		t.Fatalf("got %v", err)
 	}
@@ -220,17 +221,17 @@ func TestEncoderFailureIsReported(t *testing.T) {
 
 func TestTranscodeLimit(t *testing.T) {
 	m := New(Config{Root: t.TempDir(), MaxVideo: 1})
-	if err := m.Acquire(1); err != nil {
+	if err := m.Acquire(uid.N(1)); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Acquire(1); err != nil {
+	if err := m.Acquire(uid.N(1)); err != nil {
 		t.Fatal("acquire is idempotent per session")
 	}
-	if err := m.Acquire(2); !errors.Is(err, ErrBusy) {
+	if err := m.Acquire(uid.N(2)); !errors.Is(err, ErrBusy) {
 		t.Fatalf("got %v", err)
 	}
-	m.Release(1)
-	if err := m.Acquire(2); err != nil {
+	m.Release(uid.N(1))
+	if err := m.Acquire(uid.N(2)); err != nil {
 		t.Fatal(err)
 	}
 	if New(Config{}).cfg.MaxVideo != 3 {
@@ -240,18 +241,18 @@ func TestTranscodeLimit(t *testing.T) {
 
 func TestCacheCapPrunesIdleSessions(t *testing.T) {
 	root := t.TempDir()
-	for _, d := range []string{"7", "8"} {
+	for _, d := range []string{uid.N(7).String(), uid.N(8).String()} {
 		_ = os.MkdirAll(filepath.Join(root, d, "0-0"), 0o750)
 		_ = os.WriteFile(filepath.Join(root, d, "0-0", "0.m4s"), make([]byte, 1000), 0o600)
 	}
 	old := time.Now().Add(-time.Hour)
-	_ = os.Chtimes(filepath.Join(root, "7"), old, old)
+	_ = os.Chtimes(filepath.Join(root, uid.N(7).String()), old, old)
 	m := New(Config{Root: root, CacheCap: 1500})
 	m.prune()
-	if _, err := os.Stat(filepath.Join(root, "7")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(root, uid.N(7).String())); !os.IsNotExist(err) {
 		t.Fatal("the oldest idle session goes first")
 	}
-	if _, err := os.Stat(filepath.Join(root, "8")); err != nil {
+	if _, err := os.Stat(filepath.Join(root, uid.N(8).String())); err != nil {
 		t.Fatal("pruning stops once under the cap")
 	}
 }
@@ -265,12 +266,12 @@ func ranOutBesideRunning(t *testing.T) *Manager {
 	m := New(Config{Root: t.TempDir(), Ahead: 1})
 	t.Cleanup(m.Close)
 	running, done := st, st
-	running.SessionID, done.SessionID, done.Ahead = 2, 1, 1000
+	running.SessionID, done.SessionID, done.Ahead = uid.N(2), uid.N(1), 1000
 	for _, s := range []Stream{running, done} {
 		_, err := m.Segment(context.Background(), s, 0)
 		must(t, err)
 	}
-	e := m.encoders[2]
+	e := m.encoders[uid.N(2)]
 	paused := func() bool {
 		e.mu.Lock()
 		defer e.mu.Unlock()
@@ -291,8 +292,8 @@ func ranOutBesideRunning(t *testing.T) *Manager {
 func TestCacheCapPrunesSessionsWhoseEncoderExited(t *testing.T) {
 	srt := fixture(t, "sample.srt")
 	m := ranOutBesideRunning(t)
-	done, running := filepath.Join(m.root(), "1"), filepath.Join(m.root(), "2")
-	unlock := m.lock(1)
+	done, running := filepath.Join(m.root(), uid.N(1).String()), filepath.Join(m.root(), uid.N(2).String())
+	unlock := m.lock(uid.N(1))
 	pruned := make(chan struct{})
 	go func() { m.SetLimits(Limits{CacheCap: 1, MaxVideo: 3}); close(pruned) }()
 	select {
@@ -305,7 +306,7 @@ func TestCacheCapPrunesSessionsWhoseEncoderExited(t *testing.T) {
 	if !exists(done) {
 		t.Fatal("pruning took the segments of a session busy with a request")
 	}
-	sub, err := m.Sidecar(context.Background(), 5, srt, 0, nil)
+	sub, err := m.Sidecar(context.Background(), uid.N(5), srt, 0, nil)
 	must(t, err)
 	m.SetLimits(Limits{CacheCap: m.Usage() - dirSize(done), MaxVideo: 3})
 	if exists(done) {
@@ -328,7 +329,7 @@ func TestPrunedSessionEncodesAgain(t *testing.T) {
 	defer m.Close()
 	ctx := context.Background()
 	idle, done := st, st
-	idle.SessionID, done.SessionID, done.Ahead = 1, 2, 1000
+	idle.SessionID, done.SessionID, done.Ahead = uid.N(1), uid.N(2), 1000
 	for _, s := range []Stream{idle, done} {
 		must(t, m.Acquire(s.SessionID))
 		_, err := m.Segment(ctx, s, 0)
@@ -343,19 +344,19 @@ func TestPrunedSessionEncodesAgain(t *testing.T) {
 	m.SetLimits(Limits{CacheCap: 1, MaxVideo: 2})
 	for _, s := range []Stream{idle, done} {
 		if exists(m.dir(s)) {
-			t.Fatalf("session %d kept its segments over the cap", s.SessionID)
+			t.Fatalf("session %s kept its segments over the cap", s.SessionID)
 		}
 	}
-	must(t, m.Acquire(3))
-	must(t, m.Acquire(4))
+	must(t, m.Acquire(uid.N(3)))
+	must(t, m.Acquire(uid.N(4)))
 	if _, err := m.Init(ctx, idle, 0); !errors.Is(err, ErrBusy) {
 		t.Fatalf("init with no slot free: %v", err)
 	}
-	m.Release(3)
+	m.Release(uid.N(3))
 	if p, err := m.Init(ctx, idle, 0); err != nil || !exists(p) {
 		t.Fatalf("init: %v", err)
 	}
-	m.Release(4)
+	m.Release(uid.N(4))
 	if p, err := m.Segment(ctx, done, 3); err != nil || !exists(p) {
 		t.Fatalf("segment: %v", err)
 	}
@@ -366,10 +367,10 @@ func TestPrunedSessionEncodesAgain(t *testing.T) {
 func TestClearTakesSessionsWhoseEncoderExited(t *testing.T) {
 	m := ranOutBesideRunning(t)
 	must(t, m.Clear(nil))
-	if exists(filepath.Join(m.root(), "1")) {
+	if exists(filepath.Join(m.root(), uid.N(1).String())) {
 		t.Fatal("the segments of a session whose encoder ran out survived a clear")
 	}
-	if !exists(filepath.Join(m.root(), "2")) {
+	if !exists(filepath.Join(m.root(), uid.N(2).String())) {
 		t.Fatal("clearing took a running encoder's segments")
 	}
 }
@@ -388,7 +389,7 @@ func tinyStream(t *testing.T) Stream {
 	}
 	j := convertJob(clip)
 	j.Rung = playback.Rung{Width: 160, Height: 90, Bitrate: 100e3}
-	return Stream{SessionID: 1, Key: "0-0", Job: j}
+	return Stream{SessionID: uid.N(1), Key: "0-0", Job: j}
 }
 
 // A playing session holds only the segments near its playhead, so a long
@@ -489,12 +490,12 @@ func TestIdleEncoderYieldsItsSlot(t *testing.T) {
 	// A fast host encodes the whole clip before the pause; a segment that
 	// is on disk is served with no encoder.
 	_ = os.Remove(filepath.Join(filepath.Dir(first), SegmentName(10)))
-	must(t, m.Acquire(2))
+	must(t, m.Acquire(uid.N(2)))
 	if _, err := m.Segment(ctx, st, 10); !errors.Is(err, ErrBusy) {
 		t.Fatalf("resuming with no slot free: %v", err)
 	}
-	m.Release(2)
-	if _, err := m.Segment(ctx, st, 10); err != nil || !slices.Equal(m.Transcoding(), []int64{st.SessionID}) {
+	m.Release(uid.N(2))
+	if _, err := m.Segment(ctx, st, 10); err != nil || !slices.Equal(m.Transcoding(), []uid.ID{st.SessionID}) {
 		t.Fatalf("resuming: %v, slots %v", err, m.Transcoding())
 	}
 }
@@ -519,17 +520,17 @@ func TestBusyIsAnEncoderAtWork(t *testing.T) {
 			t.Fatal("paused ahead of its player, still busy")
 		}
 	}
-	if m.Running() != 1 || !slices.Equal(m.Transcoding(), []int64{st.SessionID}) {
+	if m.Running() != 1 || !slices.Equal(m.Transcoding(), []uid.ID{st.SessionID}) {
 		t.Fatalf("running %d, slots %v", m.Running(), m.Transcoding())
 	}
 	// A stand-in running encoder, gone again before Close could stop it.
-	must(t, m.Acquire(2))
+	must(t, m.Acquire(uid.N(2)))
 	m.mu.Lock()
-	m.encoders[2] = &encoder{done: make(chan struct{})}
+	m.encoders[uid.N(2)] = &encoder{done: make(chan struct{})}
 	m.mu.Unlock()
 	busy := m.Busy()
 	m.mu.Lock()
-	delete(m.encoders, 2)
+	delete(m.encoders, uid.N(2))
 	m.mu.Unlock()
 	if !busy {
 		t.Fatal("an encoder running unpaused is busy")
@@ -543,12 +544,13 @@ func TestAnEncoderThatRanOutFreesItsSlot(t *testing.T) {
 	m := New(Config{Root: t.TempDir(), Ahead: 1000})
 	defer m.Close()
 	ctx := context.Background()
-	must(t, m.Acquire(1))
-	if m.Rest(1) {
+	must(t, m.Acquire(uid.N(1)))
+	if m.Rest(uid.N(1)) {
 		t.Fatal("a session that has not encoded keeps its slot")
 	}
 	var first string
-	for id := int64(1); id <= 3; id++ {
+	for n := 1; n <= 3; n++ {
+		id := uid.N(n)
 		st.SessionID = id
 		must(t, m.Acquire(id))
 		var err error
@@ -560,13 +562,13 @@ func TestAnEncoderThatRanOutFreesItsSlot(t *testing.T) {
 			t.Fatalf("running %d, slots %v", m.Running(), m.Transcoding())
 		}
 	}
-	must(t, m.Acquire(4))
+	must(t, m.Acquire(uid.N(4)))
 	if !exists(first) {
 		t.Fatal("the finished session's segments are gone")
 	}
 	_ = os.Remove(filepath.Join(filepath.Dir(first), SegmentName(10)))
-	must(t, m.Acquire(5))
-	must(t, m.Acquire(6))
+	must(t, m.Acquire(uid.N(5)))
+	must(t, m.Acquire(uid.N(6)))
 	if _, err := m.Segment(ctx, st, 10); !errors.Is(err, ErrBusy) {
 		t.Fatalf("encoding again with no slot free: %v", err)
 	}
@@ -580,12 +582,12 @@ func TestAnEncoderConvertingVideoHoldsASlot(t *testing.T) {
 	m := New(Config{Root: t.TempDir(), MaxVideo: 1})
 	defer m.Close()
 	ctx := context.Background()
-	must(t, m.Acquire(2))
+	must(t, m.Acquire(uid.N(2)))
 	if _, err := m.Segment(ctx, st, 0); !errors.Is(err, ErrBusy) {
 		t.Fatalf("a transcode past the limit: %v", err)
 	}
-	m.Release(2)
-	if _, err := m.Segment(ctx, st, 0); err != nil || !slices.Equal(m.Transcoding(), []int64{st.SessionID}) {
+	m.Release(uid.N(2))
+	if _, err := m.Segment(ctx, st, 0); err != nil || !slices.Equal(m.Transcoding(), []uid.ID{st.SessionID}) {
 		t.Fatalf("%v, slots %v", err, m.Transcoding())
 	}
 	cp := st
@@ -600,7 +602,7 @@ func TestAnEncoderConvertingVideoHoldsASlot(t *testing.T) {
 func TestKillOrphansSparesOtherCaches(t *testing.T) {
 	base := t.TempDir()
 	stopped := func(root string) *exec.Cmd {
-		out := filepath.Join(root, "1", "0-0", "encoder.m3u8")
+		out := filepath.Join(root, uid.N(1).String(), "0-0", "encoder.m3u8")
 		must(t, os.MkdirAll(filepath.Dir(out), 0o750))
 		must(t, os.WriteFile(out, nil, 0o600))
 		cmd := exec.Command("tail", "-f", out) //nolint:gosec // temp path
@@ -627,7 +629,7 @@ func TestKillOrphansSparesOtherCaches(t *testing.T) {
 func TestSidecarCache(t *testing.T) {
 	file := fixture(t, "hdr10-main10.mkv")
 	m := New(Config{Root: t.TempDir()})
-	p, err := m.Sidecar(context.Background(), 5, file, 4, nil)
+	p, err := m.Sidecar(context.Background(), uid.N(5), file, 4, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -645,9 +647,9 @@ func TestSidecarIsSharedAndOutlivesItsCaller(t *testing.T) {
 	short, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	gaveUp := make(chan error, 1)
-	go func() { _, err := m.Sidecar(short, 5, file, 0, nil); gaveUp <- err }()
+	go func() { _, err := m.Sidecar(short, uid.N(5), file, 0, nil); gaveUp <- err }()
 	time.Sleep(20 * time.Millisecond)
-	if _, err := m.Sidecar(context.Background(), 5, file, 0, nil); err != nil {
+	if _, err := m.Sidecar(context.Background(), uid.N(5), file, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := <-gaveUp; !errors.Is(err, context.DeadlineExceeded) {
@@ -684,7 +686,7 @@ func TestSidecarExtractsEveryTextTrackInOneRead(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := range texts {
 		wg.Go(func() {
-			p, err := m.Sidecar(context.Background(), 5, file, i, subs)
+			p, err := m.Sidecar(context.Background(), uid.N(5), file, i, subs)
 			if err != nil {
 				t.Error(err)
 			}
@@ -716,20 +718,20 @@ func TestSidecarTrackThatFailsFailsOnlyItself(t *testing.T) {
 	var wg sync.WaitGroup
 	var goodPath string
 	var goodErr, badErr error
-	wg.Go(func() { goodPath, goodErr = m.Sidecar(context.Background(), 5, file, good, tracks) })
-	wg.Go(func() { _, badErr = m.Sidecar(context.Background(), 5, file, bad, tracks) })
+	wg.Go(func() { goodPath, goodErr = m.Sidecar(context.Background(), uid.N(5), file, good, tracks) })
+	wg.Go(func() { _, badErr = m.Sidecar(context.Background(), uid.N(5), file, bad, tracks) })
 	wg.Wait()
 	if goodErr != nil {
 		t.Fatalf("the good track: %v", goodErr)
 	}
-	if b, _ := os.ReadFile(goodPath); !strings.HasPrefix(filepath.Base(goodPath), "5-4-") || !strings.HasPrefix(string(b), "WEBVTT") || !strings.Contains(string(b), "-->") { //nolint:gosec // test temp path
+	if b, _ := os.ReadFile(goodPath); !strings.HasPrefix(filepath.Base(goodPath), uid.N(5).String()+"-4-") || !strings.HasPrefix(string(b), "WEBVTT") || !strings.Contains(string(b), "-->") { //nolint:gosec // test temp path
 		t.Fatalf("the good track: %s %q", goodPath, b)
 	}
 	if !errors.Is(badErr, ErrEncoder) {
 		t.Fatalf("the bad track: %v", badErr)
 	}
 	n := runs(t, count)
-	if p, err := m.Sidecar(context.Background(), 5, file, good, tracks); err != nil || p != goodPath || runs(t, count) != n {
+	if p, err := m.Sidecar(context.Background(), uid.N(5), file, good, tracks); err != nil || p != goodPath || runs(t, count) != n {
 		t.Fatalf("asked again: %q %v, %d reads after %d", p, err, runs(t, count), n)
 	}
 	if left, _ := filepath.Glob(filepath.Join(root, "sidecars", "*tmp*")); len(left) > 0 {
@@ -749,7 +751,7 @@ func TestSidecarFollowsAReplacedFile(t *testing.T) {
 		must(t, os.WriteFile(file, []byte("1\n00:00:00,500 --> 00:00:02,000\n"+text+"\n"), 0o600))
 		at := time.Now().Add(time.Duration(i) * time.Hour)
 		must(t, os.Chtimes(file, at, at))
-		p, err := m.Sidecar(context.Background(), 5, file, 0, nil)
+		p, err := m.Sidecar(context.Background(), uid.N(5), file, 0, nil)
 		must(t, err)
 		if b, _ := os.ReadFile(p); !strings.Contains(string(b), text) { //nolint:gosec // test temp path
 			t.Fatalf("got %q, want %q", b, text)
@@ -767,7 +769,7 @@ func TestFailedEncoderLeavesNoPartialSegment(t *testing.T) {
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	m := New(Config{Root: t.TempDir()})
 	defer m.Close()
-	e, err := m.start(Stream{SessionID: 1, Key: "0-0", Job: convertJob("/any.mkv")}, 0)
+	e, err := m.start(Stream{SessionID: uid.N(1), Key: "0-0", Job: convertJob("/any.mkv")}, 0)
 	must(t, err)
 	<-e.done
 	if n := produced(e.dir); n != 1 {
@@ -787,7 +789,7 @@ func TestInitOutlastsAnEncoderThatExitedWithoutIt(t *testing.T) {
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	m := New(Config{Root: t.TempDir()})
 	defer m.Close()
-	if p, err := m.Init(context.Background(), Stream{SessionID: 1, Key: "0-0", Job: convertJob("/any.mkv")}, 0); err != nil || !exists(p) {
+	if p, err := m.Init(context.Background(), Stream{SessionID: uid.N(1), Key: "0-0", Job: convertJob("/any.mkv")}, 0); err != nil || !exists(p) {
 		t.Fatalf("%q %v", p, err)
 	}
 }
@@ -802,7 +804,7 @@ func TestSidecarExtractionHasATimeLimit(t *testing.T) {
 	sidecarTimeout = 200 * time.Millisecond
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if _, err := New(Config{Root: t.TempDir()}).Sidecar(ctx, 5, file, 0, nil); !errors.Is(err, ErrEncoder) {
+	if _, err := New(Config{Root: t.TempDir()}).Sidecar(ctx, uid.N(5), file, 0, nil); !errors.Is(err, ErrEncoder) {
 		t.Fatalf("got %v", err)
 	}
 }
@@ -819,12 +821,13 @@ func TestSidecarRemovesItsFilesStaleOnes(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "sidecars")
 	must(t, os.MkdirAll(dir, 0o750))
-	current := fmt.Sprintf("5-3-%d.vtt", info.ModTime().UnixNano())
-	stale, kept := []string{"5-0.vtt", "5-0-1.vtt", "5-3-1.vtt"}, []string{"55-0.vtt", "6-0-1.vtt", current}
+	five, other := uid.N(5).String(), uid.N(6).String()
+	current := fmt.Sprintf("%s-3-%d.vtt", five, info.ModTime().UnixNano())
+	stale, kept := []string{five + "-0.vtt", five + "-0-1.vtt", five + "-3-1.vtt"}, []string{other + "-0.vtt", other + "-0-1.vtt", current}
 	for _, n := range append(stale, kept...) {
 		must(t, os.WriteFile(filepath.Join(dir, n), []byte("WEBVTT\n"), 0o600))
 	}
-	p, err := New(Config{Root: root}).Sidecar(context.Background(), 5, file, 0, nil)
+	p, err := New(Config{Root: root}).Sidecar(context.Background(), uid.N(5), file, 0, nil)
 	must(t, err)
 	for _, n := range stale {
 		if exists(filepath.Join(dir, n)) {
@@ -840,7 +843,7 @@ func TestSidecarRemovesItsFilesStaleOnes(t *testing.T) {
 
 func TestClearKeepsActiveSessions(t *testing.T) {
 	root := t.TempDir()
-	for _, p := range []string{"7/0-0/0.m4s", "8/0-0/0.m4s", "sidecars/3-2.vtt"} {
+	for _, p := range []string{uid.N(7).String() + "/0-0/0.m4s", uid.N(8).String() + "/0-0/0.m4s", "sidecars/" + uid.N(3).String() + "-2.vtt"} {
 		_ = os.MkdirAll(filepath.Dir(filepath.Join(root, p)), 0o750)
 		_ = os.WriteFile(filepath.Join(root, p), make([]byte, 1000), 0o600)
 	}
@@ -848,10 +851,10 @@ func TestClearKeepsActiveSessions(t *testing.T) {
 	if got := m.Usage(); got != 3000 {
 		t.Fatalf("usage %d", got)
 	}
-	if err := m.Clear(map[int64]bool{8: true}); err != nil {
+	if err := m.Clear(map[uid.ID]bool{uid.N(8): true}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(root, "8", "0-0", "0.m4s")); err != nil {
+	if _, err := os.Stat(filepath.Join(root, uid.N(8).String(), "0-0", "0.m4s")); err != nil {
 		t.Fatal("an active session keeps its segments")
 	}
 	if got := m.Usage(); got != 1000 {
@@ -920,7 +923,7 @@ func TestRungSwitchOneTimeline(t *testing.T) {
 				j := convertJob(clip)
 				j.Entry.TS, j.Rung = ts, r
 				j.Video.Width, j.Video.Height = ptr(640), ptr(360)
-				streams = append(streams, Stream{SessionID: 1, Key: fmt.Sprintf("0-%d", i), Job: j})
+				streams = append(streams, Stream{SessionID: uid.N(1), Key: fmt.Sprintf("0-%d", i), Job: j})
 			}
 			playlist := Playlist(Durations(nil, 120_000), ts)
 			var zero float64
@@ -967,7 +970,7 @@ func TestCopiedTSSegmentsMatchAcrossRuns(t *testing.T) {
 		Video: &mediafile.Track{StreamIndex: 0, Kind: mediafile.Video, Codec: "h264"}, Audio: &mediafile.Track{StreamIndex: 1, Kind: mediafile.Audio, Codec: "aac"}}
 	starts := map[int]float64{}
 	for run, from := range []int{0, 2, 1} {
-		st := Stream{SessionID: int64(run + 1), Key: "0-0", Job: job}
+		st := Stream{SessionID: uid.N(run + 1), Key: "0-0", Job: job}
 		for n := from; n < len(b); n++ {
 			p, err := m.Segment(ctx, st, n)
 			must(t, err)
@@ -994,7 +997,7 @@ func TestSupersededEncoderIsNoFailure(t *testing.T) {
 	clip := longClip(t)
 	m := New(Config{Root: t.TempDir()})
 	defer m.Close()
-	a := Stream{SessionID: 1, Key: "0-0", Job: convertJob(clip)}
+	a := Stream{SessionID: uid.N(1), Key: "0-0", Job: convertJob(clip)}
 	b := a
 	b.Key = "0-1"
 	e, err := m.start(a, 0)
@@ -1092,11 +1095,11 @@ func TestStreamAheadPausesFartherAndRestartsAsNear(t *testing.T) {
 	m := New(Config{Root: t.TempDir(), Ahead: 1, Reach: 1})
 	defer m.Close()
 	ctx := context.Background()
-	st := Stream{SessionID: 1, Key: "0-0", Ahead: 8, Job: convertJob(clip)}
+	st := Stream{SessionID: uid.N(1), Key: "0-0", Ahead: 8, Job: convertJob(clip)}
 	p, err := m.Segment(ctx, st, 0)
 	must(t, err)
 	dir := filepath.Dir(p)
-	e := m.encoders[1]
+	e := m.encoders[uid.N(1)]
 	paused := func() bool {
 		e.mu.Lock()
 		defer e.mu.Unlock()
@@ -1199,25 +1202,25 @@ func TestTrimmingFollowsTheReportedPlayhead(t *testing.T) {
 // the sessions holding slots are under it.
 func TestLoweringTheTranscodeLimitKeepsRunningTranscodes(t *testing.T) {
 	m := New(Config{Root: t.TempDir(), MaxVideo: 3})
-	for id := int64(1); id <= 3; id++ {
-		if err := m.Acquire(id); err != nil {
+	for n := 1; n <= 3; n++ {
+		if err := m.Acquire(uid.N(n)); err != nil {
 			t.Fatal(err)
 		}
 	}
 	m.SetLimits(Limits{CacheCap: 20_000_000_000, MaxVideo: 1})
-	if m.Limits().MaxVideo != 1 || !slices.Equal(m.Transcoding(), []int64{1, 2, 3}) {
+	if m.Limits().MaxVideo != 1 || !slices.Equal(m.Transcoding(), []uid.ID{uid.N(1), uid.N(2), uid.N(3)}) {
 		t.Fatalf("%+v %v", m.Limits(), m.Transcoding())
 	}
-	if err := m.Acquire(2); err != nil {
+	if err := m.Acquire(uid.N(2)); err != nil {
 		t.Fatal("a session keeps the slot it holds")
 	}
-	m.Release(1)
-	if err := m.Acquire(4); !errors.Is(err, ErrBusy) {
+	m.Release(uid.N(1))
+	if err := m.Acquire(uid.N(4)); !errors.Is(err, ErrBusy) {
 		t.Fatalf("two running at a limit of one: %v", err)
 	}
-	m.Release(2)
-	m.Release(3)
-	if err := m.Acquire(4); err != nil {
+	m.Release(uid.N(2))
+	m.Release(uid.N(3))
+	if err := m.Acquire(uid.N(4)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -1225,14 +1228,14 @@ func TestLoweringTheTranscodeLimitKeepsRunningTranscodes(t *testing.T) {
 // A higher transcode limit lets the next request that was refused start.
 func TestRaisingTheTranscodeLimitLetsAWaitingTranscodeStart(t *testing.T) {
 	m := New(Config{Root: t.TempDir(), MaxVideo: 1})
-	if err := m.Acquire(1); err != nil {
+	if err := m.Acquire(uid.N(1)); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Acquire(2); !errors.Is(err, ErrBusy) {
+	if err := m.Acquire(uid.N(2)); !errors.Is(err, ErrBusy) {
 		t.Fatal(err)
 	}
 	m.SetLimits(Limits{CacheCap: 20_000_000_000, MaxVideo: 2})
-	if err := m.Acquire(2); err != nil {
+	if err := m.Acquire(uid.N(2)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -1240,21 +1243,21 @@ func TestRaisingTheTranscodeLimitLetsAWaitingTranscodeStart(t *testing.T) {
 // A lower cache cap prunes idle sessions at once.
 func TestLoweringTheCacheCapPrunes(t *testing.T) {
 	root := t.TempDir()
-	for _, d := range []string{"7", "8"} {
+	for _, d := range []string{uid.N(7).String(), uid.N(8).String()} {
 		_ = os.MkdirAll(filepath.Join(root, d, "0-0"), 0o750)
 		_ = os.WriteFile(filepath.Join(root, d, "0-0", "0.m4s"), make([]byte, 1000), 0o600)
 	}
 	old := time.Now().Add(-time.Hour)
-	_ = os.Chtimes(filepath.Join(root, "7"), old, old)
+	_ = os.Chtimes(filepath.Join(root, uid.N(7).String()), old, old)
 	m := New(Config{Root: root})
 	m.SetLimits(Limits{CacheCap: 1500, MaxVideo: 3})
 	if m.Limits().CacheCap != 1500 {
 		t.Fatalf("%+v", m.Limits())
 	}
-	if _, err := os.Stat(filepath.Join(root, "7")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(root, uid.N(7).String())); !os.IsNotExist(err) {
 		t.Fatal("the oldest idle session goes")
 	}
-	if _, err := os.Stat(filepath.Join(root, "8")); err != nil {
+	if _, err := os.Stat(filepath.Join(root, uid.N(8).String())); err != nil {
 		t.Fatal("pruning stops once under the cap")
 	}
 }

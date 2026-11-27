@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/api"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 func TestAccountsCRUD(t *testing.T) {
@@ -62,11 +63,11 @@ func TestRevokingAnAccountRevokesItsDevices(t *testing.T) {
 	for _, st := range []api.PlaybackStream{own, acting} {
 		e.signedOutOf(st)
 	}
-	for _, d := range []int64{e.plain.deviceID, cy.Me.Device.Id} {
+	for _, d := range []uid.ID{e.plain.deviceID, cy.Me.Device.Id} {
 		var got api.Device
 		e.expect(200, "GET", "/devices/"+itoa(d), e.admin.token, nil, &got)
 		if got.RevokedAt == nil {
-			t.Fatalf("device %d not revoked", d)
+			t.Fatalf("device %v not revoked", d)
 		}
 	}
 
@@ -100,10 +101,10 @@ func TestRevokingAKidEndsTheirPlayback(t *testing.T) {
 func (e *env) signedOutOf(st api.PlaybackStream) {
 	e.t.Helper()
 	if _, _, live := e.svc.Playback.Live(st.SessionId); live {
-		e.t.Fatalf("session %d is still playing", st.SessionId)
+		e.t.Fatalf("session %s is still playing", st.SessionId)
 	}
 	if res, _ := e.get(st.StreamUrl); res.StatusCode == 200 {
-		e.t.Fatalf("session %d still streams", st.SessionId)
+		e.t.Fatalf("session %s still streams", st.SessionId)
 	}
 }
 
@@ -116,7 +117,7 @@ func TestHouseholdsCRUD(t *testing.T) {
 	e.expect(409, "POST", "/households", e.admin.token, map[string]any{"name": "Second", "adultId": adult.Id}, nil)
 	cy := e.householdAdult(e.plain, "Cy", "cy@example.test")
 	e.expect(409, "POST", "/households", e.admin.token, map[string]any{"name": "Cy's", "adultId": cy.Me.Account.Id}, nil)
-	e.expect(400, "POST", "/households", e.admin.token, map[string]any{"name": "Ghost", "adultId": 999}, nil)
+	e.expect(400, "POST", "/households", e.admin.token, map[string]any{"name": "Ghost", "adultId": uid.N(999)}, nil)
 	var page api.HouseholdPage
 	e.expect(200, "GET", "/households", e.admin.token, nil, &page)
 	if len(page.Items) != 3 {
@@ -189,7 +190,7 @@ func TestJoinCodesCRUD(t *testing.T) {
 	}
 	e.expect(201, "POST", "/join-codes", e.admin.token, map[string]any{"accountId": a.Id, "expiresInDays": 30}, nil)
 	e.expect(400, "POST", "/join-codes", e.admin.token, map[string]any{"accountId": a.Id, "expiresInDays": 3}, nil)
-	e.expect(404, "POST", "/join-codes", e.admin.token, map[string]any{"accountId": 999}, nil)
+	e.expect(404, "POST", "/join-codes", e.admin.token, map[string]any{"accountId": uid.N(999)}, nil)
 	e.expect(409, "POST", "/join-codes", e.admin.token, map[string]any{"accountId": e.plain.account.ID}, nil)
 
 	var page api.JoinCodePage
@@ -203,7 +204,7 @@ func TestJoinCodesCRUD(t *testing.T) {
 	if j.RevokedAt == nil {
 		t.Fatal("revoke must keep the record and stamp it")
 	}
-	e.expect(404, "GET", "/join-codes/999", e.admin.token, nil, nil)
+	e.expect(404, "GET", "/join-codes/"+itoa(uid.N(999)), e.admin.token, nil, nil)
 }
 
 func TestTasksCRUDAndRuns(t *testing.T) {
@@ -230,7 +231,7 @@ func TestTasksCRUDAndRuns(t *testing.T) {
 	if len(runs.Items) != 1 || runs.Items[0].Summary == nil || *runs.Items[0].Summary != "3 movies added" {
 		t.Fatalf("%+v", runs)
 	}
-	e.expect(404, "GET", "/tasks/999/runs", e.admin.token, nil, nil)
+	e.expect(404, "GET", "/tasks/"+itoa(uid.N(999))+"/runs", e.admin.token, nil, nil)
 
 	var page api.TaskPage
 	e.expect(200, "GET", "/tasks", e.admin.token, nil, &page)

@@ -10,6 +10,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db/dbtest"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/httpapi"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/service"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // bareEnv is a server over an empty database, before first run.
@@ -127,7 +128,7 @@ func TestJoinCodeExpiryAndRevoke(t *testing.T) {
 	row, err := e.svc.JoinCodes.Repo().Get(j2.Id)
 	must(t, err)
 	row.ExpiresAt = time.Now().UTC().Add(-time.Minute)
-	must(t, e.svc.JoinCodes.Repo().Update(row))
+	must(t, e.svc.JoinCodes.Repo().Update(row, nil))
 	e.expect(404, "GET", j2.Link, "", nil, nil)
 	e.expect(404, "POST", j2.Link, "", device("name", "Cy", "password", "longenough"), nil)
 }
@@ -148,7 +149,7 @@ func TestCeilingSuggestionAndDefaults(t *testing.T) {
 	}
 }
 
-func (e *env) unlock(u user, id int64, pin string) (int, []byte) {
+func (e *env) unlock(u user, id uid.ID, pin string) (int, []byte) {
 	e.t.Helper()
 	body := map[string]any{}
 	if pin != "" {
@@ -323,11 +324,11 @@ func TestTwoHouseholdsAreIsolated(t *testing.T) {
 	ka, kb := e.kid(e.admin, "Ann"), e.kid(e.plain, "Ben")
 	for _, c := range []struct {
 		u      user
-		mine   []int64
-		theirs []int64
+		mine   []uid.ID
+		theirs []uid.ID
 	}{
-		{e.admin, []int64{e.admin.account.ID, ka.Id}, []int64{e.plain.account.ID, kb.Id}},
-		{e.plain, []int64{e.plain.account.ID, kb.Id}, []int64{e.admin.account.ID, ka.Id}},
+		{e.admin, []uid.ID{e.admin.account.ID, ka.Id}, []uid.ID{e.plain.account.ID, kb.Id}},
+		{e.plain, []uid.ID{e.plain.account.ID, kb.Id}, []uid.ID{e.admin.account.ID, ka.Id}},
 	} {
 		var me api.Me
 		e.expect(200, "GET", "/me", c.u.token, nil, &me)
@@ -362,15 +363,15 @@ func TestTwoHouseholdsAreIsolated(t *testing.T) {
 // catalog is a movies library with one film per rating plus an unrated one,
 // a kids' show and an adult show with an episode each, and a music library.
 type catalog struct {
-	g, pg, r, unrated, kidShow, kidEp, adultShow, adultEp, music int64
+	g, pg, r, unrated, kidShow, kidEp, adultShow, adultEp, music uid.ID
 }
 
-func (e *env) rate(id int64, rating string) {
+func (e *env) rate(id uid.ID, rating string) {
 	e.t.Helper()
 	e.expect(200, "PUT", "/items/"+itoa(id)+"/metadata", e.admin.token, map[string]any{"status": "matched", "contentRating": rating}, nil)
 }
 
-func (e *env) show(lib int64, title, rating string) (show, ep int64) {
+func (e *env) show(lib uid.ID, title, rating string) (show, ep uid.ID) {
 	e.t.Helper()
 	var s, se, ep1 api.Item
 	e.expect(201, "POST", "/items", e.admin.token, map[string]any{"libraryId": lib, "kind": "show", "parsedTitle": title}, &s)
@@ -394,8 +395,8 @@ func (e *env) catalog() catalog {
 	return c
 }
 
-func ids(items []api.Item) map[int64]bool {
-	out := map[int64]bool{}
+func ids(items []api.Item) map[uid.ID]bool {
+	out := map[uid.ID]bool{}
 	for _, it := range items {
 		out[it.Id] = true
 	}
@@ -408,7 +409,7 @@ func TestKidCeilingsAtTheAPIBoundary(t *testing.T) {
 	e := newEnv(t)
 	c := e.catalog()
 	var f api.MediaFile
-	e.expect(201, "POST", "/media-files", e.admin.token, map[string]any{"itemId": c.r, "path": e.onDisk("/films/r.mp4"), "sizeBytes": 1, "modifiedAt": "2026-01-01T00:00:00Z"}, &f)
+	e.expect(201, "POST", "/media-files", e.admin.token, map[string]any{"itemId": c.r, "path": e.onDisk("/films/r.mp4"), "sizeBytes": 1, "fileModifiedAt": "2026-01-01T00:00:00Z"}, &f)
 	k := e.kid(e.plain, "Kid") // PG and TV-Y7
 
 	var page api.ItemPage
@@ -422,14 +423,14 @@ func TestKidCeilingsAtTheAPIBoundary(t *testing.T) {
 
 	e.expect(200, "GET", "/items?limit=200", e.plain.token, nil, &page)
 	got := ids(page.Items)
-	for _, id := range []int64{c.g, c.pg, c.kidShow, c.kidEp} {
+	for _, id := range []uid.ID{c.g, c.pg, c.kidShow, c.kidEp} {
 		if !got[id] {
-			t.Errorf("item %d missing for the kid", id)
+			t.Errorf("item %v missing for the kid", id)
 		}
 	}
-	for _, id := range []int64{c.r, c.unrated, c.adultShow, c.adultEp} {
+	for _, id := range []uid.ID{c.r, c.unrated, c.adultShow, c.adultEp} {
 		if got[id] {
-			t.Errorf("item %d above the ceiling was listed", id)
+			t.Errorf("item %v above the ceiling was listed", id)
 		}
 		e.expect(404, "GET", "/items/"+itoa(id), e.plain.token, nil, nil)
 	}
@@ -498,7 +499,7 @@ func TestAdminSetsATemporaryPassword(t *testing.T) {
 	e.expect(404, "POST", "/join/ZZZZ-ZZZZ", "", device("name", "X", "password", long["password"]), nil)
 	e.expect(409, "POST", "/setup", "", map[string]any{"serverName": "S", "name": "X", "email": "x@example.test",
 		"password": long["password"], "deviceName": "Mac", "platform": "macos"}, nil)
-	e.expect(404, "PUT", "/accounts/999/password", e.admin.token, temp, nil)
+	e.expect(404, "PUT", "/accounts/"+itoa(uid.N(999))+"/password", e.admin.token, temp, nil)
 	e.expect(409, "PUT", "/accounts/"+itoa(e.kid(e.plain, "Kid").Id)+"/password", e.admin.token, temp, nil)
 	pending, _ := e.addAdult("pending@example.test", 0)
 	e.expect(409, "PUT", "/accounts/"+itoa(pending.Id)+"/password", e.admin.token, temp, nil)
@@ -524,7 +525,7 @@ func TestAdminSetsATemporaryPassword(t *testing.T) {
 
 func TestChangeOwnPassword(t *testing.T) {
 	e := newEnv(t)
-	_, err := e.svc.Auth.SetPassword(e.plain.account, "first password", e.plain.deviceID)
+	_, err := e.svc.Auth.SetPassword(e.plain.account, "first password", &e.plain.deviceID, nil)
 	must(t, err)
 
 	change := func(current, next string) map[string]any {

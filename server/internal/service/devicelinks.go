@@ -12,6 +12,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/device"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/devicelink"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // Device link limits. A code lives LinkLife and works once. One address may
@@ -57,12 +58,12 @@ type DeviceLinkService struct {
 	Now func() time.Time
 	// mu guards misses and serializes the per-address check with its insert.
 	mu     sync.Mutex
-	misses map[int64][]time.Time // by adult, oldest first, within the window
+	misses map[uid.ID][]time.Time // by adult, oldest first, within the window
 }
 
 // NewDeviceLinkService returns a DeviceLinkService over d.
 func NewDeviceLinkService(d *sql.DB) *DeviceLinkService {
-	return &DeviceLinkService{d: d, repo: devicelink.New(d), Now: time.Now, misses: map[int64][]time.Time{}}
+	return &DeviceLinkService{d: d, repo: devicelink.New(d), Now: time.Now, misses: map[uid.ID][]time.Time{}}
 }
 
 // Repo exposes the repository.
@@ -116,7 +117,7 @@ func (s *DeviceLinkService) Create(name, platform, source string, local bool) (*
 
 // ByToken returns the link behind id when token is its poll token and it has
 // not yet handed its device over, else db.ErrNotFound.
-func (s *DeviceLinkService) ByToken(id int64, token string) (*devicelink.Link, error) {
+func (s *DeviceLinkService) ByToken(id uid.ID, token string) (*devicelink.Link, error) {
 	l, err := s.repo.Get(id)
 	if err != nil {
 		return nil, err
@@ -131,7 +132,7 @@ func (s *DeviceLinkService) ByToken(id int64, token string) (*devicelink.Link, e
 // the device in as the approving adult, in the household it was approved
 // in while they are still in it, and returns the once-only token; every
 // later poll is db.ErrNotFound.
-func (s *DeviceLinkService) Poll(id int64, token string) (*devicelink.Link, *Signed, error) {
+func (s *DeviceLinkService) Poll(id uid.ID, token string) (*devicelink.Link, *Signed, error) {
 	l, err := s.ByToken(id, token)
 	if err != nil {
 		return nil, nil, err
@@ -176,7 +177,7 @@ func (s *DeviceLinkService) Preview(adult *account.Account, code string) (*devic
 
 // Decide approves or denies a pending code as an adult on a device of a
 // household, into that household.
-func (s *DeviceLinkService) Decide(adult *account.Account, householdID int64, code string, approve bool) (*devicelink.Link, error) {
+func (s *DeviceLinkService) Decide(adult *account.Account, householdID uid.ID, code string, approve bool) (*devicelink.Link, error) {
 	status := devicelink.Denied
 	if approve {
 		status = devicelink.Approved
@@ -188,7 +189,7 @@ func (s *DeviceLinkService) Decide(adult *account.Account, householdID int64, co
 
 // guarded refuses an adult over the miss limit, else runs find and counts
 // db.ErrNotFound as a miss.
-func (s *DeviceLinkService) guarded(adultID int64, find func(time.Time) (*devicelink.Link, error)) (*devicelink.Link, error) {
+func (s *DeviceLinkService) guarded(adultID uid.ID, find func(time.Time) (*devicelink.Link, error)) (*devicelink.Link, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()

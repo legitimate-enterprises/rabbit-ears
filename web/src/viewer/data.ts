@@ -1,6 +1,7 @@
 // What the viewer knows about the library, read through the API as the active
 // profile. The server filters by the profile's ceilings; nothing here does.
 import type { Api, paths, Schemas } from "../api/client";
+import { tint } from "../api/uid";
 import { ApiError, ok, paged } from "../admin/api";
 
 export type Item = Schemas["Item"];
@@ -47,7 +48,7 @@ export async function items(
 }
 
 /** The profile's watch states, or only those under the show or season parentId names. */
-export async function watchStates(ctx: Ctx, parentId?: number): Promise<Map<number, WatchState>> {
+export async function watchStates(ctx: Ctx, parentId?: string): Promise<Map<string, WatchState>> {
   const id = ctx.profile.id;
   const all = await paged((offset) =>
     ok(
@@ -60,7 +61,7 @@ export async function watchStates(ctx: Ctx, parentId?: number): Promise<Map<numb
 }
 
 /** One item's state; undefined when the profile has none, which the API answers with a 404. */
-export async function watchState(ctx: Ctx, itemId: number): Promise<WatchState | undefined> {
+export async function watchState(ctx: Ctx, itemId: string): Promise<WatchState | undefined> {
   try {
     return await ok(
       ctx.api.GET("/profiles/{profileId}/watch-state/{itemId}", {
@@ -91,7 +92,7 @@ export const newest = async (ctx: Ctx, kind: "movie" | "show", n: number) =>
   (await ok(ctx.api.GET("/items", { params: { query: { kind, sort: "added", limit: n } } }))).items;
 
 /** The profile's progress through each show it sees, by show. */
-export async function showProgress(ctx: Ctx): Promise<Map<number, Schemas["ShowProgress"]>> {
+export async function showProgress(ctx: Ctx): Promise<Map<string, Schemas["ShowProgress"]>> {
   const all = await paged((offset) =>
     ok(
       ctx.api.GET("/profiles/{profileId}/show-progress", {
@@ -103,25 +104,25 @@ export async function showProgress(ctx: Ctx): Promise<Map<number, Schemas["ShowP
 }
 
 /** The movie, show, season or episode id names; undefined for one the profile cannot see or of another kind. */
-export const findItem = (ctx: Ctx, id: number): Promise<Item | undefined> =>
+export const findItem = (ctx: Ctx, id: string): Promise<Item | undefined> =>
   getItem(ctx, id).catch((e) => {
     if (e instanceof ApiError && e.status === 404) return undefined;
     throw e;
   });
 
 /** The item id names when it is of kind, else the error "<Kind> not found". */
-export async function itemOf(ctx: Ctx, id: number, kind: Item["kind"]): Promise<Item> {
+export async function itemOf(ctx: Ctx, id: string, kind: Item["kind"]): Promise<Item> {
   const i = await findItem(ctx, id);
   if (i?.kind !== kind) throw new Error(`${kind[0].toUpperCase()}${kind.slice(1)} not found`);
   return i;
 }
 
 /** A season's episodes, by number. */
-export const episodesOf = (ctx: Ctx, seasonId: number) =>
+export const episodesOf = (ctx: Ctx, seasonId: string) =>
   items(ctx.api, { kind: "episode", parentId: seasonId });
 
 /** A show's seasons, specials last, and each one's episodes. */
-export async function seasonsOf(ctx: Ctx, showId: number) {
+export async function seasonsOf(ctx: Ctx, showId: string) {
   const seasons = (await items(ctx.api, { kind: "season", parentId: showId })).sort(specialsLast);
   const eps = await Promise.all(seasons.map((s) => episodesOf(ctx, s.id)));
   return { seasons, episodes: new Map(seasons.map((s, i) => [s.id, eps[i]])) };
@@ -130,7 +131,7 @@ export async function seasonsOf(ctx: Ctx, showId: number) {
 // Seasons by number, specials (season 0) last.
 const specialsLast = (a: Item, b: Item) => (a.seasonNumber || 99) - (b.seasonNumber || 99);
 
-const getItem = (ctx: Ctx, itemId: number) =>
+const getItem = (ctx: Ctx, itemId: string) =>
   ok(ctx.api.GET("/items/{itemId}", { params: { path: { itemId } } }));
 
 /** An episode's show, read through its season. */
@@ -139,7 +140,7 @@ export async function showOf(ctx: Ctx, ep: Item): Promise<Item> {
 }
 
 /** What the server plays when itemId ends, from row index of the playlist if any; undefined for nothing. */
-export async function upNext(ctx: Ctx, itemId: number, playlistId?: number, index?: number) {
+export async function upNext(ctx: Ctx, itemId: string, playlistId?: string, index?: number) {
   const r = await ctx.api.GET("/profiles/{profileId}/up-next/{itemId}", {
     params: {
       path: { profileId: ctx.profile.id, itemId },
@@ -174,7 +175,7 @@ export const epCode = (i: Item) => `S${i.seasonNumber ?? 0} E${i.episodeNumber ?
 export const inProgress = (w?: WatchState) => !!w && w.positionMs > 0;
 
 /** The episode to play next: the one in progress, else the first unwatched after the latest played. */
-export function nextEpisode(eps: Item[], ws: Map<number, WatchState>): Item | undefined {
+export function nextEpisode(eps: Item[], ws: Map<string, WatchState>): Item | undefined {
   const lastPlayed = eps
     .map((e, i) => ({ i, w: ws.get(e.id) }))
     .filter((x) => x.w && (x.w.watched || inProgress(x.w)))
@@ -196,4 +197,4 @@ export const PALETTE: [hex: string, name: string][] = [
   ["#4A6B2E", "Olive"],
 ];
 /** A placeholder's color; a profile's is its own Account.color. */
-export const color = (id: number) => PALETTE[id % PALETTE.length][0];
+export const color = (id: string) => PALETTE[tint(id, PALETTE.length)][0];

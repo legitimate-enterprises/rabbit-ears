@@ -8,20 +8,23 @@ import (
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // State is one account's progress on one item.
 type State struct {
-	AccountID  int64
-	ItemID     int64
+	AccountID  uid.ID
+	ItemID     uid.ID
 	PositionMs int64
 	// EditionID is the edition PositionMs was reached in, nil for none;
 	// the position resumes only that edition.
-	EditionID    *int64
+	EditionID    *uid.ID
 	Watched      bool
 	PlayCount    int
 	LastPlayedAt *time.Time
-	UpdatedAt    time.Time
+	// ChangedAt is the instant of the last change, the client's for a
+	// change a client made: the later instant wins.
+	ChangedAt time.Time
 }
 
 // AutoWatched is the share of a file's duration a recorded playback
@@ -60,30 +63,27 @@ func (r *Repo) InTx(fn func(*Repo) error) error {
 	return db.InTx(r.d, func(d db.DBTX) error { return fn(New(d)) })
 }
 
-const cols = `account_id, item_id, position_ms, watched, play_count, last_played_at, updated_at, edition_id`
+const cols = `account_id, item_id, position_ms, watched, play_count, last_played_at, changed_at, edition_id`
 
 func scan(s db.Scanner) (*State, error) {
 	var v State
-	var last, edition sql.NullInt64
-	var updated int64
-	if err := s.Scan(&v.AccountID, &v.ItemID, &v.PositionMs, &v.Watched, &v.PlayCount, &last, &updated, &edition); err != nil {
+	var last sql.NullInt64
+	var changed int64
+	if err := s.Scan(&v.AccountID, &v.ItemID, &v.PositionMs, &v.Watched, &v.PlayCount, &last, &changed, &v.EditionID); err != nil {
 		return nil, db.Wrap(err)
 	}
-	if edition.Valid {
-		v.EditionID = &edition.Int64
-	}
-	v.LastPlayedAt, v.UpdatedAt = db.FromNullMs(last), db.FromMs(updated)
+	v.LastPlayedAt, v.ChangedAt = db.FromNullMs(last), db.FromMs(changed)
 	return &v, nil
 }
 
 // Save inserts or replaces the state for (AccountID, ItemID).
 func (r *Repo) Save(v *State) error {
-	v.UpdatedAt = time.Now().UTC()
+	v.ChangedAt = time.Now().UTC()
 	_, err := r.d.Exec(`INSERT INTO watch_state (`+cols+`) VALUES (?,?,?,?,?,?,?,?)
 		ON CONFLICT(account_id, item_id) DO UPDATE SET position_ms=excluded.position_ms, watched=excluded.watched,
-			play_count=excluded.play_count, last_played_at=excluded.last_played_at, updated_at=excluded.updated_at,
+			play_count=excluded.play_count, last_played_at=excluded.last_played_at, changed_at=excluded.changed_at,
 			edition_id=excluded.edition_id`,
-		v.AccountID, v.ItemID, v.PositionMs, v.Watched, v.PlayCount, db.NullMs(v.LastPlayedAt), db.Ms(v.UpdatedAt), v.EditionID)
+		v.AccountID, v.ItemID, v.PositionMs, v.Watched, v.PlayCount, db.NullMs(v.LastPlayedAt), db.Ms(v.ChangedAt), v.EditionID)
 	return db.Wrap(err)
 }
 
@@ -92,34 +92,34 @@ func (r *Repo) Save(v *State) error {
 func (r *Repo) SaveAt(v *State, at time.Time) (bool, error) {
 	res, err := r.d.Exec(`INSERT INTO watch_state (`+cols+`) VALUES (?,?,?,?,?,?,?,?)
 		ON CONFLICT(account_id, item_id) DO UPDATE SET position_ms=excluded.position_ms, watched=excluded.watched,
-			play_count=excluded.play_count, last_played_at=excluded.last_played_at, updated_at=excluded.updated_at,
+			play_count=excluded.play_count, last_played_at=excluded.last_played_at, changed_at=excluded.changed_at,
 			edition_id=excluded.edition_id
-		WHERE watch_state.updated_at <= excluded.updated_at`,
+		WHERE watch_state.changed_at <= excluded.changed_at`,
 		v.AccountID, v.ItemID, v.PositionMs, v.Watched, v.PlayCount, db.NullMs(v.LastPlayedAt), db.Ms(at), v.EditionID)
 	if err != nil {
 		return false, db.Wrap(err)
 	}
 	n, _ := res.RowsAffected()
 	if n > 0 {
-		v.UpdatedAt = at.UTC()
+		v.ChangedAt = at.UTC()
 	}
 	return n > 0, nil
 }
 
 // Get returns the state or db.ErrNotFound (never played).
-func (r *Repo) Get(accountID, itemID int64) (*State, error) {
+func (r *Repo) Get(accountID, itemID uid.ID) (*State, error) {
 	return scan(r.d.QueryRow(`SELECT `+cols+` FROM watch_state WHERE account_id = ? AND item_id = ?`, accountID, itemID))
 }
 
 // Delete forgets one item's state for an account.
-func (r *Repo) Delete(accountID, itemID int64) error {
+func (r *Repo) Delete(accountID, itemID uid.ID) error {
 	return db.ExecOne(r.d, `DELETE FROM watch_state WHERE account_id = ? AND item_id = ?`, accountID, itemID)
 }
 
 // DeleteAt forgets the state as of instant at, unless it changed later;
 // one never saved is db.ErrNotFound.
-func (r *Repo) DeleteAt(accountID, itemID int64, at time.Time) error {
-	res, err := r.d.Exec(`DELETE FROM watch_state WHERE account_id = ? AND item_id = ? AND updated_at <= ?`, accountID, itemID, db.Ms(at))
+func (r *Repo) DeleteAt(accountID, itemID uid.ID, at time.Time) error {
+	res, err := r.d.Exec(`DELETE FROM watch_state WHERE account_id = ? AND item_id = ? AND changed_at <= ?`, accountID, itemID, db.Ms(at))
 	if err != nil {
 		return db.Wrap(err)
 	}
@@ -133,15 +133,15 @@ func (r *Repo) DeleteAt(accountID, itemID int64, at time.Time) error {
 // RecordPlay counts one play of editionID (nil for none) that ended at
 // instant at. The count only adds and the rest goes to the later instant,
 // so plays and SaveAt commute.
-func (r *Repo) RecordPlay(accountID, itemID int64, editionID *int64, at time.Time) (*State, error) {
+func (r *Repo) RecordPlay(accountID, itemID uid.ID, editionID *uid.ID, at time.Time) (*State, error) {
 	_, err := r.d.Exec(`INSERT INTO watch_state (`+cols+`) VALUES (?1, ?2, 0, 1, 1, ?3, ?3, ?4)
 		ON CONFLICT (account_id, item_id) DO UPDATE SET
 			play_count = play_count + 1,
 			last_played_at = MAX(COALESCE(last_played_at, 0), excluded.last_played_at),
-			watched = CASE WHEN updated_at <= excluded.updated_at THEN 1 ELSE watched END,
-			position_ms = CASE WHEN updated_at <= excluded.updated_at THEN 0 ELSE position_ms END,
-			edition_id = CASE WHEN updated_at <= excluded.updated_at THEN excluded.edition_id ELSE edition_id END,
-			updated_at = MAX(updated_at, excluded.updated_at)`,
+			watched = CASE WHEN changed_at <= excluded.changed_at THEN 1 ELSE watched END,
+			position_ms = CASE WHEN changed_at <= excluded.changed_at THEN 0 ELSE position_ms END,
+			edition_id = CASE WHEN changed_at <= excluded.changed_at THEN excluded.edition_id ELSE edition_id END,
+			changed_at = MAX(changed_at, excluded.changed_at)`,
 		accountID, itemID, db.Ms(at), editionID)
 	if err != nil {
 		return nil, db.Wrap(err)
@@ -155,26 +155,26 @@ func (r *Repo) list(q string, args ...any) ([]*State, error) {
 }
 
 // List pages through every state of an account, most recently played first
-// and never-played last; a parentID other than 0 keeps the items under it,
-// its children and theirs.
-func (r *Repo) List(accountID, parentID int64, a item.Audience, limit, offset int) ([]*State, error) {
-	return r.list(`SELECT w.account_id, w.item_id, w.position_ms, w.watched, w.play_count, w.last_played_at, w.updated_at, w.edition_id
+// and never-played last; a parentID other than nil keeps the items under
+// it, its children and theirs.
+func (r *Repo) List(accountID uid.ID, parentID *uid.ID, a item.Audience, limit, offset int) ([]*State, error) {
+	return r.list(`SELECT w.account_id, w.item_id, w.position_ms, w.watched, w.play_count, w.last_played_at, w.changed_at, w.edition_id
 		FROM watch_state w JOIN item ON item.id = w.item_id WHERE w.account_id = ?1 AND `+item.VisibleWhere+`
-		AND (?2 = 0 OR item.parent_id = ?2 OR item.parent_id IN (SELECT p.id FROM item p WHERE p.parent_id = ?2))
-		ORDER BY w.last_played_at IS NULL, w.last_played_at DESC, w.updated_at DESC, w.item_id LIMIT ?4 OFFSET ?5`,
+		AND (?2 IS NULL OR item.parent_id = ?2 OR item.parent_id IN (SELECT p.id FROM item p WHERE p.parent_id = ?2))
+		ORDER BY w.last_played_at IS NULL, w.last_played_at DESC, w.changed_at DESC, w.item_id LIMIT ?4 OFFSET ?5`,
 		append([]any{accountID, parentID, nil, limit, offset}, a.Args()...)...)
 }
 
 // ShowProgress is an account's progress through one show, over the seasons
 // and episodes its audience sees.
 type ShowProgress struct {
-	ShowID        int64
+	ShowID        uid.ID
 	Seasons       int
 	Episodes      int
 	Unwatched     int
 	InProgress    bool
 	LastPlayedAt  *time.Time
-	NextEpisodeID *int64
+	NextEpisodeID *uid.ID
 }
 
 // showProgress pages the visible shows by title. Episodes are numbered in
@@ -220,18 +220,15 @@ ORDER BY sums.parsed_title COLLATE NOCASE, sums.show_id`
 
 // ShowProgress pages an account's progress through each show the audience
 // sees, by title, in a single query.
-func (r *Repo) ShowProgress(accountID int64, a item.Audience, limit, offset int) ([]*ShowProgress, error) {
+func (r *Repo) ShowProgress(accountID uid.ID, a item.Audience, limit, offset int) ([]*ShowProgress, error) {
 	rows, err := r.d.Query(showProgress, append([]any{accountID, nil, nil, limit, offset}, a.Args()...)...)
 	return db.Collect(rows, err, func(s db.Scanner) (*ShowProgress, error) {
 		var v ShowProgress
-		var at, next sql.NullInt64
-		if err := s.Scan(&v.ShowID, &v.Seasons, &v.Episodes, &v.Unwatched, &v.InProgress, &at, &next); err != nil {
+		var at sql.NullInt64
+		if err := s.Scan(&v.ShowID, &v.Seasons, &v.Episodes, &v.Unwatched, &v.InProgress, &at, &v.NextEpisodeID); err != nil {
 			return nil, db.Wrap(err)
 		}
 		v.LastPlayedAt = db.FromNullMs(at)
-		if next.Valid {
-			v.NextEpisodeID = &next.Int64
-		}
 		return &v, nil
 	})
 }

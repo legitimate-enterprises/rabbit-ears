@@ -14,6 +14,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/library"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/service"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/together"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // joinedPair is a Watch together two adults have joined, on a clock that
@@ -21,7 +22,7 @@ import (
 type joinedPair struct {
 	s           *service.WatchTogetherService
 	household   service.Where
-	id          int64
+	id          uid.ID
 	host, guest together.Member
 	now         *time.Time
 }
@@ -36,11 +37,11 @@ func newJoinedPair(t *testing.T, start time.Time) joinedPair {
 		}
 	}
 	heidi := &account.Account{Kind: account.Adult, Email: "h@example.test", Name: "Heidi"}
-	must(account.New(d).Create(heidi))
+	must(account.New(d).Create(heidi, nil))
 	h := &household.Household{Name: "Home", AdultID: heidi.ID}
-	must(household.New(d).Create(h))
+	must(household.New(d).Create(h, nil))
 	claire := &account.Account{Kind: account.Adult, Email: "c@example.test", Name: "Claire", HouseholdID: &h.ID}
-	must(account.New(d).Create(claire))
+	must(account.New(d).Create(claire, nil))
 	var members []together.Member
 	for i, a := range []*account.Account{heidi, claire} {
 		dev := &device.Device{TokenHash: "t" + a.Email, Name: []string{"TV", "Mac"}[i], Platform: "tvos", AccountID: a.ID, HouseholdID: h.ID}
@@ -48,14 +49,14 @@ func newJoinedPair(t *testing.T, start time.Time) joinedPair {
 		members = append(members, together.Member{AccountID: a.ID, DeviceID: dev.ID})
 	}
 	l := &library.Library{Name: "Movies", Kind: library.Movies}
-	must(library.New(d).Create(l))
+	must(library.New(d).Create(l, nil))
 	movie := &item.Item{LibraryID: l.ID, Kind: item.Movie, ParsedTitle: "Dune"}
 	must(item.New(d).Create(movie))
 
 	s := service.NewWatchTogetherService(together.New(d), item.New(d), account.New(d))
 	now := start
 	s.Now = func() time.Time { return now }
-	v, err := s.Open(h.ID, movie.ID, members[0], 0, 0)
+	v, err := s.Open(h.ID, movie.ID, members[0], 0, nil)
 	must(err)
 	_, err = s.Join(service.Where{HouseholdID: h.ID}, v.W.ID, members[1], item.Audience{})
 	must(err)
@@ -244,7 +245,7 @@ func TestWatchTogetherWaitOnAnEndedOrUnknownOneKeepsNothing(t *testing.T) {
 	if err := p.s.Leave(p.household, p.host.AccountID, p.id, item.Audience{}); err != nil {
 		t.Fatal(err)
 	}
-	for _, id := range []int64{p.id, p.id + 100} {
+	for _, id := range []uid.ID{p.id, uid.New()} {
 		_, _ = p.s.Wait(context.Background(), p.household, p.guest.AccountID, id, 9, item.Audience{})
 	}
 	if n := p.s.Waited(); n != 0 {

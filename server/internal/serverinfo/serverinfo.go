@@ -30,7 +30,7 @@ type Info struct {
 	// sessions' segments are pruned.
 	TranscodeCacheCapBytes int64
 	CreatedAt              time.Time
-	UpdatedAt              time.Time
+	ModifiedAt             time.Time
 }
 
 // Repo persists the server row.
@@ -42,36 +42,36 @@ func New(d db.DBTX) *Repo { return &Repo{d} }
 // Get returns the server row, or db.ErrNotFound before first run.
 func (r *Repo) Get() (*Info, error) {
 	var i Info
-	var created, updated int64
+	var created, modified int64
 	if err := r.d.QueryRow(`SELECT name, tasks_paused, gravatar, COALESCE(tmdb_key, ''), metadata_source, metadata_mode, read_ahead_seconds, max_transcodes,
-		transcode_cache_cap_bytes, created_at, updated_at FROM server_info WHERE id = 1`).
+		transcode_cache_cap_bytes, created_at, modified_at FROM server_info WHERE id = 1`).
 		Scan(&i.Name, &i.TasksPaused, &i.Gravatar, &i.TMDBKey, &i.Metadata.Source, &i.Metadata.Mode, &i.ReadAheadSeconds, &i.MaxTranscodes,
-			&i.TranscodeCacheCapBytes, &created, &updated); err != nil {
+			&i.TranscodeCacheCapBytes, &created, &modified); err != nil {
 		return nil, db.Wrap(err)
 	}
-	i.CreatedAt, i.UpdatedAt = db.FromMs(created), db.FromMs(updated)
+	i.CreatedAt, i.ModifiedAt = db.FromMs(created), db.FromMs(modified)
 	return &i, nil
 }
 
 // Save creates or renames the server row.
 func (r *Repo) Save(name string) error {
 	now := db.Ms(time.Now().UTC())
-	_, err := r.d.Exec(`INSERT INTO server_info (id, name, created_at, updated_at) VALUES (1, ?1, ?2, ?2)
-		ON CONFLICT (id) DO UPDATE SET name = ?1, updated_at = ?2`, name, now)
+	_, err := r.d.Exec(`INSERT INTO server_info (id, name, created_at, modified_at) VALUES (1, ?1, ?2, ?2)
+		ON CONFLICT (id) DO UPDATE SET name = ?1, modified_at = ?2`, name, now)
 	return db.Wrap(err)
 }
 
 // Update writes the editable fields of the server row; db.ErrNotFound
 // before first run.
 func (r *Repo) Update(i *Info) error {
-	return db.ExecOne(r.d, `UPDATE server_info SET name = ?, tasks_paused = ?, gravatar = ?, updated_at = ? WHERE id = 1`,
+	return db.ExecOne(r.d, `UPDATE server_info SET name = ?, tasks_paused = ?, gravatar = ?, modified_at = ? WHERE id = 1`,
 		i.Name, i.TasksPaused, i.Gravatar, db.Ms(time.Now().UTC()))
 }
 
 // SetTMDBKey saves the TMDB API key, or removes it when key is empty;
 // db.ErrNotFound before first run.
 func (r *Repo) SetTMDBKey(key string) error {
-	return db.ExecOne(r.d, `UPDATE server_info SET tmdb_key = NULLIF(?, ''), updated_at = ? WHERE id = 1`, key, db.Ms(time.Now().UTC()))
+	return db.ExecOne(r.d, `UPDATE server_info SET tmdb_key = NULLIF(?, ''), modified_at = ? WHERE id = 1`, key, db.Ms(time.Now().UTC()))
 }
 
 // Metadata sources and modes.
@@ -113,7 +113,7 @@ func (r *Repo) Sources() (Sources, error) {
 
 // SetSources saves the metadata settings; db.ErrNotFound before first run.
 func (r *Repo) SetSources(s Sources) error {
-	return db.ExecOne(r.d, `UPDATE server_info SET metadata_source = ?, metadata_mode = ?, updated_at = ? WHERE id = 1`,
+	return db.ExecOne(r.d, `UPDATE server_info SET metadata_source = ?, metadata_mode = ?, modified_at = ? WHERE id = 1`,
 		s.Source, s.Mode, db.Ms(time.Now().UTC()))
 }
 
@@ -137,7 +137,7 @@ func (r *Repo) ReadAhead() (int, error) {
 // SetReadAhead saves the read-ahead in seconds, which the row keeps within
 // 30 to 600; db.ErrNotFound before first run.
 func (r *Repo) SetReadAhead(seconds int) error {
-	return db.ExecOne(r.d, `UPDATE server_info SET read_ahead_seconds = ?, updated_at = ? WHERE id = 1`, seconds, db.Ms(time.Now().UTC()))
+	return db.ExecOne(r.d, `UPDATE server_info SET read_ahead_seconds = ?, modified_at = ? WHERE id = 1`, seconds, db.Ms(time.Now().UTC()))
 }
 
 // Every server's transcode limits until an admin changes them.
@@ -163,6 +163,6 @@ func (r *Repo) TranscodeLimits() (int, int64, error) {
 // which the row keeps within 1 to 8 and 1 GB to 1 TB; db.ErrNotFound
 // before first run.
 func (r *Repo) SetTranscodeLimits(maxTranscodes int, cacheCapBytes int64) error {
-	return db.ExecOne(r.d, `UPDATE server_info SET max_transcodes = ?, transcode_cache_cap_bytes = ?, updated_at = ? WHERE id = 1`,
+	return db.ExecOne(r.d, `UPDATE server_info SET max_transcodes = ?, transcode_cache_cap_bytes = ?, modified_at = ? WHERE id = 1`,
 		maxTranscodes, cacheCapBytes, db.Ms(time.Now().UTC()))
 }

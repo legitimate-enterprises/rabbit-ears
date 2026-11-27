@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/api"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 func snapshot() map[string]any {
@@ -24,11 +25,11 @@ func snapshot() map[string]any {
 }
 
 // playable returns a movie with one file the profile may play.
-func (e *env) playable() (int64, int64) {
+func (e *env) playable() (uid.ID, uid.ID) {
 	m := e.movie(e.library("movies"), "Film")
 	e.rate(m, "G")
 	var f api.MediaFile
-	e.expect(201, "POST", "/media-files", e.admin.token, map[string]any{"itemId": m, "path": e.onDisk("/films/film.mp4"), "sizeBytes": 1, "modifiedAt": "2026-01-01T00:00:00Z"}, &f)
+	e.expect(201, "POST", "/media-files", e.admin.token, map[string]any{"itemId": m, "path": e.onDisk("/films/film.mp4"), "sizeBytes": 1, "fileModifiedAt": "2026-01-01T00:00:00Z"}, &f)
 	return m, f.Id
 }
 
@@ -121,7 +122,7 @@ func TestStartPlaybackRefusals(t *testing.T) {
 	e.expect(400, "POST", "/playback/sessions", e.plain.token, map[string]any{"profileId": k.Id, "itemId": m, "snapshot": missing}, nil)
 	other := e.kid(e.admin, "Other")
 	e.expect(404, "POST", "/playback/sessions", e.plain.token, map[string]any{"profileId": other.Id, "itemId": m, "snapshot": snapshot()}, nil)
-	e.expect(404, "POST", "/playback/sessions", e.plain.token, map[string]any{"profileId": k.Id, "itemId": 999, "snapshot": snapshot()}, nil)
+	e.expect(404, "POST", "/playback/sessions", e.plain.token, map[string]any{"profileId": k.Id, "itemId": uid.N(999), "snapshot": snapshot()}, nil)
 	fileless := e.movie(e.library("tv"), "Empty")
 	e.rate(fileless, "G")
 	if raw := e.expect(409, "POST", "/playback/sessions", e.plain.token, map[string]any{"profileId": k.Id, "itemId": fileless, "snapshot": snapshot()}, nil); len(raw) == 0 {

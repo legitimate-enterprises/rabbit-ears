@@ -9,6 +9,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/library"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/person"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 func id64(n int64) *int64 { return &n }
@@ -16,7 +17,7 @@ func id64(n int64) *int64 { return &n }
 func TestCRUDAndUpsert(t *testing.T) {
 	r := person.New(dbtest.OpenPreferLocal(t))
 	p := &person.Person{Name: "Keanu Reeves", TMDBID: id64(6384), ProfilePath: "/keanu.jpg"}
-	if err := r.Create(p); err != nil || p.ID == 0 {
+	if err := r.Create(p); err != nil || p.ID.IsZero() {
 		t.Fatal(err)
 	}
 	if err := r.Create(&person.Person{Name: "Someone", TMDBID: id64(6384)}); !errors.Is(err, db.ErrConflict) {
@@ -55,10 +56,10 @@ func TestCreditsSearchAndAudience(t *testing.T) {
 	d := dbtest.OpenPreferLocal(t)
 	libs, items, r := library.New(d), item.New(d), person.New(d)
 	mv := &library.Library{Name: "mv", Kind: library.Movies}
-	if err := libs.Create(mv); err != nil {
+	if err := libs.Create(mv, nil); err != nil {
 		t.Fatal(err)
 	}
-	movie := func(rating string) int64 {
+	movie := func(rating string) uid.ID {
 		it := &item.Item{LibraryID: mv.ID, Kind: item.Movie, ParsedTitle: rating}
 		if err := items.Create(it); err != nil {
 			t.Fatal(err)
@@ -69,7 +70,7 @@ func TestCreditsSearchAndAudience(t *testing.T) {
 		return it.ID
 	}
 	g, rated := movie("G"), movie("R")
-	add := func(name string) int64 {
+	add := func(name string) uid.ID {
 		p := &person.Person{Name: name}
 		if err := r.Create(p); err != nil {
 			t.Fatal(err)
@@ -98,7 +99,7 @@ func TestCreditsSearchAndAudience(t *testing.T) {
 	if cs, _ := r.Credits(g); len(cs) != 1 {
 		t.Fatalf("replaced: %+v", cs)
 	}
-	if err := r.SetCredits(g, []person.Credit{{PersonID: 999, Kind: person.Cast}}); !errors.Is(err, db.ErrReference) {
+	if err := r.SetCredits(g, []person.Credit{{PersonID: uid.N(999), Kind: person.Cast}}); !errors.Is(err, db.ErrReference) {
 		t.Fatalf("unknown person: %v", err)
 	}
 	if cs, _ := r.Credits(g); len(cs) != 1 {

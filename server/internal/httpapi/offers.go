@@ -9,14 +9,15 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/device"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/live"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/offer"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // Profile offers: an adult offers a profile of their household to an adult
 // an admin linked them with.
 
 func (s *Server) toOffer(o *offer.Offer) (api.ProfileOffer, error) {
-	named := map[int64]*account.Account{}
-	for _, id := range []int64{o.ProfileID, o.FromID, o.ToID} {
+	named := map[uid.ID]*account.Account{}
+	for _, id := range []uid.ID{o.ProfileID, o.FromID, o.ToID} {
 		a, err := s.svc.Accounts.Repo().Get(id)
 		if err != nil {
 			return api.ProfileOffer{}, err
@@ -30,7 +31,7 @@ func (s *Server) toOffer(o *offer.Offer) (api.ProfileOffer, error) {
 	p := named[o.ProfileID]
 	return api.ProfileOffer{Id: o.ID, ProfileId: p.ID, ProfileName: p.Name, ProfileKind: api.AccountKind(p.Kind), HouseholdId: h.ID,
 		HouseholdName: h.Name, FromProfileId: o.FromID, FromName: named[o.FromID].Name, ToProfileId: o.ToID, ToName: named[o.ToID].Name,
-		CreatedAt: o.CreatedAt}, nil
+		CreatedAt: o.CreatedAt, ModifiedAt: o.ModifiedAt, CreatedBy: o.CreatedBy, ModifiedBy: o.ModifiedBy}, nil
 }
 
 func (s *Server) toOffers(os []*offer.Offer) ([]api.ProfileOffer, error) {
@@ -47,17 +48,17 @@ func (s *Server) toOffers(os []*offer.Offer) ([]api.ProfileOffer, error) {
 
 // householdChanged tells the devices of each household that its profiles
 // or offers changed.
-func (s *Server) householdChanged(householdIDs ...int64) {
+func (s *Server) householdChanged(householdIDs ...uid.ID) {
 	for _, h := range householdIDs {
-		s.svc.Events.Publish(live.Event{Kind: live.Household, HouseholdID: h})
+		s.svc.Events.Publish(live.Event{Kind: live.Household, HouseholdID: &h})
 	}
 }
 
 // offerChanged tells both sides of an offer, and any household it put the
 // profile in, that it changed.
-func (s *Server) offerChanged(o *offer.Offer, households ...int64) {
+func (s *Server) offerChanged(o *offer.Offer, households ...uid.ID) {
 	s.householdChanged(append(households, o.HouseholdID)...)
-	s.svc.Events.Publish(live.Event{Kind: live.Household, AccountIDs: []int64{o.ToID}})
+	s.svc.Events.Publish(live.Event{Kind: live.Household, AccountIDs: []uid.ID{o.ToID}})
 }
 
 // ListLinkedAdults pages the adults the active adult may offer profiles to.
@@ -125,7 +126,8 @@ func (s *Server) CreateProfileOffer(ctx context.Context, r api.CreateProfileOffe
 			return nil, errForbidden
 		}
 	}
-	o, err := s.svc.Offers.Create(p.profile, p.device.HouseholdID, r.Body.ProfileId, r.Body.ToProfileId, device.TV(p.device.Platform))
+	o, err := s.svc.Offers.Create(p.profile, p.device.HouseholdID, r.Body.ProfileId, r.Body.ToProfileId, device.TV(p.device.Platform),
+		r.Body.Id, actor(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -136,7 +138,7 @@ func (s *Server) CreateProfileOffer(ctx context.Context, r api.CreateProfileOffe
 
 // listed returns an offer the active profile lists, and whether it is the
 // adult the offer was made to.
-func (s *Server) listed(ctx context.Context, id int64) (*offer.Offer, bool, error) {
+func (s *Server) listed(ctx context.Context, id uid.ID) (*offer.Offer, bool, error) {
 	p := caller(ctx)
 	o, err := s.svc.Offers.Repo().Get(id)
 	switch {

@@ -1,4 +1,4 @@
-// Package httpapi serves the REST API under /api/v1. The routes, request
+// Package httpapi serves the REST API under /api/v2. The routes, request
 // types and validation rules come from server/api/openapi.yaml; this package
 // implements the generated strict interface over the services.
 package httpapi
@@ -16,7 +16,7 @@ import (
 )
 
 // BasePath is the versioned prefix every route is served under.
-const BasePath = "/api/v1"
+const BasePath = "/api/v2"
 
 // Server implements every operation of the spec.
 type Server struct {

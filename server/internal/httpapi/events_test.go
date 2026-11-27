@@ -10,8 +10,10 @@ import (
 	"time"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/api"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/library"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/live"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/scan"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // quiet makes a poll with nothing to hear answer at once.
@@ -50,21 +52,21 @@ func is(ev api.Event, kind api.EventKind, change string) bool {
 	return ev.Kind == kind && (change == "" && ev.Change == nil || ev.Change != nil && *ev.Change == change)
 }
 
-func (e *env) secondDevice(u user, name, platform string) (string, int64) {
+func (e *env) secondDevice(u user, name, platform string) (string, uid.ID) {
 	e.t.Helper()
 	token, d, err := e.svc.Devices.Register(u.account.ID, u.household.ID, name, platform)
 	must(e.t, err)
 	return token, d.ID
 }
 
-func (e *env) startOn(token string, profile, item int64) api.PlaybackStream {
+func (e *env) startOn(token string, profile, item uid.ID) api.PlaybackStream {
 	e.t.Helper()
 	var st api.PlaybackStream
 	e.expect(201, "POST", "/playback/sessions", token, map[string]any{"profileId": profile, "itemId": item, "snapshot": snapshot()}, &st)
 	return st
 }
 
-func (e *env) position(token string, session, ms int64) {
+func (e *env) position(token string, session uid.ID, ms int64) {
 	e.t.Helper()
 	e.expect(204, "PUT", "/playback/sessions/"+itoa(session)+"/position", token, map[string]any{"positionMs": ms}, nil)
 }
@@ -148,8 +150,8 @@ func TestEventsAreHeldUntilSomethingHappens(t *testing.T) {
 	began := time.Now()
 	go func() {
 		time.Sleep(150 * time.Millisecond)
-		e.svc.Events.Publish(live.Event{Kind: live.WatchState, AccountIDs: []int64{e.admin.account.ID}, ItemID: m})
-		e.svc.Events.Publish(live.Event{Kind: live.WatchState, AccountIDs: []int64{e.plain.account.ID}, ItemID: m})
+		e.svc.Events.Publish(live.Event{Kind: live.WatchState, AccountIDs: []uid.ID{e.admin.account.ID}, ItemID: &m})
+		e.svc.Events.Publish(live.Event{Kind: live.WatchState, AccountIDs: []uid.ID{e.plain.account.ID}, ItemID: &m})
 	}()
 	got := e.heard(e.plain.token, &at)
 	if took := time.Since(began); len(got) != 1 || took < 100*time.Millisecond || took > 5*time.Second {
@@ -206,7 +208,7 @@ func TestKidsHearNothingOfWhatTheirFilterHides(t *testing.T) {
 	}
 
 	// A household station is heard only when the kid may see all it plays.
-	strong, gentle := e.nightsPlaylist(map[int64]int64{undertow: 90}), e.nightsPlaylist(map[int64]int64{meadow: 90})
+	strong, gentle := e.nightsPlaylist(map[uid.ID]int64{undertow: 90}), e.nightsPlaylist(map[uid.ID]int64{meadow: 90})
 	if got := e.heard(tablet, &at); len(got) != 0 {
 		t.Fatalf("an adult's playlists reached a kid: %+v", got)
 	}
@@ -243,10 +245,10 @@ func TestStationEvents(t *testing.T) {
 	e := newEnv(t)
 	e.quiet()
 	clock := e.stationClock()
-	pl := e.nightsPlaylist(map[int64]int64{e.film(e.library("movies"), "Lantern", "2001-01-01", "PG"): 90})
+	pl := e.nightsPlaylist(map[uid.ID]int64{e.film(e.library("movies"), "Lantern", "2001-01-01", "PG"): 90})
 	neighbor := e.neighbor(e.plain)
 	mine, theirs, elsewhere := e.cursor(e.plain.token), e.cursor(neighbor), e.cursor(e.admin.token)
-	station := func(got []api.Event, id int64) bool {
+	station := func(got []api.Event, id uid.ID) bool {
 		return len(got) > 0 && is(got[0], api.EventKindStation, "") && got[0].StationId != nil && *got[0].StationId == id
 	}
 
@@ -309,7 +311,7 @@ func TestPlaylistEventsReachTheOwnerAndThoseSharedWith(t *testing.T) {
 	film := e.movie(e.library("movies"), "Heat")
 	mine, hers := e.cursor(e.plain.token), e.cursor(claire.Token)
 	base := "/profiles/" + itoa(e.plain.account.ID) + "/playlists"
-	playlist := func(got []api.Event, id int64) bool {
+	playlist := func(got []api.Event, id uid.ID) bool {
 		return len(got) > 0 && is(got[0], api.EventKindPlaylist, "") && *got[0].PlaylistId == id
 	}
 
@@ -324,7 +326,7 @@ func TestPlaylistEventsReachTheOwnerAndThoseSharedWith(t *testing.T) {
 	if got := e.heard(e.plain.token, &mine); !playlist(got, pl.Id) {
 		t.Fatalf("an entry added, and reading says nothing: %+v", got)
 	}
-	e.expect(404, "POST", one+"/entries", e.plain.token, map[string]any{"itemId": 999}, nil)
+	e.expect(404, "POST", one+"/entries", e.plain.token, map[string]any{"itemId": uid.N(999)}, nil)
 	if got := e.heard(e.plain.token, &mine); len(got) != 0 {
 		t.Fatalf("a refused change: %+v", got)
 	}
@@ -389,8 +391,7 @@ func TestAScanThatChangesALibraryIsHeard(t *testing.T) {
 	root := t.TempDir()
 	must(t, os.MkdirAll(filepath.Join(root, "A (2001)"), 0o750))
 	must(t, os.Link(fixturePath(t, "h264-high41.mp4"), filepath.Join(root, "A (2001)", "a.mp4")))
-	_, err := e.svc.Libraries.Repo().AddFolder(lib, root)
-	must(t, err)
+	must(t, e.svc.Libraries.Repo().AddFolder(&library.Folder{LibraryID: lib, Path: root}, nil))
 	sc := scan.New(scan.Config{Libraries: e.svc.Libraries.Repo(), Items: e.svc.Items.Repo(), Files: e.svc.MediaFiles.Repo(),
 		Editions: e.svc.Editions.Repo(), Genres: e.svc.Genres.Repo(), People: e.svc.People.Repo(), ThumbDir: t.TempDir(),
 		Previews: e.svc.Previews.Repo(), PreviewDir: t.TempDir()})

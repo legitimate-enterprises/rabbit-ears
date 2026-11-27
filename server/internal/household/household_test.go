@@ -8,38 +8,39 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db/dbtest"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/household"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 func TestCRUDAndCascade(t *testing.T) {
 	d := dbtest.Open(t)
 	ar, r := account.New(d), household.New(d)
 	a := &account.Account{Kind: account.Adult, Email: "a@example.test", Name: "A", PasswordHash: "x"}
-	_ = ar.Create(a)
+	_ = ar.Create(a, nil)
 	h := &household.Household{Name: "Home", AdultID: a.ID}
-	if err := r.Create(h); err != nil {
+	if err := r.Create(h, &a.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Create(&household.Household{Name: "Second", AdultID: a.ID}); !errors.Is(err, db.ErrConflict) {
+	if err := r.Create(&household.Household{Name: "Second", AdultID: a.ID}, nil); !errors.Is(err, db.ErrConflict) {
 		t.Fatalf("one household per adult: %v", err)
 	}
-	if err := r.Create(&household.Household{Name: "x", AdultID: 999}); !errors.Is(err, db.ErrReference) {
+	if err := r.Create(&household.Household{Name: "x", AdultID: uid.N(999)}, nil); !errors.Is(err, db.ErrReference) {
 		t.Fatal(err)
 	}
-	if g, err := r.Get(h.ID); err != nil || g.ID != h.ID || g.CreatedAt.IsZero() {
+	if g, err := r.Get(h.ID); err != nil || g.ID != h.ID || g.CreatedAt.IsZero() || !g.ModifiedAt.Equal(g.CreatedAt) || *g.CreatedBy != a.ID {
 		t.Fatalf("%+v %v", g, err)
 	}
 	h.Name = "Renamed"
-	if err := r.Update(h); err != nil {
+	if err := r.Update(h, nil); err != nil {
 		t.Fatal(err)
 	}
-	if g, _ := r.Get(h.ID); g.Name != "Renamed" {
-		t.Fatal(g.Name)
+	if g, _ := r.Get(h.ID); g.Name != "Renamed" || g.ModifiedBy != nil || *g.CreatedBy != a.ID {
+		t.Fatalf("%+v", g)
 	}
 	if l, _ := r.List(); len(l) != 1 {
 		t.Fatal(len(l))
 	}
 	k := &account.Account{Kind: account.Kid, Name: "k", HouseholdID: &h.ID}
-	_ = ar.Create(k)
+	_ = ar.Create(k, nil)
 	if err := ar.Delete(a.ID); err != nil {
 		t.Fatal(err)
 	}

@@ -1,6 +1,7 @@
 import { h } from "../../admin/dom";
 import { ok } from "../../admin/api";
 import type { Schemas } from "../../api/client";
+import { tint } from "../../api/uid";
 import {
   color,
   epCode,
@@ -34,7 +35,7 @@ type Card = {
   play: string;
   detail: string;
   hero: string;
-  id: number;
+  id: string;
   thumb: string;
   ph: PlaceholderKind;
   pct: number;
@@ -54,7 +55,7 @@ const RECENT = 14;
  */
 async function resumable(ctx: Ctx) {
   const going: [Item, WatchState][] = [];
-  const seen = new Map<number, WatchState>();
+  const seen = new Map<string, WatchState>();
   for (let offset: number | undefined = 0; offset !== undefined && going.length < RESUMING;) {
     const p: Schemas["WatchStatePage"] = await ok(
       ctx.api.GET("/profiles/{profileId}/watch-state", {
@@ -75,7 +76,7 @@ async function resumable(ctx: Ctx) {
 }
 
 /** Each occasion in season, nearest first, with its titles; none when the server errs, so Home never breaks over it. */
-async function occasions(ctx: Ctx): Promise<{ id: number; name: string; items: Item[] }[]> {
+async function occasions(ctx: Ctx): Promise<{ id: string; name: string; items: Item[] }[]> {
   try {
     const { items } = await ok(
       ctx.api.GET("/profiles/{profileId}/occasions", {
@@ -126,7 +127,7 @@ export async function home(ctx: Ctx): Promise<HTMLElement[]> {
       occasions(ctx),
     ]);
   // An episode's show, by its season.
-  const bySeason = new Map<number, Item>();
+  const bySeason = new Map<string, Item>();
   const seasons = new Set(going.filter(([i]) => i.kind === "episode").map(([i]) => i.parentId!));
   await Promise.all(
     [...seasons].map(async (id) => {
@@ -135,7 +136,7 @@ export async function home(ctx: Ctx): Promise<HTMLElement[]> {
       if (s) bySeason.set(id, s);
     }),
   );
-  const showOf = (e: Item) => bySeason.get(e.parentId ?? 0);
+  const showOf = (e: Item) => (e.parentId === undefined ? undefined : bySeason.get(e.parentId));
 
   // Next up: shows the profile has started, by title, at their next episode unless that one is in progress.
   const begun = [...byShow.values()].flatMap((p) =>
@@ -260,7 +261,7 @@ export async function home(ctx: Ctx): Promise<HTMLElement[]> {
       h(
         "div.art.p",
         {
-          style: `background:var(--c${i.id % 10})`,
+          style: `background:var(--c${tint(i.id, 10)})`,
           "data-art": artKey(i),
           "data-ph": placeholderKind(i.kind),
         },

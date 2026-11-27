@@ -12,6 +12,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/logstore"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/service"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/transcode"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -37,6 +38,14 @@ var (
 func invalid(field, msg string) error {
 	fs := []api.FieldError{{Field: field, Message: msg}}
 	return &apiError{http.StatusBadRequest, api.Error{Code: api.ErrorCodeBadRequest, Message: "invalid request", Fields: &fs}}
+}
+
+// sameID refuses a replace whose body names another row than its path.
+func sameID(body *uid.ID, path uid.ID) error {
+	if body != nil && *body != path {
+		return invalid("id", "differs from the path's")
+	}
+	return nil
 }
 
 func writeError(w http.ResponseWriter, e *apiError) {

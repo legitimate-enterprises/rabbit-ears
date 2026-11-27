@@ -64,7 +64,7 @@ export async function who(ctx: Ctx, query: URLSearchParams): Promise<HTMLElement
   const ready = ctx.me.profiles.filter((p) => !p.pending && !p.revokedAt);
   // An adult only visiting manages nothing of this household.
   const manage = ctx.profile.kind === "adult" && !ctx.profile.present;
-  const remembered = ready.find((p) => String(p.id) === query.get("pick"));
+  const remembered = ready.find((p) => p.id === query.get("pick"));
   if (remembered) pick(remembered, then);
   return [
     h("header.top", brand(false, false)),
@@ -150,7 +150,7 @@ function pinDialog(ctx: Ctx, p: Schemas["Account"], to?: string) {
 
 export const addKid = (ctx: Ctx) => kidForm(ctx);
 
-export async function editKid(ctx: Ctx, profileId: number): Promise<HTMLElement[]> {
+export async function editKid(ctx: Ctx, profileId: string): Promise<HTMLElement[]> {
   return kidForm(
     ctx,
     await ok(ctx.api.GET("/profiles/{profileId}", { params: { path: { profileId } } })),
@@ -330,7 +330,7 @@ function kidForm(ctx: Ctx, kid?: Schemas["Account"]): HTMLElement[] {
 }
 
 /** The titles a kid on an allow list may see, with a title search to add more. */
-function allowList(ctx: Ctx, profileId: number): HTMLElement {
+function allowList(ctx: Ctx, profileId: string): HTMLElement {
   const list = h("ul.members");
   const found = h("ul.members");
   const err = errorLine();
@@ -339,11 +339,11 @@ function allowList(ctx: Ctx, profileId: number): HTMLElement {
     b.onclick = () => on().catch((e: Error) => showError(err, e.message));
     return h("li", h("b", label), b);
   };
-  const path = (itemId: number) => ({ params: { path: { profileId, itemId } } });
+  const path = (itemId: string) => ({ params: { path: { profileId, itemId } } });
   const none = h("li.sub", "No titles yet.");
-  const shown = new Map<number, HTMLElement>();
+  const shown = new Map<string, HTMLElement>();
   // A change edits the rows in place; asking for every title again would be a request each.
-  const put = (itemId: number, label: string) => {
+  const put = (itemId: string, label: string) => {
     const li: HTMLElement = row(label, "Remove", async () => {
       await ok(ctx.api.DELETE("/profiles/{profileId}/allowed-items/{itemId}", path(itemId)));
       li.remove();
@@ -368,7 +368,7 @@ function allowList(ctx: Ctx, profileId: number): HTMLElement {
             }),
           ).then(
             (c) => c.title,
-            () => `Item ${itemId}`,
+            () => "Untitled",
           ),
         ),
       ),

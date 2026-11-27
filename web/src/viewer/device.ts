@@ -25,9 +25,9 @@ export interface Remember {
   profile: boolean;
   skipPin: boolean;
 }
-const rememberKey = (account: number) => `rabbit-ears.remember.${account}`;
+const rememberKey = (account: string) => `rabbit-ears.remember.${account}`;
 /** This browser's Remember profile and Skip PIN for the adult signed in on it; both on until set. */
-export function remembered(account: number): Remember {
+export function remembered(account: string): Remember {
   try {
     const v = JSON.parse(localStorage.getItem(rememberKey(account)) ?? "{}");
     return { profile: v.profile !== false, skipPin: v.skipPin !== false };
@@ -35,7 +35,7 @@ export function remembered(account: number): Remember {
     return { profile: true, skipPin: true };
   }
 }
-export function remember(account: number, r: Remember) {
+export function remember(account: string, r: Remember) {
   try {
     localStorage.setItem(rememberKey(account), JSON.stringify(r));
   } catch {

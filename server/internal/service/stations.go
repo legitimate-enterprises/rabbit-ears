@@ -12,6 +12,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/live"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/playlist"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/station"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // What a station is doing now.
@@ -65,10 +66,10 @@ type StationService struct {
 // announce tells those st is shared with that it, its schedule or what it
 // has on changed.
 func (s *StationService) announce(st *station.Station) {
-	e := live.Event{Kind: live.Station, StationID: st.ID}
+	e := live.Event{Kind: live.Station, StationID: ref(st.ID)}
 	switch st.Visibility {
 	case station.Private:
-		e.AccountIDs = []int64{st.AccountID}
+		e.AccountIDs = []uid.ID{st.AccountID}
 	case station.Household:
 		e.HouseholdID = st.HouseholdID
 	}
@@ -109,8 +110,8 @@ func (s *StationService) Delete(st *station.Station) error {
 
 // SetVisibility shares st as visibility says, and tells those who saw it
 // before as well as those who see it now.
-func (s *StationService) SetVisibility(st *station.Station, visibility string) error {
-	if err := s.repo.SetVisibility(st.ID, visibility); err != nil {
+func (s *StationService) SetVisibility(st *station.Station, visibility string, by *uid.ID) error {
+	if err := s.repo.SetVisibility(st.ID, visibility, by); err != nil {
 		return err
 	}
 	s.announce(st)
@@ -128,12 +129,14 @@ func NewStationService(repo *station.Repo, playlists *playlist.Repo, items *item
 func (s *StationService) Repo() *station.Repo { return s.repo }
 
 // Create makes st and schedules it at once. A station without a playlist
-// gets one of its own, of st.Kind, owned by its owner; one without a
-// timing takes its kind's.
-func (s *StationService) Create(st *station.Station) error {
+// gets one of its own, under ownPlaylistID when given, of st.Kind, owned by
+// its owner; one without a timing takes its kind's.
+func (s *StationService) Create(st *station.Station, ownPlaylistID, by *uid.ID) error {
+	// A zero PlaylistID is one not given yet: a station always has one.
+	own := st.PlaylistID.IsZero()
 	if st.Timing == "" {
 		kind := st.Kind
-		if st.PlaylistID != 0 {
+		if !own {
 			p, err := s.playlists.Get(st.PlaylistID)
 			if err != nil {
 				return err
@@ -142,16 +145,19 @@ func (s *StationService) Create(st *station.Station) error {
 		}
 		st.Timing = station.DefaultTiming(kind)
 	}
-	if st.PlaylistID == 0 {
+	if own {
 		p := &playlist.Playlist{AccountID: st.AccountID, Name: st.Name, Kind: st.Kind, StationOwned: true}
-		if err := s.playlists.Create(p); err != nil {
+		if ownPlaylistID != nil {
+			p.ID = *ownPlaylistID
+		}
+		if err := s.playlists.Create(p, by); err != nil {
 			return err
 		}
 		st.PlaylistID = p.ID
-		if err := s.repo.Create(st); err != nil {
+		if err := s.repo.Create(st, by); err != nil {
 			return errors.Join(err, s.playlists.Delete(p.ID))
 		}
-	} else if err := s.repo.Create(st); err != nil {
+	} else if err := s.repo.Create(st, by); err != nil {
 		return err
 	}
 	s.mu.Lock()
@@ -165,14 +171,14 @@ func (s *StationService) Create(st *station.Station) error {
 
 // Update writes st. What is scheduled stays; a new playlist or order starts
 // a new loop where the schedule next extends.
-func (s *StationService) Update(st *station.Station) error {
+func (s *StationService) Update(st *station.Station, by *uid.ID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	old, err := s.repo.Get(st.ID)
 	if err != nil {
 		return err
 	}
-	if err := s.repo.Update(st); err != nil {
+	if err := s.repo.Update(st, by); err != nil {
 		return err
 	}
 	if old.PlaylistID != st.PlaylistID || old.Random != st.Random {
@@ -199,7 +205,7 @@ func (s *StationService) Update(st *station.Station) error {
 }
 
 // dropOwned deletes a playlist a station owned once no station plays it.
-func (s *StationService) dropOwned(playlistID int64) error {
+func (s *StationService) dropOwned(playlistID uid.ID) error {
 	p, err := s.playlists.Get(playlistID)
 	if err != nil || !p.StationOwned {
 		return err
@@ -210,7 +216,7 @@ func (s *StationService) dropOwned(playlistID int64) error {
 // Seen returns one station the viewer may see, else db.ErrNotFound: shared
 // with them and, for a kid, of a play order the kid may see all of; for an
 // adult hiding kids' content, of one with something besides kids' content.
-func (s *StationService) Seen(id int64, v station.Viewer) (*station.Station, error) {
+func (s *StationService) Seen(id uid.ID, v station.Viewer) (*station.Station, error) {
 	st, err := s.repo.Seen(id, v)
 	if err != nil {
 		return nil, err
@@ -314,7 +320,7 @@ func (s *StationService) ScheduleAll(ctx context.Context) (string, error) {
 			continue
 		}
 		if err != nil {
-			errs = append(errs, fmt.Errorf("station %d: %w", st.ID, err))
+			errs = append(errs, fmt.Errorf("station %s: %w", st.ID, err))
 		}
 	}
 	now := s.Now()
@@ -341,9 +347,15 @@ func (s *StationService) schedule(st *station.Station) (bool, error) {
 	}
 	rows := make([]station.Row, 0, len(order))
 	for _, r := range order {
-		v := station.Row{Key: station.Key{EntryID: r.EntryID, ItemID: r.ItemID}, EditionID: r.EditionID}
-		if r.RuntimeMs != nil && r.EditionID != 0 {
-			v.RuntimeMs = *r.RuntimeMs
+		v := station.Row{Key: station.Key{ItemID: r.ItemID}}
+		if r.EntryID != nil {
+			v.EntryID = *r.EntryID
+		}
+		if r.EditionID != nil {
+			v.EditionID = *r.EditionID
+			if r.RuntimeMs != nil {
+				v.RuntimeMs = *r.RuntimeMs
+			}
 		}
 		rows = append(rows, v)
 	}

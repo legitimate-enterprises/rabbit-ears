@@ -3,10 +3,12 @@ package httpapi_test
 import (
 	"net/url"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/api"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/watchstate"
 )
 
@@ -15,6 +17,36 @@ func (e *env) kid(u user, name string) api.Account {
 	var k api.Account
 	e.expect(201, "POST", "/profiles", u.token, map[string]any{"name": name, "birthday": "2018-05-01", "movieCeiling": "PG", "tvCeiling": "TV-Y7"}, &k)
 	return k
+}
+
+// A client may choose a new profile's id, as an offline client does: a
+// malformed one is refused, one in use is a conflict, and a replace keeps
+// the path's. The profile names who made and last changed it.
+func TestAClientChoosesAProfileID(t *testing.T) {
+	e := newEnv(t)
+	body := func(id any) map[string]any { return map[string]any{"id": id, "name": "Kid", "birthday": "2018-05-01"} }
+	id := uid.New()
+	var k api.Account
+	e.expect(201, "POST", "/profiles", e.plain.token, body(id), &k)
+	me := e.plain.account.ID
+	if k.Id != id || k.CreatedBy == nil || *k.CreatedBy != me || k.ModifiedBy == nil || *k.ModifiedBy != me {
+		t.Fatalf("%+v", k)
+	}
+	raw := e.expect(409, "POST", "/profiles", e.plain.token, body(id), nil)
+	if errorCode(t, raw) != "conflict" {
+		t.Fatalf("%s", raw)
+	}
+	for _, bad := range []string{"1", strings.ToUpper(uid.New().String()), "0190a1b2-c3d4-4e5f-8a6b-7c8d9e0f1a2b"} {
+		if raw := e.expect(400, "POST", "/profiles", e.plain.token, body(bad), nil); errorCode(t, raw) != "bad_request" {
+			t.Fatalf("%s: %s", bad, raw)
+		}
+	}
+	e.expect(400, "GET", "/profiles/1", e.plain.token, nil, nil)
+	e.expect(400, "PUT", "/profiles/"+itoa(id), e.plain.token, body(uid.New()), nil)
+	e.expect(200, "PUT", "/profiles/"+itoa(id), e.plain.token, body(id), &k)
+	if k.Id != id || k.ModifiedAt.Before(k.CreatedAt) {
+		t.Fatalf("%+v", k)
+	}
 }
 
 func TestProfilesCRUDStaysInTheHousehold(t *testing.T) {
@@ -59,15 +91,15 @@ func TestProfilesCRUDStaysInTheHousehold(t *testing.T) {
 // together, as on sign-out.
 func TestDeletingAKidSignsOutDevicesActingAsThem(t *testing.T) {
 	for name, c := range map[string]struct {
-		target    func(e *env, kid int64) (path, token string)
+		target    func(e *env, kid uid.ID) (path, token string)
 		household bool // the household outlives the delete
 	}{
-		"their adult removes them": {func(e *env, kid int64) (string, string) { return "/profiles/" + itoa(kid), e.plain.token }, true},
-		"an admin deletes them":    {func(e *env, kid int64) (string, string) { return "/accounts/" + itoa(kid), e.admin.token }, true},
-		"an admin deletes their household's owner": {func(e *env, _ int64) (string, string) {
+		"their adult removes them": {func(e *env, kid uid.ID) (string, string) { return "/profiles/" + itoa(kid), e.plain.token }, true},
+		"an admin deletes them":    {func(e *env, kid uid.ID) (string, string) { return "/accounts/" + itoa(kid), e.admin.token }, true},
+		"an admin deletes their household's owner": {func(e *env, _ uid.ID) (string, string) {
 			return "/accounts/" + itoa(e.plain.account.ID), e.admin.token
 		}, false},
-		"an admin deletes their household": {func(e *env, _ int64) (string, string) {
+		"an admin deletes their household": {func(e *env, _ uid.ID) (string, string) {
 			return "/households/" + itoa(e.plain.household.ID), e.admin.token
 		}, false},
 	} {
@@ -113,7 +145,7 @@ func TestAllowList(t *testing.T) {
 	if len(al.ItemIds) != 1 || al.ItemIds[0] != m {
 		t.Fatalf("%+v", al)
 	}
-	e.expect(404, "PUT", base+"/999", e.plain.token, nil, nil)
+	e.expect(404, "PUT", base+"/"+itoa(uid.N(999)), e.plain.token, nil, nil)
 	e.expect(403, "PUT", "/profiles/"+itoa(e.plain.account.ID)+"/allowed-items/"+itoa(m), e.plain.token, nil, nil)
 	e.expect(404, "GET", base, e.admin.token, nil, nil)
 	e.expect(204, "DELETE", base+"/"+itoa(m), e.plain.token, nil, nil)
@@ -140,7 +172,7 @@ func TestWatchStateCRUD(t *testing.T) {
 		t.Fatalf("%+v", ws)
 	}
 	e.expect(400, "PUT", base+itoa(a), e.plain.token, map[string]any{"positionMs": -1, "watched": false}, nil)
-	e.expect(404, "PUT", base+"999", e.plain.token, map[string]any{"watched": true}, nil)
+	e.expect(404, "PUT", base+itoa(uid.N(999)), e.plain.token, map[string]any{"watched": true}, nil)
 
 	var page api.WatchStatePage
 	e.expect(200, "GET", "/profiles/"+itoa(k.Id)+"/watch-state?limit=1", e.plain.token, nil, &page)
@@ -254,21 +286,21 @@ func TestWatchStateNewerWins(t *testing.T) {
 	hourAgo, minuteAgo := time.Now().UTC().Add(-time.Hour), time.Now().UTC().Add(-time.Minute)
 	var w api.WatchState
 	e.expect(200, "PUT", path, tok, map[string]any{"watched": false, "positionMs": 5000, "at": minuteAgo}, &w)
-	if w.PositionMs != 5000 || !w.UpdatedAt.Equal(minuteAgo.Truncate(time.Millisecond)) || !w.LastPlayedAt.Equal(w.UpdatedAt) {
+	if w.PositionMs != 5000 || !w.ChangedAt.Equal(minuteAgo.Truncate(time.Millisecond)) || !w.LastPlayedAt.Equal(w.ChangedAt) {
 		t.Fatalf("%+v", w)
 	}
 	if e.expect(200, "PUT", path, tok, map[string]any{"watched": true, "at": hourAgo}, &w); w.Watched || w.PositionMs != 5000 {
 		t.Fatalf("an older change is dropped: %+v", w)
 	}
 	if e.expect(200, "PUT", path, tok, map[string]any{"watched": true, "at": time.Now().Add(time.Hour)}, &w); !w.Watched ||
-		w.UpdatedAt.After(time.Now()) {
+		w.ChangedAt.After(time.Now()) {
 		t.Fatalf("a later change wins, never from the future: %+v", w)
 	}
-	e.expect(204, "PUT", "/profiles/"+itoa(me)+"/watch-state/batch", tok, map[string]any{"itemIds": []int64{m}, "watched": false, "at": hourAgo}, nil)
+	e.expect(204, "PUT", "/profiles/"+itoa(me)+"/watch-state/batch", tok, map[string]any{"itemIds": []uid.ID{m}, "watched": false, "at": hourAgo}, nil)
 	if e.expect(200, "GET", path, tok, nil, &w); !w.Watched {
 		t.Fatalf("an older batch is dropped: %+v", w)
 	}
-	e.expect(204, "PUT", "/profiles/"+itoa(me)+"/watch-state/batch", tok, map[string]any{"itemIds": []int64{m}, "watched": false}, nil)
+	e.expect(204, "PUT", "/profiles/"+itoa(me)+"/watch-state/batch", tok, map[string]any{"itemIds": []uid.ID{m}, "watched": false}, nil)
 	if e.expect(200, "GET", path, tok, nil, &w); w.Watched {
 		t.Fatalf("a batch now wins: %+v", w)
 	}
@@ -316,7 +348,7 @@ func TestRecordPlayCommutesWithNewerWins(t *testing.T) {
 		}
 		var w api.WatchState
 		e.expect(200, "GET", path, tok, nil, &w)
-		if w.PlayCount != 1 || w.Watched != c.watched || w.PositionMs != c.pos || !w.UpdatedAt.Equal(c.at) || !w.LastPlayedAt.Equal(c.at) ||
+		if w.PlayCount != 1 || w.Watched != c.watched || w.PositionMs != c.pos || !w.ChangedAt.Equal(c.at) || !w.LastPlayedAt.Equal(c.at) ||
 			w.EditionId == nil {
 			t.Errorf("put at %v first %v: %+v", c.putAt, c.putFirst, w)
 		}
@@ -342,7 +374,7 @@ func TestRecordPlayCountsEachPlay(t *testing.T) {
 		t.Fatalf("an earlier play counts and keeps the later one: %+v", w)
 	}
 	e.expect(400, "POST", path+"/plays", e.plain.token, map[string]any{}, nil)
-	e.expect(404, "POST", "/profiles/"+itoa(e.plain.account.ID)+"/watch-state/999/plays", e.plain.token, map[string]any{"at": hourAgo}, nil)
+	e.expect(404, "POST", "/profiles/"+itoa(e.plain.account.ID)+"/watch-state/"+itoa(uid.N(999))+"/plays", e.plain.token, map[string]any{"at": hourAgo}, nil)
 	other := e.movie(lib, "Ronin")
 	e.file(other, 600_000)
 	ed, err := e.svc.Editions.Repo().Default(other)
@@ -374,23 +406,23 @@ func TestWatchStatesUnderAShowOrSeason(t *testing.T) {
 	e.expect(201, "POST", "/items", e.admin.token, map[string]any{"libraryId": tv, "parentId": c.kidShow, "kind": "season", "parsedTitle": "Kid show", "seasonNumber": 2}, &s2)
 	e.expect(201, "POST", "/items", e.admin.token, map[string]any{"libraryId": tv, "parentId": s2.Id, "kind": "episode", "parsedTitle": "Kid show", "episodeNumber": 1}, &ep2)
 	me := "/profiles/" + itoa(e.plain.account.ID)
-	for _, id := range []int64{c.kidEp, ep2.Id, c.adultEp, c.g} {
+	for _, id := range []uid.ID{c.kidEp, ep2.Id, c.adultEp, c.g} {
 		e.expect(200, "PUT", me+"/watch-state/"+itoa(id), e.plain.token, map[string]any{"watched": true}, nil)
 	}
-	under := func(parent int64) []int64 {
+	under := func(parent uid.ID) []uid.ID {
 		var page api.WatchStatePage
 		e.expect(200, "GET", me+"/watch-state?parentId="+itoa(parent), e.plain.token, nil, &page)
-		var out []int64
+		var out []uid.ID
 		for _, w := range page.Items {
 			out = append(out, w.ItemId)
 		}
-		slices.Sort(out)
+		slices.SortFunc(out, uid.ID.Compare)
 		return out
 	}
-	if got := under(c.kidShow); !slices.Equal(got, []int64{c.kidEp, ep2.Id}) {
+	if got := under(c.kidShow); !slices.Equal(got, []uid.ID{c.kidEp, ep2.Id}) {
 		t.Fatalf("a show's episodes in every season: %v", got)
 	}
-	if got := under(s2.Id); !slices.Equal(got, []int64{ep2.Id}) {
+	if got := under(s2.Id); !slices.Equal(got, []uid.ID{ep2.Id}) {
 		t.Fatalf("a season's episodes: %v", got)
 	}
 	if got := under(c.g); len(got) != 0 {

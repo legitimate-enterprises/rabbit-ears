@@ -5,15 +5,16 @@ import (
 	"time"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/api"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // timed returns a movie with one file of the given duration (nil for
 // unknown) and a session playing it as the plain adult.
-func (e *env) timed(durationMs *int64) (movie int64, sid string, id int64) {
+func (e *env) timed(durationMs *int64) (movie uid.ID, sid string, id uid.ID) {
 	e.t.Helper()
 	m := e.movie(e.library("movies"), "Film")
 	e.rate(m, "G")
-	f := map[string]any{"itemId": m, "path": e.onDisk("/films/film.mp4"), "sizeBytes": 1, "modifiedAt": "2026-01-01T00:00:00Z"}
+	f := map[string]any{"itemId": m, "path": e.onDisk("/films/film.mp4"), "sizeBytes": 1, "fileModifiedAt": "2026-01-01T00:00:00Z"}
 	if durationMs != nil {
 		f["durationMs"] = *durationMs
 	}
@@ -23,12 +24,12 @@ func (e *env) timed(durationMs *int64) (movie int64, sid string, id int64) {
 }
 
 // play starts a new session on movie, ending the device's last one.
-func (e *env) play(movie int64) string {
+func (e *env) play(movie uid.ID) string {
 	e.t.Helper()
 	return "/playback/sessions/" + itoa(e.start(movie, snapshot()).SessionId)
 }
 
-func (e *env) watchState(item int64) api.WatchState {
+func (e *env) watchState(item uid.ID) api.WatchState {
 	e.t.Helper()
 	var ws api.WatchState
 	e.expect(200, "GET", "/profiles/"+itoa(e.plain.account.ID)+"/watch-state/"+itoa(item), e.plain.token, nil, &ws)

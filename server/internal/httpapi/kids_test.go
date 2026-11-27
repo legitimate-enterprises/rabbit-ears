@@ -8,9 +8,10 @@ import (
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/api"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
-func itemOf(t *testing.T, e *env, id int64) api.Item {
+func itemOf(t *testing.T, e *env, id uid.ID) api.Item {
 	t.Helper()
 	var it api.Item
 	e.expect(200, "GET", "/items/"+itoa(id), e.plain.token, nil, &it)
@@ -27,9 +28,9 @@ func kidsContent(it api.Item) (bool, *bool) {
 func TestKidsContentFollowsTheRatingUnlessSet(t *testing.T) {
 	e := newEnv(t)
 	c := e.catalog()
-	for id, want := range map[int64]bool{c.g: true, c.pg: false, c.unrated: false, c.kidShow: true, c.adultShow: false} {
+	for id, want := range map[uid.ID]bool{c.g: true, c.pg: false, c.unrated: false, c.kidShow: true, c.adultShow: false} {
 		if got, over := kidsContent(itemOf(t, e, id)); got != want || over != nil {
-			t.Errorf("item %d: kidsContent %v override %v, want %v", id, got, over, want)
+			t.Errorf("item %s: kidsContent %v override %v, want %v", id, got, over, want)
 		}
 	}
 	var it api.Item
@@ -55,7 +56,7 @@ func TestKidsContentFollowsTheRatingUnlessSet(t *testing.T) {
 	}
 
 	e.expect(404, "PUT", "/items/"+itoa(c.kidEp)+"/kids-content", e.plain.token, map[string]any{"kidsContent": true}, nil)
-	e.expect(404, "PUT", "/items/999/kids-content", e.plain.token, map[string]any{"kidsContent": true}, nil)
+	e.expect(404, "PUT", "/items/"+itoa(uid.N(999))+"/kids-content", e.plain.token, map[string]any{"kidsContent": true}, nil)
 	e.expect(400, "PUT", "/items/"+itoa(c.g)+"/kids-content", e.plain.token, map[string]any{}, nil)
 	k := e.kid(e.plain, "Kid")
 	kidToken := e.kidDevice(e.plain, k.Id)
@@ -72,7 +73,7 @@ func TestHideKidsContent(t *testing.T) {
 	tb := e.youtubeLibrary()
 	e.expect(200, "PUT", "/youtube/channels/"+itoa(tb.channel)+"/for-kids", e.plain.token, map[string]any{"forKids": true}, nil)
 	me := "/profiles/" + itoa(e.plain.account.ID)
-	for _, id := range []int64{c.g, c.kidEp, c.adultEp, tb.newer} {
+	for _, id := range []uid.ID{c.g, c.kidEp, c.adultEp, tb.newer} {
 		e.expect(200, "PUT", me+"/watch-state/"+itoa(id), e.plain.token, map[string]any{"watched": false, "positionMs": 60000}, nil)
 	}
 	var pl api.Playlist
@@ -87,26 +88,26 @@ func TestHideKidsContent(t *testing.T) {
 	var page api.ItemPage
 	e.expect(200, "GET", "/items?limit=200", e.plain.token, nil, &page)
 	got := ids(page.Items)
-	for _, id := range []int64{c.g, c.kidShow, c.kidEp} {
+	for _, id := range []uid.ID{c.g, c.kidShow, c.kidEp} {
 		if got[id] {
-			t.Errorf("kids' item %d listed", id)
+			t.Errorf("kids' item %s listed", id)
 		}
 	}
-	for _, id := range []int64{c.pg, c.r, c.unrated, c.adultShow, c.adultEp} {
+	for _, id := range []uid.ID{c.pg, c.r, c.unrated, c.adultShow, c.adultEp} {
 		if !got[id] {
-			t.Errorf("item %d missing", id)
+			t.Errorf("item %s missing", id)
 		}
 	}
 	e.expect(200, "GET", "/items/"+itoa(c.g), e.plain.token, nil, nil)
 
 	var states api.WatchStatePage
 	e.expect(200, "GET", me+"/watch-state", e.plain.token, nil, &states)
-	var watched []int64
+	var watched []uid.ID
 	for _, w := range states.Items {
 		watched = append(watched, w.ItemId)
 	}
-	slices.Sort(watched)
-	if !slices.Equal(watched, []int64{c.adultEp}) {
+	slices.SortFunc(watched, uid.ID.Compare)
+	if !slices.Equal(watched, []uid.ID{c.adultEp}) {
 		t.Fatalf("continue watching %v", watched)
 	}
 	for _, p := range e.showProgress(e.plain.account.ID, "").Items {
@@ -205,7 +206,7 @@ func TestYouTubeForKids(t *testing.T) {
 func TestMusicForKids(t *testing.T) {
 	e := newEnv(t)
 	m := e.music()
-	explicit := func(id int64) {
+	explicit := func(id uid.ID) {
 		t.Helper()
 		s, err := e.svc.Items.Repo().Get(id)
 		must(t, err)
@@ -329,20 +330,20 @@ func TestAllowedFor(t *testing.T) {
 	e.expect(204, "PUT", "/profiles/"+itoa(b.Id)+"/allowed-items/"+itoa(tb.channel), e.plain.token, nil, nil)
 	e.expect(204, "PUT", "/profiles/"+itoa(rated.Id)+"/allowed-items/"+itoa(c.r), e.plain.token, nil, nil)
 
-	allowed := func(token string, id int64) []int64 {
+	allowed := func(token string, id uid.ID) []uid.ID {
 		t.Helper()
 		var v api.AllowedFor
 		e.expect(200, "GET", "/items/"+itoa(id)+"/allowed-for", token, nil, &v)
 		return v.ProfileIds
 	}
-	if got := allowed(e.plain.token, c.r); !slices.Equal(got, []int64{a.Id, b.Id}) {
+	if got := allowed(e.plain.token, c.r); !slices.Equal(got, []uid.ID{a.Id, b.Id}) {
 		t.Fatalf("only kids on an allow list count: %v", got)
 	}
-	if got := allowed(neighbor, tb.channel); !slices.Equal(got, []int64{b.Id}) {
+	if got := allowed(neighbor, tb.channel); !slices.Equal(got, []uid.ID{b.Id}) {
 		t.Fatalf("%v", got)
 	}
 	e.expect(204, "DELETE", "/profiles/"+itoa(b.Id)+"/allowed-items/"+itoa(c.r), neighbor, nil, nil)
-	if got := allowed(e.plain.token, c.r); !slices.Equal(got, []int64{a.Id}) {
+	if got := allowed(e.plain.token, c.r); !slices.Equal(got, []uid.ID{a.Id}) {
 		t.Fatalf("%v", got)
 	}
 	if got := allowed(e.plain.token, c.g); got == nil || len(got) != 0 {
@@ -351,6 +352,6 @@ func TestAllowedFor(t *testing.T) {
 	if got := allowed(e.admin.token, c.r); len(got) != 0 {
 		t.Fatalf("another household's kids are not told: %v", got)
 	}
-	e.expect(404, "GET", "/items/999/allowed-for", e.plain.token, nil, nil)
+	e.expect(404, "GET", "/items/"+itoa(uid.N(999))+"/allowed-for", e.plain.token, nil, nil)
 	e.expect(403, "GET", "/items/"+itoa(c.r)+"/allowed-for", e.kidDevice(e.plain, a.Id), nil, nil)
 }

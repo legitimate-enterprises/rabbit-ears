@@ -12,6 +12,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/library"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/task"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 func newRunner(t *testing.T, e *env) (*Runner, *task.Repo) {
@@ -67,6 +68,28 @@ func TestSyncCreatesAndPrunesTasks(t *testing.T) {
 	}
 	if ts, _ = tasks.List(); len(ts) != 3 || ts[0].Kind != "local" || ts[1].Kind != "metadata" || ts[2].Kind != "previews" {
 		t.Errorf("stale scan task kept: %+v", ts)
+	}
+}
+
+// A library deleted and made again under its name, so under a new id, gets
+// its scan task in the same sync that drops the old library's.
+func TestSyncReplacesTheScanTaskOfALibraryMadeAgain(t *testing.T) {
+	e := newEnv(t, library.Movies, "")
+	r, tasks := newRunner(t, e)
+	must(t, r.Sync())
+	must(t, e.s.Libraries.Delete(e.lib.ID))
+	again := &library.Library{Name: e.lib.Name, Kind: library.Movies}
+	must(t, e.s.Libraries.Create(again, nil))
+	must(t, r.Sync())
+	ts, _ := tasks.List()
+	var kinds []string
+	for _, x := range ts {
+		if strings.HasPrefix(x.Kind, "scan:") {
+			kinds = append(kinds, x.Kind)
+		}
+	}
+	if want := ScanKind(again.ID); len(kinds) != 1 || kinds[0] != want {
+		t.Fatalf("scan tasks %v, want %s", kinds, want)
 	}
 }
 
@@ -285,7 +308,7 @@ func TestSeekPreviewsTaskFollowsAScan(t *testing.T) {
 	m := e.list(item.Movie)[0]
 	fs, _ := e.files.FilesForItem(m.ID)
 	p, err := e.s.Previews.ByMediaFile(fs[0].ID)
-	if err != nil || p.Count != 1 || p.Width != 320 || p.IntervalMs != 10000 || p.Dir != filepath.Join(e.s.PreviewDir, strconv.FormatInt(fs[0].ID, 10)) {
+	if err != nil || p.Count != 1 || p.Width != 320 || p.IntervalMs != 10000 || p.Dir != filepath.Join(e.s.PreviewDir, fs[0].ID.String()) {
 		t.Fatalf("%+v %v", p, err)
 	}
 	if _, err := os.Stat(filepath.Join(p.Dir, "previews.bif")); err != nil {
@@ -429,7 +452,7 @@ func TestSeekPreviewsOfADeletedLibraryGoQuietly(t *testing.T) {
 	fixtureCopy(t, "h264-high41.mp4", filepath.Join(e.root, "A (2001)", "a.mp4"))
 	fixtureCopy(t, "h264-high41.mp4", filepath.Join(e.root, "B (2002)", "b.mp4"))
 	e.mustScan()
-	var second int64
+	var second uid.ID
 	deleted := func() bool {
 		need, err := e.files.NeedingPreviews()
 		must(t, err)
@@ -441,7 +464,7 @@ func TestSeekPreviewsOfADeletedLibraryGoQuietly(t *testing.T) {
 	if err != nil || sum != "1 file" {
 		t.Fatalf("%q %v", sum, err)
 	}
-	if _, err := os.Stat(filepath.Join(e.s.PreviewDir, strconv.FormatInt(second, 10))); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(e.s.PreviewDir, second.String())); !os.IsNotExist(err) {
 		t.Fatalf("frames of a deleted file: %v", err)
 	}
 }
@@ -463,7 +486,7 @@ func TestFailedPreviewsAreNotRetriedUntilTheFileChanges(t *testing.T) {
 		t.Fatal(sum)
 	}
 	fs, _ := e.files.FilesForItem(e.list(item.Movie)[0].ID)
-	fs[0].ModifiedAt = fs[0].ModifiedAt.Add(time.Second)
+	fs[0].FileModifiedAt = fs[0].FileModifiedAt.Add(time.Second)
 	must(t, e.files.UpdateFile(fs[0]))
 	if left, _ := e.files.NeedingPreviews(); len(left) != 1 {
 		t.Fatal("a changed file is tried again")

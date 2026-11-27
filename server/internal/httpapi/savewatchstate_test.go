@@ -19,10 +19,10 @@ func TestWatchStateChangesDoNotLoseEachOther(t *testing.T) {
 	s := &Server{svc: svc}
 	a := &account.Account{Kind: account.Adult, Email: "a@example.test", Name: "A", PasswordHash: "x"}
 	l := &library.Library{Name: "m", Kind: library.Movies}
-	if err := svc.Accounts.Repo().Create(a); err != nil {
+	if err := svc.Accounts.Repo().Create(a, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.Libraries.Repo().Create(l); err != nil {
+	if err := svc.Libraries.Repo().Create(l, nil); err != nil {
 		t.Fatal(err)
 	}
 	it := &item.Item{LibraryID: l.ID, Kind: item.Movie, ParsedTitle: "m"}

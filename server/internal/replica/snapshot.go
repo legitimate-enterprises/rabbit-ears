@@ -1,6 +1,7 @@
 package replica
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"database/sql/driver"
@@ -15,6 +16,7 @@ import (
 	"sync"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/occasion"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // File is an open snapshot, at Path, and the version it was taken at.
@@ -27,14 +29,14 @@ type File struct {
 // Snapshot opens household's replica as one SQLite database. A snapshot
 // already built is served while the household has nothing to read since
 // its version; otherwise one is built, in place of the household's older.
-func (s *Sync) Snapshot(ctx context.Context, household int64) (File, error) {
+func (s *Sync) Snapshot(ctx context.Context, household uid.ID) (File, error) {
 	if s.Dir == "" {
 		return File{}, errors.New("replica: no snapshot directory")
 	}
 	mu, _ := s.builds.LoadOrStore(household, &sync.Mutex{})
 	mu.(*sync.Mutex).Lock()
 	defer mu.(*sync.Mutex).Unlock()
-	prefix := fmt.Sprintf("h%d-s%d-", household, V1.Version)
+	prefix := fmt.Sprintf("h%s-s%d-", household, V1.Version)
 	built, err := filepath.Glob(filepath.Join(s.Dir, prefix+"v*.sqlite"))
 	if err != nil {
 		return File{}, err
@@ -129,7 +131,7 @@ var static = []string{
 	`CREATE TABLE holiday (key TEXT, name TEXT, PRIMARY KEY (key))`,
 	`CREATE TABLE holiday_date (key TEXT, day TEXT, PRIMARY KEY (key, day))`,
 	`CREATE TABLE holiday_color (key TEXT, position INTEGER, color TEXT, PRIMARY KEY (key, position))`,
-	`CREATE TABLE replica_meta (schema INTEGER, version INTEGER, household_id INTEGER)`,
+	`CREATE TABLE replica_meta (schema INTEGER, version INTEGER, household_id BLOB)`,
 }
 
 // schema is every statement that defines V1's replica, read from the
@@ -162,7 +164,7 @@ func (s *Sync) schema(ctx context.Context) ([]string, error) {
 		coll := collations(create)
 		defs := make([]string, len(tb.Cols))
 		for i, c := range tb.Cols {
-			defs[i] = strings.TrimSpace(c.Name + " " + types[c.Name])
+			defs[i] = strings.TrimSpace(c.Name + " " + cmp.Or(c.Type, types[c.Name]))
 			if coll[c.Name] != "" {
 				defs[i] += " COLLATE " + coll[c.Name]
 			}
@@ -237,7 +239,7 @@ func collations(create string) map[string]string {
 // server's database, and returns the version that read saw. The replica is
 // attached to a connection of its own, its writes unjournalled: a failed
 // build is thrown away whole.
-func (s *Sync) fill(ctx context.Context, path string, household int64) (version int64, err error) {
+func (s *Sync) fill(ctx context.Context, path string, household uid.ID) (version int64, err error) {
 	conn, err := s.d.Conn(ctx)
 	if err != nil {
 		return 0, err

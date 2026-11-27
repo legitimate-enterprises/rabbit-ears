@@ -38,7 +38,7 @@ func (s *Server) Search(ctx context.Context, r api.SearchRequestObject) (api.Sea
 	}
 	out.People = mapAll(people, toPerson)
 
-	f := item.MusicFilter{Q: q, AccountID: caller(ctx).profile.ID, Clean: clean(ctx), Limit: limit}
+	f := item.MusicFilter{Q: q, AccountID: &caller(ctx).profile.ID, Clean: clean(ctx), Limit: limit}
 	artists, err := s.svc.Music.Repo().Artists(f)
 	if err != nil {
 		return nil, err
@@ -59,13 +59,13 @@ func (s *Server) Search(ctx context.Context, r api.SearchRequestObject) (api.Sea
 	}
 	out.Songs = mapAll(songs, toSong)
 
-	channels, err := s.svc.YouTube.Repo().Channels(youtube.ChannelFilter{Q: q, Sort: "best", AccountID: caller(ctx).profile.ID,
+	channels, err := s.svc.YouTube.Repo().Channels(youtube.ChannelFilter{Q: q, Sort: "best", AccountID: &caller(ctx).profile.ID,
 		Audience: a, Limit: limit})
 	if err != nil {
 		return nil, err
 	}
 	out.Channels = mapAll(channels, toYouTubeChannel)
-	videos, err := s.svc.YouTube.Repo().Videos(youtube.VideoFilter{Q: q, Sort: "best", AccountID: caller(ctx).profile.ID,
+	videos, err := s.svc.YouTube.Repo().Videos(youtube.VideoFilter{Q: q, Sort: "best", AccountID: &caller(ctx).profile.ID,
 		Audience: a, Limit: limit})
 	out.Videos = mapAll(videos, toYouTubeVideo)
 	return out, err

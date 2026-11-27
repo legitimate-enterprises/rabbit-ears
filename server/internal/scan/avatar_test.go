@@ -54,7 +54,7 @@ func TestChannelAvatarForAPlaylistFolder(t *testing.T) {
 
 	art := func(title string) *item.Metadata {
 		t.Helper()
-		chs, err := e.s.YouTube.Channels(youtube.ChannelFilter{LibraryID: e.lib.ID})
+		chs, err := e.s.YouTube.Channels(youtube.ChannelFilter{LibraryID: &e.lib.ID})
 		must(t, err)
 		for _, ch := range chs {
 			if ch.Title == title {

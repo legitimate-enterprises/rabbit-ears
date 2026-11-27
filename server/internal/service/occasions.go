@@ -8,6 +8,7 @@ import (
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/occasion"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // OccasionService manages occasions and finds those in season.
@@ -36,9 +37,9 @@ type ActiveOccasion struct {
 
 // Active lists the occasions in season on the calendar day d, given at
 // midnight UTC, that have a member the audience sees, nearest their
-// anchor first, then by name. A nonzero itemID keeps those with that item
-// among the members the audience sees.
-func (s *OccasionService) Active(d time.Time, a item.Audience, itemID int64) ([]ActiveOccasion, error) {
+// anchor first, then by name. An itemID keeps those with that item among
+// the members the audience sees.
+func (s *OccasionService) Active(d time.Time, a item.Audience, itemID *uid.ID) ([]ActiveOccasion, error) {
 	all, err := s.repo.List(-1, 0)
 	if err != nil {
 		return nil, err
@@ -49,7 +50,7 @@ func (s *OccasionService) Active(d time.Time, a item.Audience, itemID int64) ([]
 		if !ok {
 			continue
 		}
-		seen, err := s.items.List(item.Filter{OccasionID: o.ID, ID: itemID, Audience: a, Catalog: true, Limit: 1})
+		seen, err := s.items.List(item.Filter{OccasionID: &o.ID, ID: itemID, Audience: a, Catalog: true, Limit: 1})
 		if err != nil {
 			return nil, err
 		}

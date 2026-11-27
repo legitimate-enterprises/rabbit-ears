@@ -7,23 +7,25 @@ import (
 	"time"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/account"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db/dbtest"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/household"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/service"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 func adultWithHousehold(t *testing.T, s *service.Services, email string) (*account.Account, *household.Household) {
 	t.Helper()
 	a := &account.Account{Kind: account.Adult, Email: email, Name: email, PasswordHash: "x"}
-	if err := s.Accounts.Repo().Create(a); err != nil {
+	if err := s.Accounts.Repo().Create(a, nil); err != nil {
 		t.Fatal(err)
 	}
 	h := &household.Household{Name: email, AdultID: a.ID}
-	if err := s.Households.Repo().Create(h); err != nil {
+	if err := s.Households.Repo().Create(h, nil); err != nil {
 		t.Fatal(err)
 	}
 	a.HouseholdID = &h.ID
-	if err := s.Accounts.Repo().Update(a); err != nil {
+	if err := s.Accounts.Repo().Update(a, nil); err != nil {
 		t.Fatal(err)
 	}
 	return a, h
@@ -55,7 +57,7 @@ func TestAuthenticateRefusesRevokedAccount(t *testing.T) {
 	token, _, _ := s.Devices.Register(a.ID, h.ID, "Laptop", "web")
 	now := time.Now()
 	a.RevokedAt = &now
-	_ = s.Accounts.Repo().Update(a)
+	_ = s.Accounts.Repo().Update(a, nil)
 	if _, _, err := s.Devices.Authenticate(token); !errors.Is(err, service.ErrUnauthenticated) {
 		t.Fatalf("revoked account: %v", err)
 	}
@@ -66,7 +68,7 @@ func TestProfileOnlyWithinHousehold(t *testing.T) {
 	a, ha := adultWithHousehold(t, s, "a@example.test")
 	_, hb := adultWithHousehold(t, s, "b@example.test")
 	kid := &account.Account{Kind: account.Kid, Name: "K", HouseholdID: &hb.ID}
-	_ = s.Accounts.Repo().Create(kid)
+	_ = s.Accounts.Repo().Create(kid, nil)
 	if p, err := s.Accounts.Profile(ha.ID, a.ID); err != nil || p.ID != a.ID {
 		t.Fatalf("own adult: %v", err)
 	}
@@ -78,12 +80,38 @@ func TestProfileOnlyWithinHousehold(t *testing.T) {
 	}
 }
 
+// A household made for an adult takes the id its creator chose and records
+// that creator on both rows it writes; the same id again is a conflict.
+func TestCreateForTakesTheChosenIDAndTheActor(t *testing.T) {
+	s := service.New(dbtest.Open(t))
+	admin, _ := adultWithHousehold(t, s, "admin@example.test")
+	a := &account.Account{Kind: account.Adult, Email: "b@example.test", Name: "B", PasswordHash: "x"}
+	must(t, s.Accounts.Repo().Create(a, nil))
+	id := uid.New()
+	h, err := s.Households.CreateFor("B", a, &id, &admin.ID)
+	if err != nil || h.ID != id {
+		t.Fatalf("%+v %v", h, err)
+	}
+	got, err := s.Households.Repo().Get(id)
+	must(t, err)
+	moved, err := s.Accounts.Repo().Get(a.ID)
+	must(t, err)
+	if got.CreatedBy == nil || *got.CreatedBy != admin.ID || moved.ModifiedBy == nil || *moved.ModifiedBy != admin.ID || moved.CreatedBy != nil {
+		t.Fatalf("household by %v, adult created by %v modified by %v", got.CreatedBy, moved.CreatedBy, moved.ModifiedBy)
+	}
+	other := &account.Account{Kind: account.Adult, Email: "c@example.test", Name: "C", PasswordHash: "x"}
+	must(t, s.Accounts.Repo().Create(other, nil))
+	if _, err := s.Households.CreateFor("C", other, &id, &admin.ID); !errors.Is(err, db.ErrConflict) {
+		t.Fatalf("a taken id: %v", err)
+	}
+}
+
 func TestDeletingAHouseholdKeepsItsAdult(t *testing.T) {
 	s := service.New(dbtest.Open(t))
 	a, h := adultWithHousehold(t, s, "a@example.test")
 	kid := &account.Account{Kind: account.Kid, Name: "K", HouseholdID: &h.ID}
-	_ = s.Accounts.Repo().Create(kid)
-	if _, err := s.Households.Delete(h.ID); err != nil {
+	_ = s.Accounts.Repo().Create(kid, nil)
+	if _, err := s.Households.Delete(h.ID, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := s.Accounts.Repo().Get(a.ID); err != nil || got.HouseholdID != nil {
@@ -100,32 +128,34 @@ func TestDeletingAHouseholdKeepsItsAdult(t *testing.T) {
 // deletes keeps playing.
 func TestDeletesRevokeDevicesActingAsAProfileTheyRemove(t *testing.T) {
 	type profiles struct{ adult, kid, member *account.Account }
-	type devices struct{ tablet, phone, laptop int64 }
+	type devices struct{ tablet, phone, laptop uid.ID }
 	for name, c := range map[string]struct {
 		del  func(s *service.Services, p profiles) (*service.SignedOut, error)
-		want func(d devices) []int64
+		want func(d devices) []uid.ID
 	}{
 		"the kid": {
-			func(s *service.Services, p profiles) (*service.SignedOut, error) { return s.Accounts.Delete(p.kid.ID) },
-			func(d devices) []int64 { return []int64{d.tablet} },
+			func(s *service.Services, p profiles) (*service.SignedOut, error) {
+				return s.Accounts.Delete(p.kid.ID, nil)
+			},
+			func(d devices) []uid.ID { return []uid.ID{d.tablet} },
 		},
 		"another adult of their household": {
 			func(s *service.Services, p profiles) (*service.SignedOut, error) {
-				return s.Accounts.Delete(p.member.ID)
+				return s.Accounts.Delete(p.member.ID, nil)
 			},
-			func(d devices) []int64 { return []int64{d.phone} },
+			func(d devices) []uid.ID { return []uid.ID{d.phone} },
 		},
 		"their household's owner": {
 			func(s *service.Services, p profiles) (*service.SignedOut, error) {
-				return s.Accounts.Delete(p.adult.ID)
+				return s.Accounts.Delete(p.adult.ID, nil)
 			},
-			func(d devices) []int64 { return []int64{d.tablet, d.phone, d.laptop} },
+			func(d devices) []uid.ID { return []uid.ID{d.tablet, d.phone, d.laptop} },
 		},
 		"their household": {
 			func(s *service.Services, p profiles) (*service.SignedOut, error) {
-				return s.Households.Delete(*p.adult.HouseholdID)
+				return s.Households.Delete(*p.adult.HouseholdID, nil)
 			},
-			func(d devices) []int64 { return []int64{d.tablet, d.phone, d.laptop} },
+			func(d devices) []uid.ID { return []uid.ID{d.tablet, d.phone, d.laptop} },
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -134,7 +164,7 @@ func TestDeletesRevokeDevicesActingAsAProfileTheyRemove(t *testing.T) {
 			kid := &account.Account{Kind: account.Kid, Name: "K", HouseholdID: &h.ID}
 			member := &account.Account{Kind: account.Adult, Name: "B", Email: "b@example.test", PasswordHash: "x", HouseholdID: &h.ID}
 			for _, p := range []*account.Account{kid, member} {
-				if err := s.Accounts.Repo().Create(p); err != nil {
+				if err := s.Accounts.Repo().Create(p, nil); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -149,7 +179,7 @@ func TestDeletesRevokeDevicesActingAsAProfileTheyRemove(t *testing.T) {
 			}
 			out, err := c.del(s, profiles{a, kid, member})
 			if err == nil {
-				slices.Sort(out.Devices)
+				slices.SortFunc(out.Devices, uid.ID.Compare)
 			}
 			if want := c.want(devices{tablet.ID, phone.ID, laptop.ID}); err != nil || !slices.Equal(out.Devices, want) {
 				t.Fatalf("%+v %v, want %v", out, err, want)
@@ -172,19 +202,25 @@ func TestDeletesRevokeDevicesActingAsAProfileTheyRemove(t *testing.T) {
 // pass the check made before it and reopen first run.
 func TestWritesKeepTheLastAdmin(t *testing.T) {
 	for name, remove := range map[string]func(*service.Services, *account.Account) error{
-		"delete": func(s *service.Services, a *account.Account) error { _, err := s.Accounts.Delete(a.ID); return err },
-		"delete own": func(s *service.Services, a *account.Account) error {
-			_, err := s.Accounts.DeleteOwn(a)
+		"delete": func(s *service.Services, a *account.Account) error {
+			_, err := s.Accounts.Delete(a.ID, nil)
 			return err
 		},
-		"demote": func(s *service.Services, a *account.Account) error { a.IsAdmin = false; return s.Accounts.Update(a) },
+		"delete own": func(s *service.Services, a *account.Account) error {
+			_, err := s.Accounts.DeleteOwn(a, nil)
+			return err
+		},
+		"demote": func(s *service.Services, a *account.Account) error {
+			a.IsAdmin = false
+			return s.Accounts.Update(a, nil)
+		},
 		"revoke": func(s *service.Services, a *account.Account) error {
 			now := time.Now().UTC()
 			a.RevokedAt = &now
-			return s.Accounts.Update(a)
+			return s.Accounts.Update(a, nil)
 		},
 		"delete their household": func(s *service.Services, a *account.Account) error {
-			_, err := s.Households.Delete(*a.HouseholdID)
+			_, err := s.Households.Delete(*a.HouseholdID, nil)
 			return err
 		},
 	} {
@@ -192,7 +228,7 @@ func TestWritesKeepTheLastAdmin(t *testing.T) {
 			s := service.New(dbtest.Open(t))
 			_, h := adultWithHousehold(t, s, "owner@example.test")
 			a := &account.Account{Kind: account.Adult, Name: "A", Email: "a@example.test", PasswordHash: "x", HouseholdID: &h.ID, IsAdmin: true}
-			must(t, s.Accounts.Repo().Create(a))
+			must(t, s.Accounts.Repo().Create(a, nil))
 			if err := remove(s, a); !errors.Is(err, service.ErrLastAdmin) {
 				t.Fatalf("the last admin: %v", err)
 			}
@@ -201,7 +237,7 @@ func TestWritesKeepTheLastAdmin(t *testing.T) {
 			}
 			b, _ := adultWithHousehold(t, s, "b@example.test")
 			b.IsAdmin = true
-			must(t, s.Accounts.Repo().Update(b))
+			must(t, s.Accounts.Repo().Update(b, nil))
 			again, err := s.Accounts.Repo().Get(a.ID)
 			must(t, err)
 			must(t, remove(s, again))
@@ -223,7 +259,7 @@ func TestChangePasswordSignsOutOtherDevicesAtomically(t *testing.T) {
 	must(t, err)
 	_, err = d.Exec(`CREATE TRIGGER refuse_revoke BEFORE UPDATE OF revoked_at ON device BEGIN SELECT RAISE(ABORT, 'refused'); END`)
 	must(t, err)
-	if _, err := s.Auth.ChangePassword("10.0.0.9", sg.Device.ID, sg.Adult, "right-password", "next-password"); err == nil {
+	if _, err := s.Auth.ChangePassword("10.0.0.9", sg.Device.ID, sg.Adult, "right-password", "next-password", nil); err == nil {
 		t.Fatal("changed though the sign-out failed")
 	}
 	a, err := s.Accounts.Repo().Get(sg.Adult.ID)
@@ -234,8 +270,8 @@ func TestChangePasswordSignsOutOtherDevicesAtomically(t *testing.T) {
 	_, err = d.Exec(`DROP TRIGGER refuse_revoke`)
 	must(t, err)
 
-	out, err := s.Auth.ChangePassword("10.0.0.9", sg.Device.ID, a, "right-password", "next-password")
-	if err != nil || !slices.Equal(out.Devices, []int64{phoneDev.ID}) {
+	out, err := s.Auth.ChangePassword("10.0.0.9", sg.Device.ID, a, "right-password", "next-password", nil)
+	if err != nil || !slices.Equal(out.Devices, []uid.ID{phoneDev.ID}) {
 		t.Fatalf("%+v %v", out, err)
 	}
 	if _, _, err := s.Devices.Authenticate(phone); !errors.Is(err, service.ErrUnauthenticated) {
@@ -277,5 +313,32 @@ func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A kid leaving the household it lives in moves to the oldest other one it
+// is in, whatever the households' ids.
+func TestAKidLeavingItsHouseholdMovesToTheOldestOther(t *testing.T) {
+	s := service.New(dbtest.Open(t))
+	household := func(email string, id uid.ID) uid.ID {
+		a := &account.Account{Kind: account.Adult, Email: email, Name: email, PasswordHash: "x"}
+		must(t, s.Accounts.Repo().Create(a, nil))
+		h := &household.Household{ID: id, Name: email, AdultID: a.ID}
+		must(t, s.Households.Repo().Create(h, nil))
+		time.Sleep(2 * time.Millisecond) // created_at is kept to the millisecond
+		return h.ID
+	}
+	older := household("older@example.test", uid.New()) // made first, its id sorting last
+	home := household("home@example.test", uid.New())
+	newer := household("newer@example.test", uid.N(1))
+	kid := &account.Account{Kind: account.Kid, Name: "K", HouseholdID: &home}
+	must(t, s.Accounts.Repo().Create(kid, nil))
+	must(t, s.Accounts.Repo().AddMember(newer, kid.ID))
+	must(t, s.Accounts.Repo().AddMember(older, kid.ID))
+	if _, err := s.Households.Leave(kid, home, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.Accounts.Repo().Get(kid.ID); err != nil || got.HouseholdID == nil || *got.HouseholdID != older {
+		t.Fatalf("moved to %v, want %s (%v)", got.HouseholdID, older, err)
 	}
 }

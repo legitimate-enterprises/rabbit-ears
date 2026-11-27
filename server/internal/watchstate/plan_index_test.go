@@ -6,6 +6,7 @@ import (
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db/dbtest"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // Show progress backs the TV grid on every device, so for every kind of
@@ -13,8 +14,9 @@ import (
 // only its own intermediate results are scanned.
 func TestShowProgressUsesIndexes(t *testing.T) {
 	d := dbtest.Open(t)
-	for _, a := range []item.Audience{{}, {Kid: true, AccountID: 1, TV: []string{"TV-Y"}}, {Kid: true, AccountID: 1, AllowList: true}} {
-		rows, err := d.Query(`EXPLAIN QUERY PLAN `+showProgress, append([]any{1, nil, nil, 50, 0}, a.Args()...)...)
+	kid := uid.N(1)
+	for _, a := range []item.Audience{{}, {Kid: true, AccountID: &kid, TV: []string{"TV-Y"}}, {Kid: true, AccountID: &kid, AllowList: true}} {
+		rows, err := d.Query(`EXPLAIN QUERY PLAN `+showProgress, append([]any{kid, nil, nil, 50, 0}, a.Args()...)...)
 		if err != nil {
 			t.Fatal(err)
 		}

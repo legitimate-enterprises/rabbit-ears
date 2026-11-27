@@ -15,6 +15,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/parse"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/review"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/tmdb"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // stated is what a title's folder and file names, and a song's tags, say
@@ -194,7 +195,7 @@ func (s *Scanner) statedAlbum(al *item.Item) (stated, error) {
 func sameYear(a, b *int) bool { return a == nil && b == nil || a != nil && b != nil && *a == *b }
 
 // settle leaves the title the one identity review rv, or with nil none.
-func (s *Scanner) settle(itemID int64, rv *review.Review) error {
+func (s *Scanner) settle(itemID uid.ID, rv *review.Review) error {
 	if s.Reviews == nil {
 		return nil
 	}
@@ -304,12 +305,12 @@ func matchedTo(m *item.Metadata) review.Evidence {
 }
 
 // reviewed is the library's items that have a review of their identity.
-func (s *Scanner) reviewed(libraryID int64) (map[int64]bool, error) {
-	out := map[int64]bool{}
+func (s *Scanner) reviewed(libraryID uid.ID) (map[uid.ID]bool, error) {
+	out := map[uid.ID]bool{}
 	if s.Reviews == nil {
 		return out, nil
 	}
-	rs, err := s.Reviews.List(review.Filter{LibraryID: libraryID})
+	rs, err := s.Reviews.List(review.Filter{LibraryID: &libraryID})
 	for _, rv := range rs {
 		if rv.ItemID != nil && slices.Contains(review.OfIdentity, rv.Reason) {
 			out[*rv.ItemID] = true
@@ -320,7 +321,7 @@ func (s *Scanner) reviewed(libraryID int64) (map[int64]bool, error) {
 
 // agreed ends the identity reviews of a matched title whose names say
 // again what its match was made from.
-func (s *Scanner) agreed(itemID int64) error {
+func (s *Scanner) agreed(itemID uid.ID) error {
 	m, err := s.Items.Remote(itemID)
 	if err != nil || m.Status != item.Matched {
 		return nil //nolint:nilerr // without a match its review stands
@@ -331,7 +332,7 @@ func (s *Scanner) agreed(itemID int64) error {
 // checkIdentities looks again at each of the library's movies and shows
 // whose names no longer say what its remote row was made from or last
 // checked against, a row never checked included.
-func (s *Scanner) checkIdentities(ctx context.Context, r *run, libraryID int64) error {
+func (s *Scanner) checkIdentities(ctx context.Context, r *run, libraryID uid.ID) error {
 	stamps, err := s.Items.IdentityStamps(libraryID)
 	if err != nil {
 		return err
@@ -341,7 +342,7 @@ func (s *Scanner) checkIdentities(ctx context.Context, r *run, libraryID int64) 
 		return err
 	}
 	for _, kind := range []string{item.Movie, item.Show} {
-		items, err := s.Items.List(item.Filter{LibraryID: libraryID, Kind: kind, Limit: 1000000})
+		items, err := s.Items.List(item.Filter{LibraryID: &libraryID, Kind: kind, Limit: 1000000})
 		if err != nil {
 			return err
 		}

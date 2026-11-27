@@ -12,6 +12,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/api"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/account"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/gravatar"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/httpapi"
 )
 
 func color(a api.Account) string {
@@ -71,9 +72,9 @@ func TestProfileColorsAndPreferences(t *testing.T) {
 	res, err := e.svc.Accounts.Repo().Get(k2.Id)
 	must(t, err)
 	res.Color = ""
-	must(t, e.svc.Accounts.Repo().Update(res))
+	must(t, e.svc.Accounts.Repo().Update(res, nil))
 	e.expect(200, "GET", "/profiles/"+itoa(k2.Id), e.plain.token, nil, &got)
-	if color(got) != account.Palette[k2.Id%8] {
+	if color(got) != account.Palette[int(k2.Id[len(k2.Id)-1])%len(account.Palette)] {
 		t.Fatalf("%+v", got)
 	}
 }
@@ -118,7 +119,7 @@ func TestGravatar(t *testing.T) {
 		t.Fatal("absent keeps the setting")
 	}
 	e.expect(200, "GET", "/me", e.plain.token, nil, &me)
-	if me.Account.AvatarUrl == nil || *me.Account.AvatarUrl != "/api/v1"+avatar {
+	if me.Account.AvatarUrl == nil || *me.Account.AvatarUrl != httpapi.BasePath+avatar {
 		t.Fatalf("%+v", me.Account)
 	}
 	for _, p := range me.Profiles {

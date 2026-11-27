@@ -109,11 +109,12 @@ func fromDate(d *openapi_types.Date) *time.Time {
 
 func toLibrary(l *library.Library, folders []*library.Folder, st api.LibraryStats) api.Library {
 	return api.Library{Id: l.ID, Name: l.Name, Kind: api.LibraryKind(l.Kind), ScanHour: l.ScanHour, WatchFiles: l.WatchFiles,
-		Folders: mapAll(folders, toFolder), Stats: st, LastScannedAt: l.LastScannedAt, CreatedAt: l.CreatedAt, UpdatedAt: l.UpdatedAt}
+		Folders: mapAll(folders, toFolder), Stats: st, LastScannedAt: l.LastScannedAt, CreatedAt: l.CreatedAt, ModifiedAt: l.ModifiedAt, CreatedBy: l.CreatedBy, ModifiedBy: l.ModifiedBy}
 }
 
 func toFolder(f *library.Folder) api.Folder {
-	return api.Folder{Id: f.ID, LibraryId: f.LibraryID, Path: f.Path}
+	return api.Folder{Id: f.ID, LibraryId: f.LibraryID, Path: f.Path, CreatedAt: f.CreatedAt, ModifiedAt: f.ModifiedAt, CreatedBy: f.CreatedBy,
+		ModifiedBy: f.ModifiedBy}
 }
 
 // shownPath is a server path as the caller sees it: whole for an admin, else
@@ -137,7 +138,7 @@ func artPath(path, from string, admin bool) string {
 func toItem(it *item.Item, m *item.Metadata, admin bool) api.Item {
 	out := api.Item{Id: it.ID, LibraryId: it.LibraryID, ParentId: it.ParentID, Kind: api.ItemKind(it.Kind), Path: optStr(shownPath(it.Path, admin)),
 		ParsedTitle: it.ParsedTitle, ParsedYear: it.ParsedYear, SeasonNumber: it.SeasonNumber, EpisodeNumber: it.EpisodeNumber,
-		AddedAt: it.AddedAt, UpdatedAt: it.UpdatedAt}
+		AddedAt: it.AddedAt, CreatedAt: it.CreatedAt, ModifiedAt: it.ModifiedAt}
 	if it.Kind == item.Movie || it.Kind == item.Show {
 		rating := ""
 		if m != nil {
@@ -160,9 +161,10 @@ func toItem(it *item.Item, m *item.Metadata, admin bool) api.Item {
 }
 
 func toMediaFile(f *mediafile.File, tracks []*mediafile.Track, chapters []*mediafile.Chapter, admin bool) api.MediaFile {
-	out := api.MediaFile{Id: f.ID, ItemId: f.ItemID, Path: shownPath(f.Path, admin), SizeBytes: f.SizeBytes, ModifiedAt: f.ModifiedAt,
+	out := api.MediaFile{Id: f.ID, ItemId: f.ItemID, Path: shownPath(f.Path, admin), SizeBytes: f.SizeBytes, FileModifiedAt: f.FileModifiedAt,
 		Container: optStr(f.Container), DurationMs: f.DurationMs, Bitrate: f.Bitrate, ProbedAt: f.ProbedAt,
-		Tracks: mapAll(tracks, toTrack), Chapters: mapAll(chapters, toChapter), MissingAt: f.MissingAt, ProbeFailedAt: f.ProbeFailedAt}
+		Tracks: mapAll(tracks, toTrack), Chapters: mapAll(chapters, toChapter), MissingAt: f.MissingAt, ProbeFailedAt: f.ProbeFailedAt,
+		CreatedAt: f.CreatedAt, ModifiedAt: f.ModifiedAt}
 	if admin {
 		out.ProbeError = optStr(f.ProbeError)
 	}
@@ -187,7 +189,8 @@ func toAccount(a *account.Account) api.Account {
 	out := api.Account{Id: a.ID, Kind: api.AccountKind(a.Kind), Email: optStr(a.Email), Name: a.Name, IsAdmin: a.IsAdmin,
 		HouseholdId: a.HouseholdID, Birthday: optDate(a.Birthday), HasPin: a.PINHash != "", PinLocked: locked, Pending: a.Pending(),
 		FilterMode: api.FilterMode(a.FilterMode), MovieCeiling: optEnum[api.MovieRating](a.MovieCeiling),
-		TvCeiling: optEnum[api.TvRating](a.TVCeiling), RevokedAt: a.RevokedAt, CreatedAt: a.CreatedAt, UpdatedAt: a.UpdatedAt}
+		TvCeiling: optEnum[api.TvRating](a.TVCeiling), RevokedAt: a.RevokedAt, CreatedAt: a.CreatedAt, ModifiedAt: a.ModifiedAt,
+		CreatedBy: a.CreatedBy, ModifiedBy: a.ModifiedBy}
 	color, autoplay := a.ShownColor(), !a.NoAutoplay
 	out.Color, out.Autoplay = &color, &autoplay
 	if a.Kind == account.Adult {
@@ -197,17 +200,19 @@ func toAccount(a *account.Account) api.Account {
 }
 
 func toHousehold(h *household.Household) api.Household {
-	return api.Household{Id: h.ID, Name: h.Name, AdultId: h.AdultID, CreatedAt: h.CreatedAt}
+	return api.Household{Id: h.ID, Name: h.Name, AdultId: h.AdultID, CreatedAt: h.CreatedAt, ModifiedAt: h.ModifiedAt,
+		CreatedBy: h.CreatedBy, ModifiedBy: h.ModifiedBy}
 }
 
 func toDevice(d *device.Device) api.Device {
 	return api.Device{Id: d.ID, Name: d.Name, Platform: api.Platform(d.Platform), AccountId: d.AccountID, HouseholdId: d.HouseholdID,
-		LastSeenAt: d.LastSeenAt, RevokedAt: d.RevokedAt, CreatedAt: d.CreatedAt}
+		LastSeenAt: d.LastSeenAt, RevokedAt: d.RevokedAt, CreatedAt: d.CreatedAt, ModifiedAt: d.ModifiedAt}
 }
 
 func toJoinCode(j *joincode.JoinCode) api.JoinCode {
 	return api.JoinCode{Id: j.ID, Code: j.Code, Link: "/join/" + j.Code, AccountId: j.AccountID, ExpiresAt: j.ExpiresAt,
-		UsedAt: j.UsedAt, RevokedAt: j.RevokedAt, CreatedAt: j.CreatedAt}
+		UsedAt: j.UsedAt, RevokedAt: j.RevokedAt, CreatedAt: j.CreatedAt, ModifiedAt: j.ModifiedAt, CreatedBy: j.CreatedBy,
+		ModifiedBy: j.ModifiedBy}
 }
 
 func toPlanEntry(p *session.PlanEntry) api.PlanEntry {
@@ -219,7 +224,7 @@ func toPlanEntry(p *session.PlanEntry) api.PlanEntry {
 func toSession(s *session.Session, plan []*session.PlanEntry) api.Session {
 	out := api.Session{Id: s.ID, DeviceId: s.DeviceID, AccountId: s.AccountID, ItemId: s.ItemID, MediaFileId: s.MediaFileID,
 		PositionMs: s.PositionMs, CurrentEntry: s.CurrentEntry, Plan: mapAll(plan, toPlanEntry), Encoder: api.SessionEncoderNone,
-		StartedAt: s.StartedAt, UpdatedAt: s.UpdatedAt, EndedAt: s.EndedAt}
+		StartedAt: s.StartedAt, CreatedAt: s.CreatedAt, ModifiedAt: s.ModifiedAt, EndedAt: s.EndedAt}
 	if s.CurrentEntry < len(plan) && plan[s.CurrentEntry].VideoAction == session.ActionConvert {
 		out.Encoder = api.SessionEncoderSoftware
 		if plan[s.CurrentEntry].Encoder == session.EncoderHardware {
@@ -231,12 +236,12 @@ func toSession(s *session.Session, plan []*session.PlanEntry) api.Session {
 
 func toWatchState(w *watchstate.State) api.WatchState {
 	return api.WatchState{ItemId: w.ItemID, PositionMs: w.PositionMs, EditionId: w.EditionID, Watched: w.Watched, PlayCount: w.PlayCount,
-		LastPlayedAt: w.LastPlayedAt, UpdatedAt: w.UpdatedAt}
+		LastPlayedAt: w.LastPlayedAt, ChangedAt: w.ChangedAt}
 }
 
 func toTask(t *task.Task, last *task.Run) api.Task {
 	out := api.Task{Id: t.ID, Name: t.Name, Kind: t.Kind, IntervalSeconds: t.IntervalSeconds, Enabled: t.Enabled,
-		NextRunAt: t.NextRunAt, RunRequestedAt: t.RunRequestedAt, CreatedAt: t.CreatedAt}
+		NextRunAt: t.NextRunAt, RunRequestedAt: t.RunRequestedAt, CreatedAt: t.CreatedAt, ModifiedAt: t.ModifiedAt}
 	if last != nil {
 		r := toRun(last)
 		out.LastRun = &r

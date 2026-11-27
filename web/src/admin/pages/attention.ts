@@ -146,7 +146,7 @@ async function fill(ctx: Ctx, root: HTMLElement) {
       await run();
       reload();
     });
-  const library = (id?: number) => (id ? (d.library.get(id) ?? "") : "");
+  const library = (id?: string) => (id === undefined ? "" : (d.library.get(id) ?? ""));
   const title = (f: File) => h("b", f.title ?? base(f.path));
 
   const dismiss = (rv: Review) =>
@@ -160,7 +160,11 @@ async function fill(ctx: Ctx, root: HTMLElement) {
     );
   const matches = (rv: Review) => {
     const itemId = rv.itemId;
-    if (!itemId || !MATCHABLE.has(rv.reason) || (rv.itemKind !== "movie" && rv.itemKind !== "show"))
+    if (
+      itemId === undefined ||
+      !MATCHABLE.has(rv.reason) ||
+      (rv.itemKind !== "movie" && rv.itemKind !== "show")
+    )
       return [];
     const cands = rv.evidence.filter((e) => e.role === "candidate" && e.provider === "tmdb");
     const folder = rv.reason === "conflicting_identity" && cands.length === 1;
@@ -261,7 +265,7 @@ async function fill(ctx: Ctx, root: HTMLElement) {
         table(
           ["What", "Library", "Missing since", "Where it was", ""],
           d.missing.map((f) => {
-            const scan = f.libraryId ? d.scans.get(f.libraryId) : undefined;
+            const scan = f.libraryId === undefined ? undefined : d.scans.get(f.libraryId);
             return [
               title(f),
               library(f.libraryId),

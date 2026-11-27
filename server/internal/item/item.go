@@ -16,6 +16,7 @@ import (
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/mediafile"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // Kinds of item.
@@ -46,9 +47,9 @@ const (
 // season 0); albums hang off their album artist and songs off their album;
 // videos hang off their channel.
 type Item struct {
-	ID            int64
-	LibraryID     int64
-	ParentID      *int64
+	ID            uid.ID
+	LibraryID     uid.ID
+	ParentID      *uid.ID
 	Kind          string
 	Path          string // folder for shows and seasons; empty for episodes and movies
 	ParsedTitle   string
@@ -58,7 +59,7 @@ type Item struct {
 	DiscNumber    *int
 	TrackNumber   *int
 	// ArtistID is who performs a song when that is not its album artist.
-	ArtistID *int64
+	ArtistID *uid.ID
 	// SortTitle is the title without a leading "The ", which music sorts
 	// and files letters by; empty sorts by ParsedTitle.
 	SortTitle string
@@ -68,9 +69,10 @@ type Item struct {
 	// writes it.
 	KidsContent *bool
 	// Explicit is a song's advisory tag, nil until a probe read it.
-	Explicit  *bool
-	AddedAt   time.Time
-	UpdatedAt time.Time
+	Explicit   *bool
+	AddedAt    time.Time
+	CreatedAt  time.Time
+	ModifiedAt time.Time
 }
 
 // KidsRatings are the ratings that make a movie or show kids' content.
@@ -87,7 +89,7 @@ func IsKidsContent(kind, rating string, override *bool) bool {
 
 // Metadata is what a provider said about an item. Absent until first fetched.
 type Metadata struct {
-	ItemID         int64
+	ItemID         uid.ID
 	Provider       string
 	ProviderID     *int64
 	Status         string
@@ -114,15 +116,15 @@ const Local = "local"
 
 // Filter narrows List. Zero values mean no constraint.
 type Filter struct {
-	LibraryID int64
+	LibraryID *uid.ID
 	Kind      string
-	ParentID  int64
+	ParentID  *uid.ID
 	Audience  Audience
 	// Q is a case-insensitive substring of a movie's or show's parsed or
 	// provider title, or of an episode's provider title.
 	Q        string
-	GenreID  int64
-	PersonID int64
+	GenreID  *uid.ID
+	PersonID *uid.ID
 	// Catalog keeps only CatalogKinds.
 	Catalog bool
 	// KidsOnly keeps kids' content, as KidsContentOf says.
@@ -137,24 +139,24 @@ type Filter struct {
 	Limit  int // 0 means 100
 	Offset int
 	// OccasionID keeps the occasion's members.
-	OccasionID int64
+	OccasionID *uid.ID
 	// ID keeps only the item with this id.
-	ID int64
+	ID *uid.ID
 }
 
 // where binds a Filter as ?1 to ?3 and ?11 to ?17, around VisibleWhere.
-var where = `(?1 = 0 OR library_id = ?1) AND (?2 = '' OR kind = ?2) AND (?3 = 0 OR parent_id = ?3) AND ` + VisibleWhere + `
+var where = `(?1 IS NULL OR library_id = ?1) AND (?2 = '' OR kind = ?2) AND (?3 IS NULL OR parent_id = ?3) AND ` + VisibleWhere + `
 	AND (?11 = '' OR (kind IN ('movie','show') AND instr(lower(parsed_title), lower(?11)) > 0)
 		OR (kind IN ('movie','show','episode') AND instr(lower((SELECT m.title FROM item_shown m WHERE m.item_id = item.id)), lower(?11)) > 0))
-	AND (?12 = 0 OR EXISTS (SELECT 1 FROM item_genre_shown g WHERE g.item_id = item.id AND g.genre_id = ?12))
-	AND (?13 = 0 OR EXISTS (SELECT 1 FROM credit_shown c WHERE c.item_id = item.id AND c.person_id = ?13))
+	AND (?12 IS NULL OR EXISTS (SELECT 1 FROM item_genre_shown g WHERE g.item_id = item.id AND g.genre_id = ?12))
+	AND (?13 IS NULL OR EXISTS (SELECT 1 FROM credit_shown c WHERE c.item_id = item.id AND c.person_id = ?13))
 	AND (?14 = 0 OR kind IN ('movie','show','season','episode'))
 	AND (?15 = 0 OR EXISTS (SELECT 1 FROM item_file f JOIN track t ON t.media_file_id = f.media_file_id
 		WHERE t.kind = 'video' AND (t.width >= 3200 OR t.height >= 2000) AND (f.item_id = item.id
 			OR f.item_id IN (SELECT e.id FROM item e WHERE e.parent_id = item.id
 				OR e.parent_id IN (SELECT s.id FROM item s WHERE s.parent_id = item.id)))))
-	AND (?16 = 0 OR item.id IN (` + OccasionMembersOf("?16") + `))
-	AND (?17 = 0 OR item.id = ?17)`
+	AND (?16 IS NULL OR item.id IN (` + OccasionMembersOf("?16") + `))
+	AND (?17 IS NULL OR item.id = ?17)`
 
 // kidsOnly is the clause that keeps f to kids' content.
 func (f Filter) kidsOnly() string {
@@ -174,7 +176,7 @@ func (f Filter) args(limit, offset any) []any {
 // everything.
 type Audience struct {
 	Kid       bool
-	AccountID int64    // whose allow list applies
+	AccountID *uid.ID  // whose allow list applies
 	AllowList bool     // only allowed items (or their ancestors) instead of ratings
 	Movie     []string // ratings a movie may carry
 	TV        []string // ratings a show may carry; seasons and episodes inherit it
@@ -258,7 +260,7 @@ func (a Audience) Args() []any {
 }
 
 // Visible reports whether the item exists and the audience may see it.
-func (r *Repo) Visible(id int64, a Audience) (bool, error) {
+func (r *Repo) Visible(id uid.ID, a Audience) (bool, error) {
 	var n int
 	err := r.d.QueryRow(`SELECT COUNT(*) FROM item WHERE id = ?1 AND `+VisibleWhere, append([]any{id, nil, nil, nil, nil}, a.Args()...)...).Scan(&n)
 	return n > 0, db.Wrap(err)
@@ -271,7 +273,7 @@ type Repo struct{ d db.DBTX }
 func New(d db.DBTX) *Repo { return &Repo{d} }
 
 const cols = `id, library_id, parent_id, kind, path, parsed_title, parsed_year, season_number, episode_number,
-	disc_number, track_number, artist_id, sort_title, kids_content, explicit, added_at, updated_at`
+	disc_number, track_number, artist_id, sort_title, kids_content, explicit, added_at, created_at, modified_at`
 
 func scan(s db.Scanner) (*Item, error) {
 	var it Item
@@ -290,48 +292,46 @@ func ptr64(n sql.NullInt64) *int64 {
 
 // Create inserts it and fills ID and timestamps.
 func (r *Repo) Create(it *Item) error {
-	now := time.Now().UTC()
-	it.AddedAt, it.UpdatedAt = now, now
-	res, err := r.d.Exec(`INSERT INTO item (library_id, parent_id, kind, path, parsed_title, parsed_year, season_number, episode_number,
-			disc_number, track_number, artist_id, sort_title, kids_content, explicit, added_at, updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, it.LibraryID, it.ParentID, it.Kind, db.NullStr(it.Path), it.ParsedTitle,
-		it.ParsedYear, it.SeasonNumber, it.EpisodeNumber, it.DiscNumber, it.TrackNumber,
-		it.ArtistID, db.NullStr(it.SortTitle), it.KidsContent, it.Explicit, db.Ms(now), db.Ms(now))
-	if err != nil {
-		return db.Wrap(err)
+	if it.ID.IsZero() {
+		it.ID = uid.New()
 	}
-	it.ID, _ = res.LastInsertId()
-	return nil
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	it.AddedAt, it.CreatedAt, it.ModifiedAt = now, now, now
+	_, err := r.d.Exec(`INSERT INTO item (`+cols+`)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, it.ID, it.LibraryID, it.ParentID, it.Kind, db.NullStr(it.Path), it.ParsedTitle,
+		it.ParsedYear, it.SeasonNumber, it.EpisodeNumber, it.DiscNumber, it.TrackNumber,
+		it.ArtistID, db.NullStr(it.SortTitle), it.KidsContent, it.Explicit, db.Ms(now), db.Ms(now), db.Ms(now))
+	return db.Wrap(err)
 }
 
 // Get returns one item or db.ErrNotFound.
-func (r *Repo) Get(id int64) (*Item, error) {
+func (r *Repo) Get(id uid.ID) (*Item, error) {
 	return scan(r.d.QueryRow(`SELECT `+cols+` FROM item WHERE id = ?`, id))
 }
 
 // Update writes the file-derived fields of it.
 func (r *Repo) Update(it *Item) error {
-	it.UpdatedAt = time.Now().UTC()
+	it.ModifiedAt = time.Now().UTC().Truncate(time.Millisecond)
 	return db.ExecOne(r.d, `UPDATE item SET path=?, parsed_title=?, parsed_year=?, season_number=?, episode_number=?,
-		disc_number=?, track_number=?, artist_id=?, sort_title=?, explicit=?, updated_at=? WHERE id=?`,
+		disc_number=?, track_number=?, artist_id=?, sort_title=?, explicit=?, modified_at=? WHERE id=?`,
 		db.NullStr(it.Path), it.ParsedTitle, it.ParsedYear, it.SeasonNumber, it.EpisodeNumber,
-		it.DiscNumber, it.TrackNumber, it.ArtistID, db.NullStr(it.SortTitle), it.Explicit, db.Ms(it.UpdatedAt), it.ID)
+		it.DiscNumber, it.TrackNumber, it.ArtistID, db.NullStr(it.SortTitle), it.Explicit, db.Ms(it.ModifiedAt), it.ID)
 }
 
 // SetKidsContent writes an item's KidsContent; nil clears it.
-func (r *Repo) SetKidsContent(id int64, v *bool) error {
-	return db.ExecOne(r.d, `UPDATE item SET kids_content = ? WHERE id = ?`, v, id)
+func (r *Repo) SetKidsContent(id uid.ID, v *bool) error {
+	return db.ExecOne(r.d, `UPDATE item SET kids_content = ?, modified_at = ? WHERE id = ?`, v, db.Ms(time.Now()), id)
 }
 
 // SetParent moves an item under parentID.
-func (r *Repo) SetParent(id, parentID int64) error {
-	return db.ExecOne(r.d, `UPDATE item SET parent_id = ?, updated_at = ? WHERE id = ?`, parentID, db.Ms(time.Now().UTC()), id)
+func (r *Repo) SetParent(id, parentID uid.ID) error {
+	return db.ExecOne(r.d, `UPDATE item SET parent_id = ?, modified_at = ? WHERE id = ?`, parentID, db.Ms(time.Now().UTC()), id)
 }
 
 // Delete removes an item; children, files, tracks, metadata, watch state and
 // allow-list entries cascade. The files only it and its descendants hold go
 // with them, and so do their seek preview frames and chapter thumbnails.
-func (r *Repo) Delete(id int64) error {
+func (r *Repo) Delete(id uid.ID) error {
 	return mediafile.DeleteMade(r.d, func() error { return db.ExecOne(r.d, `DELETE FROM item WHERE id = ?`, id) },
 		`WITH RECURSIVE t(id) AS (SELECT ? UNION ALL SELECT i.id FROM item i JOIN t ON i.parent_id = t.id)
 		SELECT x.media_file_id FROM item_file x WHERE x.item_id IN t
@@ -375,7 +375,7 @@ func (r *Repo) Count(f Filter) (int, error) {
 
 // KindCounts returns how many items of each kind a library holds; kinds it
 // lacks are absent.
-func (r *Repo) KindCounts(libraryID int64) (map[string]int, error) {
+func (r *Repo) KindCounts(libraryID uid.ID) (map[string]int, error) {
 	rows, err := r.d.Query(`SELECT kind, COUNT(*) FROM item WHERE library_id = ? GROUP BY kind`, libraryID)
 	if err != nil {
 		return nil, db.Wrap(err)
@@ -396,7 +396,7 @@ func (r *Repo) KindCounts(libraryID int64) (map[string]int, error) {
 // CountUnmatched counts the library's movies and shows (the items a provider
 // is asked about) that have no remote row or one that is not matched; none
 // while the settings use no remote data.
-func (r *Repo) CountUnmatched(libraryID int64) (int, error) {
+func (r *Repo) CountUnmatched(libraryID uid.ID) (int, error) {
 	var n int
 	err := r.d.QueryRow(`SELECT COUNT(*) FROM item i LEFT JOIN item_metadata m ON m.item_id = i.id AND m.source = 'remote'
 		WHERE i.library_id = ? AND i.kind IN ('movie','show') AND (m.item_id IS NULL OR m.status != 'matched')
@@ -405,20 +405,20 @@ func (r *Repo) CountUnmatched(libraryID int64) (int, error) {
 }
 
 // ByPath finds a movie or show by its path within a library.
-func (r *Repo) ByPath(libraryID int64, kind, path string) (*Item, error) {
+func (r *Repo) ByPath(libraryID uid.ID, kind, path string) (*Item, error) {
 	return scan(r.d.QueryRow(`SELECT `+cols+` FROM item WHERE library_id = ? AND kind = ? AND path = ?`, libraryID, kind, path))
 }
 
 // Movie finds a library's movie by its parsed title, ignoring case, and
 // year, the oldest if several match.
-func (r *Repo) Movie(libraryID int64, title string, year int) (*Item, error) {
+func (r *Repo) Movie(libraryID uid.ID, title string, year int) (*Item, error) {
 	return scan(r.d.QueryRow(`SELECT `+cols+` FROM item WHERE library_id = ? AND kind = 'movie'
 		AND parsed_title = ? COLLATE NOCASE AND parsed_year = ? ORDER BY id LIMIT 1`, libraryID, title, year))
 }
 
 // MovieInFolder finds the library's movie, the oldest if several, that has
 // a file directly in dir.
-func (r *Repo) MovieInFolder(libraryID int64, dir string) (*Item, error) {
+func (r *Repo) MovieInFolder(libraryID uid.ID, dir string) (*Item, error) {
 	return scan(r.d.QueryRow(`SELECT `+cols+` FROM item WHERE library_id = ?1 AND kind = 'movie' AND id IN (
 		SELECT x.item_id FROM item_file x JOIN media_file f ON f.id = x.media_file_id
 		WHERE substr(f.path, 1, length(?2)) = ?2 AND instr(substr(f.path, length(?2) + 1), '/') = 0) ORDER BY id LIMIT 1`,
@@ -428,14 +428,14 @@ func (r *Repo) MovieInFolder(libraryID int64, dir string) (*Item, error) {
 // MovieDuplicates pairs each of the library's movies matched to the TMDB
 // id of an older movie of the library with the oldest such movie, in the
 // order the newer were made.
-func (r *Repo) MovieDuplicates(libraryID int64) ([][2]int64, error) {
+func (r *Repo) MovieDuplicates(libraryID uid.ID) ([][2]uid.ID, error) {
 	rows, err := r.d.Query(`WITH m AS (SELECT i.id, m.provider_id FROM item i JOIN item_metadata m ON m.item_id = i.id AND m.source = 'remote'
 			WHERE i.library_id = ? AND i.kind = 'movie' AND m.provider = 'tmdb' AND m.status = 'matched' AND m.provider_id IS NOT NULL),
 		k AS (SELECT provider_id, MIN(id) AS keep FROM m GROUP BY provider_id HAVING COUNT(*) > 1)
 		SELECT k.keep, m.id FROM m JOIN k ON k.provider_id = m.provider_id WHERE m.id > k.keep ORDER BY m.id`, libraryID)
 	return db.Collect(rows, err,
-		func(s db.Scanner) ([2]int64, error) {
-			var p [2]int64
+		func(s db.Scanner) ([2]uid.ID, error) {
+			var p [2]uid.ID
 			return p, db.Wrap(s.Scan(&p[0], &p[1]))
 		})
 }
@@ -443,7 +443,7 @@ func (r *Repo) MovieDuplicates(libraryID int64) ([][2]int64, error) {
 // SongTwins pairs each of the library's songs whose files are all missing
 // with the one song of its album with a file not missing and the same
 // disc, track and title, ignoring case; a song with more such is left out.
-func (r *Repo) SongTwins(libraryID int64) ([][2]int64, error) {
+func (r *Repo) SongTwins(libraryID uid.ID) ([][2]uid.ID, error) {
 	rows, err := r.d.Query(`WITH s AS (SELECT i.id, i.parent_id, i.disc_number, i.track_number, i.parsed_title,
 			EXISTS (SELECT 1 FROM item_file x JOIN media_file f ON f.id = x.media_file_id WHERE x.item_id = i.id AND f.missing_at IS NULL) AS live
 			FROM item i WHERE i.library_id = ? AND i.kind = 'song' AND EXISTS (SELECT 1 FROM item_file x WHERE x.item_id = i.id))
@@ -451,61 +451,64 @@ func (r *Repo) SongTwins(libraryID int64) ([][2]int64, error) {
 			AND l.track_number = g.track_number AND l.parsed_title = g.parsed_title COLLATE NOCASE
 		WHERE NOT g.live GROUP BY g.id HAVING COUNT(*) = 1 ORDER BY g.id`, libraryID)
 	return db.Collect(rows, err,
-		func(s db.Scanner) ([2]int64, error) {
-			var p [2]int64
+		func(s db.Scanner) ([2]uid.ID, error) {
+			var p [2]uid.ID
 			return p, db.Wrap(s.Scan(&p[0], &p[1]))
 		})
 }
 
 // ShowsTitled lists the library's shows with this parsed title, ignoring
 // case, oldest first.
-func (r *Repo) ShowsTitled(libraryID int64, title string) ([]*Item, error) {
+func (r *Repo) ShowsTitled(libraryID uid.ID, title string) ([]*Item, error) {
 	return r.query(`SELECT `+cols+` FROM item WHERE library_id = ? AND kind = 'show' AND parsed_title = ? COLLATE NOCASE ORDER BY id`,
 		libraryID, title)
 }
 
 // ShowsNamed lists the library's shows whose folder is named exactly name
 // directly under one of the library's folders, oldest first.
-func (r *Repo) ShowsNamed(libraryID int64, name string) ([]*Item, error) {
+func (r *Repo) ShowsNamed(libraryID uid.ID, name string) ([]*Item, error) {
 	return r.query(`SELECT `+cols+` FROM item WHERE library_id = ?1 AND kind = 'show' AND path IN (
 		SELECT rtrim(path, '/') || '/' || ?2 FROM library_folder WHERE library_id = ?1) ORDER BY id`, libraryID, name)
 }
 
 // Season finds a show's season by number.
-func (r *Repo) Season(showID int64, number int) (*Item, error) {
+func (r *Repo) Season(showID uid.ID, number int) (*Item, error) {
 	return scan(r.d.QueryRow(`SELECT `+cols+` FROM item WHERE parent_id = ? AND kind = 'season' AND season_number = ?`, showID, number))
 }
 
 // Episode finds a season's episode by number.
-func (r *Repo) Episode(seasonID int64, number int) (*Item, error) {
+func (r *Repo) Episode(seasonID uid.ID, number int) (*Item, error) {
 	return scan(r.d.QueryRow(`SELECT `+cols+` FROM item WHERE parent_id = ? AND kind = 'episode' AND episode_number = ?`, seasonID, number))
 }
 
 // Next is the item after id among the candidates of from, a FROM clause
 // aliasing them item and ending inside its WHERE, ordered by order, with
 // id bound as ?1: the first after it that the audience sees and that has a
-// file on disk, wherever id itself stands. 0 when none follows.
-func (r *Repo) Next(from, order string, id int64, a Audience) (int64, error) {
-	var next int64
+// file on disk, wherever id itself stands. nil when none follows.
+func (r *Repo) Next(from, order string, id uid.ID, a Audience) (*uid.ID, error) {
+	var next uid.ID
 	err := db.Wrap(r.d.QueryRow(`WITH o AS (SELECT item.id, ROW_NUMBER() OVER (ORDER BY `+order+`) AS pos `+from+`
 		AND (item.id = ?1 OR `+VisibleWhere+` AND NOT `+mediafile.UnavailableOf("item.id")+`))
 		SELECT id FROM o WHERE pos > (SELECT pos FROM o WHERE id = ?1) ORDER BY pos LIMIT 1`,
 		append([]any{id, nil, nil, nil, nil}, a.Args()...)...).Scan(&next))
 	if errors.Is(err, db.ErrNotFound) {
-		return 0, nil
+		return nil, nil
 	}
-	return next, err
+	if err != nil {
+		return nil, err
+	}
+	return &next, nil
 }
 
 // Neighbors are the items before and after id among the candidates of
 // from, as Next takes them, ordered by order: the nearest on each side that
-// the audience sees, whether or not it has a file on disk. 0 for none.
-func (r *Repo) Neighbors(from, order string, id int64, a Audience) (prev, next int64, err error) {
-	err = db.Wrap(r.d.QueryRow(`WITH o AS (SELECT item.id, LAG(item.id, 1, 0) OVER w AS prev, LEAD(item.id, 1, 0) OVER w AS next `+from+`
+// the audience sees, whether or not it has a file on disk. nil for none.
+func (r *Repo) Neighbors(from, order string, id uid.ID, a Audience) (prev, next *uid.ID, err error) {
+	err = db.Wrap(r.d.QueryRow(`WITH o AS (SELECT item.id, LAG(item.id) OVER w AS prev, LEAD(item.id) OVER w AS next `+from+`
 		AND (item.id = ?1 OR `+VisibleWhere+`) WINDOW w AS (ORDER BY `+order+`))
 		SELECT prev, next FROM o WHERE id = ?1`, append([]any{id, nil, nil, nil, nil}, a.Args()...)...).Scan(&prev, &next))
 	if errors.Is(err, db.ErrNotFound) {
-		return 0, 0, nil
+		return nil, nil, nil
 	}
 	return prev, next, err
 }
@@ -521,18 +524,18 @@ const (
 
 // NextEpisode is, as Next finds it, the episode after id in its show's play
 // order.
-func (r *Repo) NextEpisode(id int64, a Audience) (int64, error) {
+func (r *Repo) NextEpisode(id uid.ID, a Audience) (*uid.ID, error) {
 	return r.Next(episodes, playOrder, id, a)
 }
 
 // EpisodeNeighbors are, as Neighbors finds them, the episodes before and
 // after id in its show's play order.
-func (r *Repo) EpisodeNeighbors(id int64, a Audience) (prev, next int64, err error) {
+func (r *Repo) EpisodeNeighbors(id uid.ID, a Audience) (prev, next *uid.ID, err error) {
 	return r.Neighbors(episodes, playOrder, id, a)
 }
 
 // Episodes lists every episode of a show in season then episode order.
-func (r *Repo) Episodes(showID int64) ([]*Item, error) {
+func (r *Repo) Episodes(showID uid.ID) ([]*Item, error) {
 	return r.query(`SELECT `+prefixed("e")+` FROM item e JOIN item s ON e.parent_id = s.id
 		WHERE s.parent_id = ? AND e.kind = 'episode' ORDER BY s.season_number, e.episode_number`, showID)
 }
@@ -540,7 +543,7 @@ func (r *Repo) Episodes(showID int64) ([]*Item, error) {
 func prefixed(a string) string {
 	return a + `.id, ` + a + `.library_id, ` + a + `.parent_id, ` + a + `.kind, ` + a + `.path, ` + a + `.parsed_title, ` +
 		a + `.parsed_year, ` + a + `.season_number, ` + a + `.episode_number, ` + a + `.disc_number, ` + a + `.track_number, ` +
-		a + `.artist_id, ` + a + `.sort_title, ` + a + `.kids_content, ` + a + `.explicit, ` + a + `.added_at, ` + a + `.updated_at`
+		a + `.artist_id, ` + a + `.sort_title, ` + a + `.kids_content, ` + a + `.explicit, ` + a + `.added_at, ` + a + `.created_at, ` + a + `.modified_at`
 }
 
 // SetMetadata inserts or replaces the remote row of an item.
@@ -607,24 +610,24 @@ func scanShown(s db.Scanner) (*Metadata, error) {
 // Metadata returns what an item shows under the metadata settings, each
 // field from its local or remote row, or db.ErrNotFound when the settings
 // leave it none.
-func (r *Repo) Metadata(itemID int64) (*Metadata, error) {
+func (r *Repo) Metadata(itemID uid.ID) (*Metadata, error) {
 	return scanShown(r.d.QueryRow(shown+` WHERE item_id = ?`, itemID))
 }
 
 // Remote returns an item's remote row, as a provider last left it, or
 // db.ErrNotFound.
-func (r *Repo) Remote(itemID int64) (*Metadata, error) {
+func (r *Repo) Remote(itemID uid.ID) (*Metadata, error) {
 	return scanMeta(r.d.QueryRow(`SELECT `+mcols+` FROM item_metadata WHERE item_id = ? AND source = 'remote'`, itemID))
 }
 
 // LocalRow returns an item's local row or db.ErrNotFound.
-func (r *Repo) LocalRow(itemID int64) (*Metadata, error) {
+func (r *Repo) LocalRow(itemID uid.ID) (*Metadata, error) {
 	return scanMeta(r.d.QueryRow(`SELECT `+mcols+` FROM item_metadata WHERE item_id = ? AND source = 'local'`, itemID))
 }
 
 // MetadataFor returns, as Metadata does, what those ids that have any show.
-func (r *Repo) MetadataFor(ids []int64) (map[int64]*Metadata, error) {
-	out := map[int64]*Metadata{}
+func (r *Repo) MetadataFor(ids []uid.ID) (map[uid.ID]*Metadata, error) {
+	out := map[uid.ID]*Metadata{}
 	if len(ids) == 0 {
 		return out, nil
 	}
@@ -645,13 +648,13 @@ func (r *Repo) MetadataFor(ids []int64) (map[int64]*Metadata, error) {
 }
 
 // DeleteMetadata drops an item's remote row; its local row stays.
-func (r *Repo) DeleteMetadata(itemID int64) error {
+func (r *Repo) DeleteMetadata(itemID uid.ID) error {
 	return db.ExecOne(r.d, `DELETE FROM item_metadata WHERE item_id = ? AND source = 'remote'`, itemID)
 }
 
 // DeleteLocal drops the local rows of these items, so the local metadata
 // task reads their files again.
-func (r *Repo) DeleteLocal(ids []int64) error {
+func (r *Repo) DeleteLocal(ids []uid.ID) error {
 	if len(ids) == 0 {
 		return nil
 	}
@@ -680,7 +683,7 @@ func (r *Repo) MarkAllDue(at time.Time) (int64, error) {
 
 // WithoutMetadata lists movies and shows of a library that have no remote
 // row yet.
-func (r *Repo) WithoutMetadata(libraryID int64, limit int) ([]*Item, error) {
+func (r *Repo) WithoutMetadata(libraryID uid.ID, limit int) ([]*Item, error) {
 	return r.query(`SELECT `+prefixed("i")+` FROM item i LEFT JOIN item_metadata m ON m.item_id = i.id AND m.source = 'remote'
 		WHERE i.library_id = ? AND i.kind IN (?, ?) AND m.item_id IS NULL ORDER BY i.id LIMIT ?`, libraryID, Movie, Show, limit)
 }

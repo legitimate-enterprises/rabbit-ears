@@ -117,7 +117,7 @@ export const tile = (i: Item, caption: string) =>
   );
 
 /** A colored circle, painted with the headshot when the provider has one, name and role below. */
-export const person = (id: number, name: string, photo: boolean, role?: string) =>
+export const person = (id: string, name: string, photo: boolean, role?: string) =>
   h(
     "a.person",
     { href: `#/person/${id}` },
@@ -215,7 +215,7 @@ export const rule = () => h("div.rule", { role: "separator" });
  * Menu rows for the household's kids on a manual allow list, each checked while its list holds
  * itemId; none for a kid active or a household with no such kid.
  */
-export async function allowedRows(ctx: Ctx, itemId: number): Promise<HTMLElement[]> {
+export async function allowedRows(ctx: Ctx, itemId: string): Promise<HTMLElement[]> {
   const kids =
     ctx.profile.kind === "adult"
       ? ctx.me.profiles.filter((p) => p.kind === "kid" && p.filterMode === "allow_list")

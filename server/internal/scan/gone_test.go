@@ -4,7 +4,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strconv"
 	"testing"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db"
@@ -28,7 +27,7 @@ func TestGoneFileOfATitleWithAnotherIsDeleted(t *testing.T) {
 	}
 	f, err := e.files.FileByPath(gone)
 	must(t, err)
-	thumbs := filepath.Join(e.s.ThumbDir, strconv.FormatInt(f.ID, 10))
+	thumbs := filepath.Join(e.s.ThumbDir, f.ID.String())
 	if _, err := os.Stat(thumbs); err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +118,7 @@ func TestFileInAnUnreadableFolderIsNotDeleted(t *testing.T) {
 func TestFileInAnEmptyLibraryFolderIsNotDeleted(t *testing.T) {
 	e := newEnv(t, library.Movies, "")
 	other := t.TempDir()
-	_, err := e.s.Libraries.AddFolder(e.lib.ID, other)
+	err := e.s.Libraries.AddFolder(&library.Folder{LibraryID: e.lib.ID, Path: other}, nil)
 	must(t, err)
 	away := filepath.Join(other, "Lantern (2001)", "Lantern (2001) 2160p.mkv")
 	fixtureCopy(t, "h264-high41.mp4", filepath.Join(e.root, "Lantern (2001)", "Lantern (2001).mp4"))

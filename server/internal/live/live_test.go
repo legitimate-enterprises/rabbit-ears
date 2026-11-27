@@ -2,7 +2,14 @@ package live
 
 import (
 	"testing"
+
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
+
+func id(n int) *uid.ID {
+	v := uid.N(n)
+	return &v
+}
 
 func kinds(es []Event) []string {
 	out := []string{}
@@ -15,13 +22,13 @@ func kinds(es []Event) []string {
 func TestSinceAnswersWhatWasPublishedAfterTheCursorInOrder(t *testing.T) {
 	h := NewHub(8)
 	start := h.Cursor()
-	h.Publish(Event{Kind: WatchState, ItemID: 7})
+	h.Publish(Event{Kind: WatchState, ItemID: id(7)})
 	mid := h.Cursor()
-	h.Publish(Event{Kind: Playback, SessionID: 3})
-	h.Publish(Event{Kind: Station, StationID: 9})
+	h.Publish(Event{Kind: Playback, SessionID: id(3)})
+	h.Publish(Event{Kind: Station, StationID: id(9)})
 
 	es, next, _, ok := h.Since(start)
-	if !ok || len(es) != 3 || es[0].ItemID != 7 || es[1].SessionID != 3 || es[2].StationID != 9 {
+	if !ok || len(es) != 3 || *es[0].ItemID != uid.N(7) || *es[1].SessionID != uid.N(3) || *es[2].StationID != uid.N(9) {
 		t.Fatalf("since start = %v ok=%v", kinds(es), ok)
 	}
 	if next != h.Cursor() {
@@ -84,17 +91,17 @@ func TestANilHubDropsWhatIsPublished(t *testing.T) {
 func TestHears(t *testing.T) {
 	for _, c := range []struct {
 		e                  Event
-		household, account int64
+		household, account int
 		want               bool
 	}{
 		{Event{}, 1, 2, true},
-		{Event{HouseholdID: 1}, 1, 2, true},
-		{Event{HouseholdID: 3}, 1, 2, false},
-		{Event{AccountIDs: []int64{5, 2}}, 1, 2, true},
-		{Event{AccountIDs: []int64{5}}, 1, 2, false},
-		{Event{HouseholdID: 1, AccountIDs: []int64{5}}, 1, 2, false},
+		{Event{HouseholdID: id(1)}, 1, 2, true},
+		{Event{HouseholdID: id(3)}, 1, 2, false},
+		{Event{AccountIDs: []uid.ID{uid.N(5), uid.N(2)}}, 1, 2, true},
+		{Event{AccountIDs: []uid.ID{uid.N(5)}}, 1, 2, false},
+		{Event{HouseholdID: id(1), AccountIDs: []uid.ID{uid.N(5)}}, 1, 2, false},
 	} {
-		if got := c.e.Hears(c.household, c.account); got != c.want {
+		if got := c.e.Hears(uid.N(c.household), uid.N(c.account)); got != c.want {
 			t.Errorf("%+v hears(%d, %d) = %v", c.e, c.household, c.account, got)
 		}
 	}

@@ -68,9 +68,9 @@ func TestLocalOnlyCallsNoProvider(t *testing.T) {
 	libs := []*library.Library{e.lib}
 	add := func(kind string, fill func(root string)) {
 		l := &library.Library{Name: kind, Kind: kind}
-		must(t, e.s.Libraries.Create(l))
+		must(t, e.s.Libraries.Create(l, nil))
 		root := t.TempDir()
-		_, err := e.s.Libraries.AddFolder(l.ID, root)
+		err := e.s.Libraries.AddFolder(&library.Folder{LibraryID: l.ID, Path: root}, nil)
 		must(t, err)
 		fill(root)
 		libs = append(libs, l)

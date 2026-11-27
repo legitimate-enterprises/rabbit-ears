@@ -3,7 +3,6 @@ package httpapi
 import (
 	"bytes"
 	"context"
-	"strconv"
 
 	"rsc.io/qr"
 
@@ -145,6 +144,6 @@ func (s *Server) DeleteDeviceLink(ctx context.Context, r api.DeleteDeviceLinkReq
 	if err := s.svc.DeviceLinks.Repo().Delete(r.LinkId); err != nil {
 		return nil, err
 	}
-	audit(ctx, "Deleted device link "+strconv.FormatInt(r.LinkId, 10))
+	audit(ctx, "Deleted device link "+r.LinkId.String())
 	return api.DeleteDeviceLink204Response{}, nil
 }

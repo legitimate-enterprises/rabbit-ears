@@ -46,6 +46,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/task"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/tmdb"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/transcode"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/webui"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/youtube"
 )
@@ -116,7 +117,7 @@ func startScanning(ctx context.Context, wg *sync.WaitGroup, d *sql.DB, client *t
 		i, err := info.Get()
 		return err == nil && i.TasksPaused
 	}
-	w, err := scan.NewWatcher(libs, func(id int64) {
+	w, err := scan.NewWatcher(libs, func(id uid.ID) {
 		if err := runner.Trigger(id); err != nil {
 			logstore.Log("scan").Warn("Watch trigger failed", "err", err)
 		}
@@ -243,7 +244,7 @@ func resetPassword(args []string, out io.Writer) error {
 		return err
 	}
 	temp := service.TemporaryPassword()
-	if _, err := service.NewAuthService(d).SetPassword(a, temp, 0); err != nil {
+	if _, err := service.NewAuthService(d).SetPassword(a, temp, nil, nil); err != nil {
 		return err
 	}
 	_, err = fmt.Fprintf(out, "Temporary password for %s: %s\nSign in with it, then choose a new one under Password.\n", a.Name, temp)

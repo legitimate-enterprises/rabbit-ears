@@ -5,12 +5,14 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"math"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 func (s Schema) table(name string) (Table, bool) {
@@ -24,54 +26,78 @@ func (s Schema) table(name string) (Table, bool) {
 
 // Touchable reports whether key, decoded from JSON, names a row of the
 // replica table name: per column of its primary key, an integer for one
-// the source declares INTEGER and a string for any other.
+// the source declares INTEGER, an id's canonical string for one it declares
+// BLOB and a string for any other.
 func (s *Sync) Touchable(ctx context.Context, sch Schema, name string, key []any) (bool, error) {
-	tb, ok := sch.table(name)
-	if !ok || len(key) != len(tb.Key) {
-		return false, nil
-	}
-	ints, err := s.intKey(ctx, tb)
-	if err != nil {
-		return false, err
-	}
-	for i := range tb.Key {
-		if ints[i] {
-			if _, ok := integral(key[i]).(int64); !ok {
-				return false, nil
-			}
-		} else if _, ok := key[i].(string); !ok {
-			return false, nil
-		}
-	}
-	return true, nil
+	_, ok, err := s.bind(ctx, sch, name, key)
+	return ok, err
 }
 
-// intKey is, per column of tb's key, whether the source declares it
-// INTEGER, read from the schema once per table.
-func (s *Sync) intKey(ctx context.Context, tb Table) ([]bool, error) {
-	if v, ok := s.keys.Load(tb.Source); ok {
-		return v.([]bool), nil
+// bind is key as Touch binds it, ok being whether it is Touchable.
+func (s *Sync) bind(ctx context.Context, sch Schema, name string, key []any) (out []any, ok bool, err error) {
+	tb, ok := sch.table(name)
+	if !ok || len(key) != len(tb.Key) {
+		return nil, false, nil
 	}
-	ints := make([]bool, len(tb.Key))
+	types, err := s.keyTypes(ctx, tb)
+	if err != nil {
+		return nil, false, err
+	}
+	out = make([]any, len(key))
+	for i, v := range key {
+		str, isStr := v.(string)
+		switch types[i] {
+		case "INTEGER":
+			if out[i], ok = integral(v).(int64); !ok {
+				return nil, false, nil
+			}
+		case "BLOB":
+			id, err := uid.Parse(str)
+			if !isStr || err != nil {
+				return nil, false, nil
+			}
+			out[i] = id
+		default:
+			if !isStr {
+				return nil, false, nil
+			}
+			out[i] = str
+		}
+	}
+	return out, true, nil
+}
+
+// keyTypes is, per column of tb's key, INTEGER or BLOB for one the source
+// declares so and empty for any other, read from the schema once per table.
+func (s *Sync) keyTypes(ctx context.Context, tb Table) ([]string, error) {
+	if v, ok := s.keys.Load(tb.Source); ok {
+		return v.([]string), nil
+	}
+	types := make([]string, len(tb.Key))
 	for i, c := range tb.Key {
 		var typ string
 		if err := s.d.QueryRowContext(ctx, `SELECT type FROM pragma_table_info(?) WHERE name = ?`, tb.Source, c).Scan(&typ); err != nil {
 			return nil, err
 		}
-		ints[i] = strings.Contains(strings.ToUpper(typ), "INT")
+		switch typ = strings.ToUpper(typ); {
+		case strings.Contains(typ, "INT"):
+			types[i] = "INTEGER"
+		case typ == "BLOB":
+			types[i] = "BLOB"
+		}
 	}
-	s.keys.Store(tb.Source, ints)
-	return ints, nil
+	s.keys.Store(tb.Source, types)
+	return types, nil
 }
 
 // Touch makes the next catch-up of household's clients bring their copy of
-// each Touchable row of replica table name at keys to the server's: one in
-// the household's scope is stamped changed, one that is gone leaves a
-// tombstone. One that exists outside the scope is left alone, since a
-// tombstone for it would also reach the households that see it. One query
-// finds them all, so the scope is read once; each mark then takes a
-// version of its own, as a page of changes may end between any two.
-func (s Schema) Touch(tx db.DBTX, household int64, name string, keys [][]any) error {
+// each row of replica table name at keys, each bound as bind binds it, to
+// the server's: one in the household's scope is stamped changed, one that
+// is gone leaves a tombstone. One that exists outside the scope is left
+// alone, since a tombstone for it would also reach the households that see
+// it. One query finds them all, so the scope is read once; each mark then
+// takes a version of its own, as a page of changes may end between any two.
+func (s Schema) Touch(tx db.DBTX, household uid.ID, name string, keys [][]any) error {
 	tb, _ := s.table(name)
 	args, values, on := []any{household}, make([]string, len(keys)), make([]string, len(tb.Key))
 	for i, c := range tb.Key {
@@ -80,7 +106,7 @@ func (s Schema) Touch(tx db.DBTX, household int64, name string, keys [][]any) er
 	for i, key := range keys {
 		parts := []string{strconv.Itoa(i)}
 		for _, v := range key {
-			args = append(args, integral(v))
+			args = append(args, v)
 			parts = append(parts, `?`+strconv.Itoa(len(args)))
 		}
 		values[i] = `(` + strings.Join(parts, ", ") + `)`
@@ -111,9 +137,7 @@ func (s Schema) Touch(tx db.DBTX, household int64, name string, keys [][]any) er
 			_, err = tx.Exec(`UPDATE `+tb.Source+` SET sync_version = (SELECT version FROM sync_clock) WHERE rowid = ?`, rowid)
 		} else {
 			k := []any{0, 0, 0}
-			for j, v := range key {
-				k[j] = integral(v)
-			}
+			copy(k, key)
 			_, err = tx.Exec(`INSERT INTO sync_tombstone (tbl, k1, k2, k3, version, at)
 				VALUES (?, ?, ?, ?, (SELECT version FROM sync_clock), CAST(strftime('%s', 'now') AS INTEGER) * 1000)
 				ON CONFLICT (tbl, k1, k2, k3) DO UPDATE SET version = excluded.version, at = excluded.at`, tb.Source, k[0], k[1], k[2])
@@ -137,7 +161,7 @@ func integral(v any) any {
 
 // Answered is the result a device's action was answered with, and its code;
 // ok is false for an action not yet answered.
-func (s *Sync) Answered(ctx context.Context, device int64, id string) (result string, code *string, ok bool, err error) {
+func (s *Sync) Answered(ctx context.Context, device uid.ID, id string) (result string, code *string, ok bool, err error) {
 	err = s.d.QueryRowContext(ctx, `SELECT result, code FROM sync_action WHERE device_id = ? AND uuid = ?`, device, id).Scan(&result, &code)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil, false, nil
@@ -145,7 +169,7 @@ func (s *Sync) Answered(ctx context.Context, device int64, id string) (result st
 	return result, code, err == nil, err
 }
 
-// Row is a Touchable row of a replica table.
+// Row is a Touchable row of a replica table, its key as JSON decodes it.
 type Row struct {
 	Table string
 	Key   []any
@@ -153,14 +177,21 @@ type Row struct {
 
 // Answer records the result a device of household answered its action
 // with, and Touches every row the action touched, in one transaction.
-func (s *Sync) Answer(household, device int64, id, result string, code *string, touched []Row) error {
+func (s *Sync) Answer(household, device uid.ID, id, result string, code *string, touched []Row) error {
 	var tables []string
 	keys := map[string][][]any{}
 	for _, t := range touched {
+		key, ok, err := s.bind(context.Background(), V1, t.Table, t.Key)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("replica: %s %v is not Touchable", t.Table, t.Key)
+		}
 		if keys[t.Table] == nil {
 			tables = append(tables, t.Table)
 		}
-		keys[t.Table] = append(keys[t.Table], t.Key)
+		keys[t.Table] = append(keys[t.Table], key)
 	}
 	return db.InTx(s.d, func(tx db.DBTX) error {
 		for _, name := range tables {

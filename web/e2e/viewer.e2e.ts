@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import type { Snapshot } from "../src/viewer/capabilities";
-import { leavePlayer, quiet, seed, signIn } from "./support";
+import { api, leavePlayer, quiet, seed, signIn } from "./support";
 
 test.describe.configure({ mode: "serial" });
 
@@ -33,11 +33,11 @@ test("an adult plays a fixture, by direct play where the browser decodes it in h
   request,
 }) => {
   const headers = await seed(request);
-  const me = await (await request.get("/api/v1/me", { headers })).json();
-  const movies = (await (await request.get("/api/v1/items?kind=movie", { headers })).json()).items;
+  const me = await (await request.get(`${api}/me`, { headers })).json();
+  const movies = (await (await request.get(`${api}/items?kind=movie`, { headers })).json()).items;
   const itemId = movies.find((m: { parsedTitle: string }) => /h264-high41/.test(m.parsedTitle)).id;
   // A position an earlier spec or browser left near the 10 s fixture's end would resume into watched.
-  await request.delete(`/api/v1/profiles/${me.account.id}/watch-state/${itemId}`, { headers });
+  await request.delete(`${api}/profiles/${me.account.id}/watch-state/${itemId}`, { headers });
   await signIn(page);
   // The server copies only what the client reports this browser decodes in hardware; one
   // that decodes H.264 in software, as on a machine without a GPU decoder, is given a
@@ -58,7 +58,7 @@ test("an adult plays a fixture, by direct play where the browser decodes it in h
   const at = await page.evaluate(() => document.querySelector("video")!.currentTime);
 
   await expect(async () => {
-    const w = await request.get(`/api/v1/profiles/${me.account.id}/watch-state/${itemId}`, {
+    const w = await request.get(`${api}/profiles/${me.account.id}/watch-state/${itemId}`, {
       headers,
     });
     expect((await w.json()).positionMs).toBeGreaterThan(Math.max(0, at * 1000 - 2000));
@@ -92,10 +92,10 @@ test("copied video resumes, skips and scrubs on one timeline without falling bac
   request,
 }) => {
   const headers = await seed(request);
-  const me = await (await request.get("/api/v1/me", { headers })).json();
-  const items = (await (await request.get("/api/v1/items?kind=movie", { headers })).json()).items;
+  const me = await (await request.get(`${api}/me`, { headers })).json();
+  const items = (await (await request.get(`${api}/items?kind=movie`, { headers })).json()).items;
   const toy = items.find((i: { parsedTitle: string }) => i.parsedTitle === "Toy Story");
-  await request.put(`/api/v1/profiles/${me.account.id}/watch-state/${toy.id}`, {
+  await request.put(`${api}/profiles/${me.account.id}/watch-state/${toy.id}`, {
     headers,
     data: { positionMs: 25_890, watched: false },
   });
@@ -142,12 +142,12 @@ test("an AVI with MPEG-4 Part 2 video and MP3 audio plays through HLS", async ({
 }) => {
   const headers = await seed(request);
   // The scan may still be on the TV folder.
-  let guild: number | undefined;
+  let guild: string | undefined;
   await expect(async () => {
-    const items = (await (await request.get("/api/v1/items?kind=movie", { headers })).json()).items;
+    const items = (await (await request.get(`${api}/items?kind=movie`, { headers })).json()).items;
     for (const i of items) {
       const files = (
-        await (await request.get(`/api/v1/media-files?itemId=${i.id}`, { headers })).json()
+        await (await request.get(`${api}/media-files?itemId=${i.id}`, { headers })).json()
       ).items;
       if (files[0]?.path.includes("The Guild - S01E01")) guild = i.id;
     }
@@ -187,7 +187,7 @@ test("the owner sets a kid's PIN and removes the kid from Manage household", asy
 }, info) => {
   const headers = await seed(request);
   const name = `Robin ${info.project.name}`;
-  const kid = await request.post("/api/v1/profiles", {
+  const kid = await request.post(`${api}/profiles`, {
     headers,
     data: { name, birthday: "2016-05-01" },
   });

@@ -6,14 +6,15 @@ import (
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/api"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/live"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
-func (e *env) playing(token string, item int64) []api.PlaybackSession {
+func (e *env) playing(token string, item ...uid.ID) []api.PlaybackSession {
 	e.t.Helper()
 	var p api.PlaybackSessionPage
 	path := "/playback/sessions"
-	if item != 0 {
-		path += "?itemId=" + itoa(item)
+	if len(item) > 0 {
+		path += "?itemId=" + itoa(item[0])
 	}
 	e.expect(200, "GET", path, token, nil, &p)
 	return p.Items
@@ -35,10 +36,10 @@ func TestPlayingOnAnotherDeviceAndMoveHere(t *testing.T) {
 		got[0].Platform != api.Roku || got[0].ThisDevice || got[0].PositionMs != 2_472_000 || got[0].EndedAt != nil || got[0].MovedToDeviceName != nil {
 		t.Fatalf("playing on the TV, asked from the laptop: %+v", got)
 	}
-	if got = e.playing(tv, 0); len(got) != 1 || !got[0].ThisDevice {
+	if got = e.playing(tv); len(got) != 1 || !got[0].ThisDevice {
 		t.Fatalf("asked from the TV itself: %+v", got)
 	}
-	if got = e.playing(e.plain.token, m+1); len(got) != 0 {
+	if got = e.playing(e.plain.token, uid.N(999_999)); len(got) != 0 {
 		t.Fatalf("another title: %+v", got)
 	}
 	if got = e.playing(neighbor, m); len(got) != 0 {
@@ -92,13 +93,13 @@ func TestStationsAndSongsAreNotOfferedToMove(t *testing.T) {
 	e := newEnv(t)
 	e.stationClock()
 	film := e.film(e.library("movies"), "Lantern", "2001-01-01", "PG")
-	pl := e.nightsPlaylist(map[int64]int64{film: 600})
+	pl := e.nightsPlaylist(map[uid.ID]int64{film: 600})
 	var st api.Station
 	e.expect(201, "POST", "/stations", e.plain.token, map[string]any{"name": "Nights", "playlistId": pl, "timing": "continuous"}, &st)
 	tv, _ := e.secondDevice(e.plain, "TV", "roku")
 	var tuned api.StationPlayback
 	e.expect(201, "POST", "/stations/"+itoa(st.Id)+"/playback", tv, map[string]any{"snapshot": snapshot()}, &tuned)
-	if got := e.playing(e.plain.token, 0); len(got) != 0 {
+	if got := e.playing(e.plain.token); len(got) != 0 {
 		t.Fatalf("a station session: %+v", got)
 	}
 	e.expect(409, "POST", "/playback/sessions/"+itoa(tuned.Stream.SessionId)+"/move", e.plain.token, nil, nil)
@@ -109,7 +110,7 @@ func TestStationsAndSongsAreNotOfferedToMove(t *testing.T) {
 	at := e.cursor(tv)
 	e.tracks(film)
 	live := e.tune(st, e.plain.token, snapshot())
-	if got := append(e.playing(tv, 0), e.playing(tv, film)...); len(got) != 0 {
+	if got := append(e.playing(tv), e.playing(tv, film)...); len(got) != 0 {
 		t.Fatalf("a live station session: %+v", got)
 	}
 	e.expect(409, "POST", "/playback/sessions/"+itoa(live.Stream.SessionId)+"/move", tv, nil, nil)
@@ -135,7 +136,7 @@ func TestWatchTogetherFromAnotherDevice(t *testing.T) {
 	for name, body := range map[string]map[string]any{
 		"this device's session": {"itemId": other, "fromSessionId": mine.SessionId},
 		"another title":         {"itemId": other, "fromSessionId": st.SessionId},
-		"no such session":       {"itemId": m, "fromSessionId": 999},
+		"no such session":       {"itemId": m, "fromSessionId": uid.N(999)},
 	} {
 		if code, raw := e.do("POST", "/watch-together", e.plain.token, body, nil); code != 400 {
 			t.Fatalf("%s = %d: %s", name, code, raw)

@@ -10,24 +10,25 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db/dbtest"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/library"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/watchstate"
 )
 
-func setup(t *testing.T) (*watchstate.Repo, int64, int64, []int64) {
+func setup(t *testing.T) (*watchstate.Repo, uid.ID, uid.ID, []uid.ID) {
 	d := dbtest.Open(t)
 	a, b := &account.Account{Kind: account.Adult, Email: "a@example.test", Name: "A"}, &account.Account{Kind: account.Adult, Email: "b@example.test", Name: "B"}
 	ar := account.New(d)
-	_ = ar.Create(a)
-	_ = ar.Create(b)
+	_ = ar.Create(a, nil)
+	_ = ar.Create(b, nil)
 	l := &library.Library{Name: "tv", Kind: library.TV}
-	_ = library.New(d).Create(l)
+	_ = library.New(d).Create(l, nil)
 	ir := item.New(d)
 	show := &item.Item{LibraryID: l.ID, Kind: item.Show, ParsedTitle: "S"}
 	_ = ir.Create(show)
 	one := 1
 	season := &item.Item{LibraryID: l.ID, ParentID: &show.ID, Kind: item.Season, ParsedTitle: "1", SeasonNumber: &one}
 	_ = ir.Create(season)
-	var eps []int64
+	var eps []uid.ID
 	for n := 1; n <= 3; n++ {
 		n := n
 		e := &item.Item{LibraryID: l.ID, ParentID: &season.ID, Kind: item.Episode, ParsedTitle: "e", EpisodeNumber: &n}
@@ -58,7 +59,7 @@ func TestSaveGetDelete(t *testing.T) {
 	if _, err := r.Get(b, eps[0]); !errors.Is(err, db.ErrNotFound) {
 		t.Fatal("state must be per account")
 	}
-	if err := r.Save(&watchstate.State{AccountID: 999, ItemID: eps[0]}); !errors.Is(err, db.ErrReference) {
+	if err := r.Save(&watchstate.State{AccountID: uid.N(999), ItemID: eps[0]}); !errors.Is(err, db.ErrReference) {
 		t.Fatal(err)
 	}
 	if err := r.Delete(a, eps[0]); err != nil {
@@ -85,7 +86,7 @@ func TestSaveAtKeepsTheNewer(t *testing.T) {
 		t.Fatalf("an older write is ignored: %v %v", ok, err)
 	}
 	g, err := r.Get(a, eps[0])
-	if err != nil || !g.Watched || g.PositionMs != 0 || !g.UpdatedAt.Equal(now) {
+	if err != nil || !g.Watched || g.PositionMs != 0 || !g.ChangedAt.Equal(now) {
 		t.Fatalf("%+v %v", g, err)
 	}
 }
@@ -99,11 +100,11 @@ func TestListPagesMostRecentFirst(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	first, err := r.List(a, 0, item.Audience{}, 2, 0)
+	first, err := r.List(a, nil, item.Audience{}, 2, 0)
 	if err != nil || len(first) != 2 || first[0].ItemID != eps[2] {
 		t.Fatalf("%v %v", first, err)
 	}
-	rest, _ := r.List(a, 0, item.Audience{}, 2, 2)
+	rest, _ := r.List(a, nil, item.Audience{}, 2, 2)
 	if len(rest) != 1 || rest[0].ItemID != eps[0] {
 		t.Fatalf("%v", rest)
 	}

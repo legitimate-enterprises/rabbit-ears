@@ -11,6 +11,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/playlist"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/station"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 var (
@@ -61,7 +62,7 @@ func NewPlaylistService(repo *playlist.Repo, editions *edition.Repo, stations *s
 // Access is what the profile may do with p: Owner, or the strongest access
 // its shares give the profile, directly or through a household it is in,
 // else ErrNotShared.
-func (s *PlaylistService) Access(p *playlist.Playlist, accountID int64) (string, error) {
+func (s *PlaylistService) Access(p *playlist.Playlist, accountID uid.ID) (string, error) {
 	if p.AccountID == accountID {
 		return Owner, nil
 	}
@@ -74,7 +75,7 @@ func (s *PlaylistService) Access(p *playlist.Playlist, accountID int64) (string,
 
 // Check returns the profile's access to p if it reaches need, else
 // ErrNotShared or ErrAccessDenied.
-func (s *PlaylistService) Check(p *playlist.Playlist, accountID int64, need string) (string, error) {
+func (s *PlaylistService) Check(p *playlist.Playlist, accountID uid.ID, need string) (string, error) {
 	got, err := s.Access(p, accountID)
 	if err == nil && reach[got] < reach[need] {
 		err = ErrAccessDenied
@@ -121,16 +122,16 @@ func (s *PlaylistService) SetAccess(sh *playlist.Share, to *account.Account, acc
 
 // Unshare stops sharing p with the profile and, unless a household share
 // still reaches it, deletes the profile's stations that play it.
-func (s *PlaylistService) Unshare(p *playlist.Playlist, accountID int64) error {
+func (s *PlaylistService) Unshare(p *playlist.Playlist, accountID uid.ID) error {
 	if err := s.repo.DeleteShare(p.ID, accountID); err != nil {
 		return err
 	}
-	return s.stations.DeleteUnseen(p.ID, accountID)
+	return s.stations.DeleteUnseen(&p.ID, &accountID)
 }
 
 // ShareHousehold shares p, owned by owner, with everyone in a household
 // owner is in; a second share with it is db.ErrConflict.
-func (s *PlaylistService) ShareHousehold(p *playlist.Playlist, owner *account.Account, householdID int64, access string) (*playlist.HouseholdShare, error) {
+func (s *PlaylistService) ShareHousehold(p *playlist.Playlist, owner *account.Account, householdID uid.ID, access string) (*playlist.HouseholdShare, error) {
 	if p.StationOwned {
 		return nil, ErrStationPlaylist
 	}
@@ -147,11 +148,11 @@ func (s *PlaylistService) ShareHousehold(p *playlist.Playlist, owner *account.Ac
 
 // UnshareHousehold stops sharing p with the household and deletes the
 // stations that play it of those it no longer reaches.
-func (s *PlaylistService) UnshareHousehold(p *playlist.Playlist, householdID int64) error {
+func (s *PlaylistService) UnshareHousehold(p *playlist.Playlist, householdID uid.ID) error {
 	if err := s.repo.DeleteHouseholdShare(p.ID, householdID); err != nil {
 		return err
 	}
-	return s.stations.DeleteUnseen(p.ID, 0)
+	return s.stations.DeleteUnseen(&p.ID, nil)
 }
 
 // Delete deletes p with its entries and shares, and the stations of those
@@ -163,7 +164,7 @@ func (s *PlaylistService) Delete(p *playlist.Playlist) error {
 	} else if used {
 		return ErrPlaylistOnAir
 	}
-	if err := s.stations.DeletePlaying(p.ID, 0); err != nil {
+	if err := s.stations.DeletePlaying(p.ID, nil); err != nil {
 		return err
 	}
 	return s.repo.Delete(p.ID)
@@ -183,7 +184,7 @@ var holds = map[string][]string{
 func Holds(kind, itemKind string) bool { return slices.Contains(holds[kind], itemKind) }
 
 // Rename sets p's name and kind. A playlist with entries keeps its kind.
-func (s *PlaylistService) Rename(p *playlist.Playlist, name, kind string) error {
+func (s *PlaylistService) Rename(p *playlist.Playlist, name, kind string, by *uid.ID) error {
 	if kind != p.Kind {
 		n, err := s.repo.CountEntries(p.ID)
 		if err != nil {
@@ -194,35 +195,39 @@ func (s *PlaylistService) Rename(p *playlist.Playlist, name, kind string) error 
 		}
 	}
 	p.Name, p.Kind = name, kind
-	return s.repo.Update(p)
+	return s.repo.Update(p, by)
 }
 
 // AddEntry puts it into p at rank, or with none at position at (nil
-// appends), if p can hold it, as EntryFor describes.
-func (s *PlaylistService) AddEntry(p *playlist.Playlist, it *item.Item, editionID int64, at *int, rank string) (*playlist.Entry, error) {
+// appends), if p can hold it, as EntryFor describes. The entry takes id
+// when given.
+func (s *PlaylistService) AddEntry(p *playlist.Playlist, it *item.Item, editionID *uid.ID, at *int, rank string, id, by *uid.ID) (*playlist.Entry, error) {
 	e, err := s.EntryFor(p, it, editionID)
 	if err != nil {
 		return nil, err
 	}
 	e.Rank = rank
-	return e, s.repo.AddEntry(e, at)
+	if id != nil {
+		e.ID = *id
+	}
+	return e, s.repo.AddEntry(e, at, by)
 }
 
 // EntryFor is the entry that adds it to p, written nowhere. A movie, episode
-// or song plays editionID (0 for none named), which must be its own; with
+// or song plays editionID (nil for none named), which must be its own; with
 // none named, its only edition, and a title with several needs one named. A
 // container takes no edition.
-func (s *PlaylistService) EntryFor(p *playlist.Playlist, it *item.Item, editionID int64) (*playlist.Entry, error) {
+func (s *PlaylistService) EntryFor(p *playlist.Playlist, it *item.Item, editionID *uid.ID) (*playlist.Entry, error) {
 	if !Holds(p.Kind, it.Kind) {
 		return nil, ErrWrongPlaylistKind
 	}
-	e := &playlist.Entry{PlaylistID: p.ID, ItemID: it.ID, EditionID: editionID}
+	e := &playlist.Entry{PlaylistID: p.ID, ItemID: ref(it.ID), EditionID: editionID}
 	title := it.Kind == item.Movie || it.Kind == item.Episode || it.Kind == item.Song
 	switch {
-	case !title && editionID != 0:
+	case !title && editionID != nil:
 		return nil, ErrNotItsEdition
-	case editionID != 0:
-		ed, err := s.editions.Get(editionID)
+	case editionID != nil:
+		ed, err := s.editions.Get(*editionID)
 		if errors.Is(err, db.ErrNotFound) || err == nil && ed.ItemID != it.ID {
 			return nil, ErrNotItsEdition
 		} else if err != nil {
@@ -237,18 +242,21 @@ func (s *PlaylistService) EntryFor(p *playlist.Playlist, it *item.Item, editionI
 			return nil, ErrEditionRequired
 		}
 		if len(eds) == 1 {
-			e.EditionID = eds[0].ID
+			e.EditionID = ref(eds[0].ID)
 		}
 	}
 	return e, nil
 }
 
 // AddCollection puts collection c into p at rank, or with none at position
-// at (nil appends), if p is a movies playlist.
-func (s *PlaylistService) AddCollection(p *playlist.Playlist, c *collection.Collection, at *int, rank string) (*playlist.Entry, error) {
+// at (nil appends), if p is a movies playlist. The entry takes id when given.
+func (s *PlaylistService) AddCollection(p *playlist.Playlist, c *collection.Collection, at *int, rank string, id, by *uid.ID) (*playlist.Entry, error) {
 	if p.Kind != playlist.Movies {
 		return nil, ErrWrongPlaylistKind
 	}
-	e := &playlist.Entry{PlaylistID: p.ID, CollectionID: c.ID, Rank: rank}
-	return e, s.repo.AddEntry(e, at)
+	e := &playlist.Entry{PlaylistID: p.ID, CollectionID: ref(c.ID), Rank: rank}
+	if id != nil {
+		e.ID = *id
+	}
+	return e, s.repo.AddEntry(e, at, by)
 }

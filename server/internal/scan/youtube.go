@@ -22,6 +22,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/logstore"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/mediafile"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/tmdb"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/youtube"
 )
 
@@ -163,14 +164,14 @@ func chaptersFrom(chapters, sponsor []span) []*mediafile.Chapter {
 // resolveVideo finds or creates a video file's channel, named by its
 // top-level folder, and the video, named by its file until a sidecar names
 // it. A video directly in the library folder belongs to no channel.
-func (s *Scanner) resolveVideo(lib *library.Library, c candidate, sum *Summary) (int64, error) {
+func (s *Scanner) resolveVideo(lib *library.Library, c candidate, sum *Summary) ([]uid.ID, error) {
 	rel, err := filepath.Rel(c.root, c.path)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	parts := strings.Split(rel, string(filepath.Separator))
 	if len(parts) < 2 {
-		return 0, nil
+		return nil, nil
 	}
 	dir := filepath.Join(c.root, parts[0])
 	ch, err := s.homed(lib, item.Channel, dir, c.path)
@@ -184,7 +185,7 @@ func (s *Scanner) resolveVideo(lib *library.Library, c candidate, sum *Summary) 
 		sum.Added[item.Channel]++
 	}
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	v, err := s.Items.ByPath(lib.ID, item.Video, c.path)
 	if errors.Is(err, db.ErrNotFound) {
@@ -200,9 +201,9 @@ func (s *Scanner) resolveVideo(lib *library.Library, c candidate, sum *Summary) 
 		}
 	}
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	return v.ID, nil
+	return []uid.ID{v.ID}, nil
 }
 
 // syncVideo brings one video file in, and reads its sidecars whenever the
@@ -216,11 +217,11 @@ func (s *Scanner) syncVideo(ctx context.Context, lib *library.Library, c candida
 	case errors.Is(err, db.ErrNotFound):
 	case err != nil:
 		return err
-	case f.ProbedAt != nil && f.SizeBytes == c.size && f.ModifiedAt.Equal(c.mod):
+	case f.ProbedAt != nil && f.SizeBytes == c.size && f.FileModifiedAt.Equal(c.mod) && f.ItemID != nil:
 		if err := s.backfill(ctx, f); err != nil {
 			return err
 		}
-		old, err := s.YouTube.Stamp(f.ItemID)
+		old, err := s.YouTube.Stamp(*f.ItemID)
 		if err != nil || old == stamp {
 			return err
 		}
@@ -233,7 +234,7 @@ func (s *Scanner) syncVideo(ctx context.Context, lib *library.Library, c candida
 	if err := s.syncFile(ctx, lib, c, sum); err != nil {
 		return err
 	}
-	if f, err = s.Files.FileByPath(c.path); errors.Is(err, db.ErrNotFound) {
+	if f, err = s.Files.FileByPath(c.path); errors.Is(err, db.ErrNotFound) || err == nil && f.ItemID == nil {
 		return nil // the file belongs to no channel
 	} else if err != nil {
 		return err
@@ -246,7 +247,7 @@ func (s *Scanner) syncVideo(ctx context.Context, lib *library.Library, c candida
 // thumbnail, and .info.json chapters when the file has none.
 func (s *Scanner) describeVideo(ctx context.Context, f *mediafile.File, modified time.Time, side sidecars, stamp int64) error {
 	n, in := readNFO(side.nfo), readInfo(side.info)
-	it, err := s.Items.Get(f.ItemID)
+	it, err := s.Items.Get(*f.ItemID)
 	if err != nil {
 		return err
 	}
@@ -286,7 +287,7 @@ func (s *Scanner) describeVideo(ctx context.Context, f *mediafile.File, modified
 // square poster also gets its uploader's YouTube avatar as its remote data,
 // returning how many of those lookups failed; a failure never fails it.
 func (s *Scanner) describeChannels(ctx context.Context, lib *library.Library) (int, error) {
-	chs, err := s.Items.List(item.Filter{LibraryID: lib.ID, Kind: item.Channel, Limit: 1 << 20})
+	chs, err := s.Items.List(item.Filter{LibraryID: &lib.ID, Kind: item.Channel, Limit: 1 << 20})
 	if err != nil {
 		return 0, err
 	}
@@ -324,7 +325,7 @@ func (s *Scanner) describeChannels(ctx context.Context, lib *library.Library) (i
 
 // putIfChanged writes m with put, stamped now, unless get finds the row
 // already says the same.
-func (s *Scanner) putIfChanged(m *item.Metadata, get func(int64) (*item.Metadata, error), put func(*item.Metadata) error) error {
+func (s *Scanner) putIfChanged(m *item.Metadata, get func(uid.ID) (*item.Metadata, error), put func(*item.Metadata) error) error {
 	old, err := get(m.ItemID)
 	if err != nil && !errors.Is(err, db.ErrNotFound) {
 		return err

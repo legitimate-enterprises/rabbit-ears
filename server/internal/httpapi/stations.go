@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/api"
@@ -17,6 +16,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/service"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/session"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/station"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // Stations: each adult's continuous programming from one of their
@@ -31,13 +31,13 @@ func viewerOf(ctx context.Context, a item.Audience) station.Viewer {
 	return station.Viewer{ProfileID: p.profile.ID, HouseholdID: p.device.HouseholdID, Audience: a}
 }
 
-func (s *Server) seenStation(ctx context.Context, id int64) (*station.Station, error) {
+func (s *Server) seenStation(ctx context.Context, id uid.ID) (*station.Station, error) {
 	return s.svc.Stations.Seen(id, viewer(ctx))
 }
 
 // ownStation is seenStation for a write, which only its owner makes, and
 // never as a kid: an adult made a kid keeps their stations.
-func (s *Server) ownStation(ctx context.Context, id int64) (*station.Station, error) {
+func (s *Server) ownStation(ctx context.Context, id uid.ID) (*station.Station, error) {
 	st, err := s.svc.Stations.Seen(id, viewerOf(ctx, audience(ctx)))
 	if err == nil && (st.AccountID != caller(ctx).profile.ID || caller(ctx).asKid()) {
 		return nil, errForbidden
@@ -60,8 +60,11 @@ func hhmm(minutes int) string { return fmt.Sprintf("%02d:%02d", minutes/60, minu
 // state: the playlist is the active adult's own or shared with them, and
 // not another station's, of the kind given; a server station's visibility
 // is the admin's; and a station's own playlist changes kind only while
-// empty, which is the one write made here, last.
+// empty, which the station's update writes with it.
 func (s *Server) stationFrom(ctx context.Context, in *api.StationInput, st *station.Station) error {
+	if in.PlaylistId != nil && in.OwnPlaylistId != nil {
+		return invalid("ownPlaylistId", "names the playlist made when playlistId is absent")
+	}
 	name, err := playlistName(in.Name)
 	if err != nil {
 		return err
@@ -84,7 +87,7 @@ func (s *Server) stationFrom(ctx context.Context, in *api.StationInput, st *stat
 		if in.Kind != nil && kind != p.Kind {
 			return invalid("kind", "not the playlist's kind")
 		}
-	case st.ID == 0:
+	case st.ID.IsZero():
 		if in.Kind == nil {
 			return invalid("kind", "required without a playlistId")
 		}
@@ -109,15 +112,19 @@ func (s *Server) stationFrom(ctx context.Context, in *api.StationInput, st *stat
 	switch {
 	case in.Timing != nil:
 		st.Timing = string(*in.Timing)
-	case st.ID == 0 || took != st.Kind:
+	case st.ID.IsZero() || took != st.Kind:
 		st.Timing = station.DefaultTiming(took)
 	}
 	st.Name, st.Kind, st.Random = name, kind, or(in.Order, api.StationOrderPlaylist) == api.StationOrderRandom
 	if p != nil {
 		st.PlaylistID = p.ID
 		if in.PlaylistId == nil && kind != p.Kind {
-			if err := playlistError(s.svc.Playlists.Rename(p, p.Name, kind)); err != nil {
+			n, err := s.svc.Playlists.Repo().CountEntries(p.ID)
+			if err != nil {
 				return err
+			}
+			if n > 0 {
+				return playlistError(service.ErrPlaylistKindLocked)
 			}
 		}
 	}
@@ -130,7 +137,7 @@ func (s *Server) stationFrom(ctx context.Context, in *api.StationInput, st *stat
 		}
 	}
 	for _, t := range or(in.Times, nil) {
-		r := station.Range{From: minutes(t.From), To: minutes(t.To)}
+		r := station.Range{ID: or(t.Id, uid.ID{}), From: minutes(t.From), To: minutes(t.To)}
 		if !r.Holds(st.Timing) {
 			return invalid("times", fmt.Sprintf("%s to %s holds no %s start, so nothing would air", t.From, t.To, st.Timing))
 		}
@@ -144,7 +151,7 @@ func (s *Server) stationFrom(ctx context.Context, in *api.StationInput, st *stat
 func (s *Server) programs(ps []*station.Program, admin bool) ([]api.StationProgram, error) {
 	out := make([]api.StationProgram, len(ps))
 	var its, shows []*item.Item
-	var songs []int64
+	var songs []uid.ID
 	for i, p := range ps {
 		out[i] = api.StationProgram{ItemId: p.ItemID, EditionId: p.EditionID, StartsAt: p.Start, EndsAt: p.End, DurationMs: p.RuntimeMs}
 		it, err := s.svc.Items.Repo().Get(p.ItemID)
@@ -171,7 +178,7 @@ func (s *Server) programs(ps []*station.Program, admin bool) ([]api.StationProgr
 			shows = append(shows, up)
 		}
 	}
-	byID := map[int64]api.MusicSong{}
+	byID := map[uid.ID]api.MusicSong{}
 	if len(songs) > 0 {
 		vs, err := s.svc.Music.Repo().Songs(item.MusicFilter{IDs: songs, Limit: len(songs)})
 		if err != nil {
@@ -233,10 +240,15 @@ func (s *Server) onAir(a service.Airing, admin bool) (api.StationOnAir, error) {
 }
 
 func (s *Server) toStation(ctx context.Context, st *station.Station) (api.Station, error) {
-	out := api.Station{Id: st.ID, Name: st.Name, Kind: api.PlaylistKind(st.Kind), OwnerId: st.AccountID, HouseholdId: st.HouseholdID,
+	out := api.Station{Id: st.ID, Name: st.Name, Kind: api.PlaylistKind(st.Kind), OwnerId: st.AccountID,
 		PlaylistId: st.PlaylistID, Order: api.StationOrderPlaylist, Visibility: api.StationVisibility(st.Visibility), Timing: api.StationTiming(st.Timing),
 		Rating: optStr(st.Rating),
-		Days:   []api.Weekday{}, Times: []api.StationTimeRange{}, CreatedAt: st.CreatedAt, UpdatedAt: st.UpdatedAt}
+		Days:   []api.Weekday{}, Times: []api.StationTimeRange{}, CreatedAt: st.CreatedAt, ModifiedAt: st.ModifiedAt, CreatedBy: st.CreatedBy,
+		ModifiedBy: st.ModifiedBy}
+	// An owner is always in a household; a zero id fails to encode rather than misstate one.
+	if st.HouseholdID != nil {
+		out.HouseholdId = *st.HouseholdID
+	}
 	if st.Random {
 		out.Order = api.StationOrderRandom
 	}
@@ -244,13 +256,13 @@ func (s *Server) toStation(ctx context.Context, st *station.Station) (api.Statio
 		out.Days = append(out.Days, weekdays[d])
 	}
 	for _, t := range st.Schedule.Times {
-		out.Times = append(out.Times, api.StationTimeRange{From: hhmm(t.From), To: hhmm(t.To)})
+		out.Times = append(out.Times, api.StationTimeRange{Id: &t.ID, From: hhmm(t.From), To: hhmm(t.To)})
 	}
-	c, err := s.svc.Covers.Shown(cover.Owner{StationID: st.ID}, st.PlaylistID, browse(ctx))
+	c, err := s.svc.Covers.Shown(cover.Owner{StationID: &st.ID}, st.PlaylistID, browse(ctx))
 	if err != nil {
 		return out, err
 	}
-	out.ImageUrl = coverURL("/stations/"+strconv.FormatInt(st.ID, 10), c)
+	out.ImageUrl = coverURL("/stations/"+st.ID.String(), c)
 	a, err := s.svc.Stations.OnAir(st, browse(ctx))
 	if err != nil {
 		return out, err
@@ -293,7 +305,8 @@ func (s *Server) CreateStation(ctx context.Context, r api.CreateStationRequestOb
 	if err := s.stationFrom(ctx, r.Body, st); err != nil {
 		return nil, err
 	}
-	if err := s.svc.Stations.Create(st); err != nil {
+	st.ID = or(r.Body.Id, uid.ID{})
+	if err := s.svc.Stations.Create(st, r.Body.OwnPlaylistId, actor(ctx)); err != nil {
 		return nil, err
 	}
 	v, err := s.toStation(ctx, st)
@@ -312,6 +325,12 @@ func (s *Server) GetStation(ctx context.Context, r api.GetStationRequestObject) 
 
 // ReplaceStation edits the owner's station; what is scheduled stays.
 func (s *Server) ReplaceStation(ctx context.Context, r api.ReplaceStationRequestObject) (api.ReplaceStationResponseObject, error) {
+	if err := sameID(r.Body.Id, r.StationId); err != nil {
+		return nil, err
+	}
+	if r.Body.OwnPlaylistId != nil {
+		return nil, invalid("ownPlaylistId", "names a new station's own playlist only")
+	}
 	st, err := s.ownStation(ctx, r.StationId)
 	if err != nil {
 		return nil, err
@@ -319,7 +338,7 @@ func (s *Server) ReplaceStation(ctx context.Context, r api.ReplaceStationRequest
 	if err := s.stationFrom(ctx, r.Body, st); err != nil {
 		return nil, err
 	}
-	if err := s.svc.Stations.Update(st); err != nil {
+	if err := s.svc.Stations.Update(st, actor(ctx)); err != nil {
 		return nil, err
 	}
 	v, err := s.toStation(ctx, st)
@@ -407,7 +426,7 @@ func (s *Server) StartStationPlayback(ctx context.Context, r api.StartStationPla
 	// A station is no Watch together, even on the same title; music plays
 	// on while its listener waits in one.
 	if st.Kind != playlist.Music {
-		if err := s.svc.Together.LeaveDevice(device, 0); err != nil {
+		if err := s.svc.Together.LeaveDevice(device, nil); err != nil {
 			return nil, err
 		}
 	}
@@ -468,7 +487,7 @@ func (s *Server) SetStationServerWide(ctx context.Context, r api.SetStationServe
 	case st.Visibility == station.Server:
 		to = station.Household
 	}
-	if err := s.svc.Stations.SetVisibility(st, to); err != nil {
+	if err := s.svc.Stations.SetVisibility(st, to, actor(ctx)); err != nil {
 		return nil, err
 	}
 	if st, err = s.svc.Stations.Repo().Get(st.ID); err != nil {

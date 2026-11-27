@@ -9,6 +9,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/genre"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/library"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 func id64(n int64) *int64 { return &n }
@@ -24,7 +25,7 @@ func names(gs []*genre.Genre) []string {
 func TestCRUDAndConstraints(t *testing.T) {
 	r := genre.New(dbtest.OpenPreferLocal(t))
 	g := &genre.Genre{Name: "Drama", TMDBID: id64(18)}
-	if err := r.Create(g); err != nil || g.ID == 0 {
+	if err := r.Create(g); err != nil || g.ID.IsZero() {
 		t.Fatal(err)
 	}
 	if err := r.Create(&genre.Genre{Name: "drama"}); !errors.Is(err, db.ErrConflict) {
@@ -57,11 +58,11 @@ func TestItemGenresAndAudience(t *testing.T) {
 	mv := &library.Library{Name: "mv", Kind: library.Movies}
 	tv := &library.Library{Name: "tv", Kind: library.TV}
 	for _, l := range []*library.Library{mv, tv} {
-		if err := libs.Create(l); err != nil {
+		if err := libs.Create(l, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
-	add := func(lib int64, kind, rating string) int64 {
+	add := func(lib uid.ID, kind, rating string) uid.ID {
 		it := &item.Item{LibraryID: lib, Kind: kind, ParsedTitle: rating}
 		if err := items.Create(it); err != nil {
 			t.Fatal(err)
@@ -88,7 +89,7 @@ func TestItemGenresAndAudience(t *testing.T) {
 	if len(r18Genres) != 2 || r18Genres[0].Name != "Animation" || r18Genres[1].Name != "Crime" {
 		t.Fatalf("a stored name outlives the provider's: %v", names(r18Genres))
 	}
-	byItem, err := r.ForItems([]int64{g, r18, show})
+	byItem, err := r.ForItems([]uid.ID{g, r18, show})
 	if err != nil || len(byItem) != 3 || len(byItem[g]) != 2 || byItem[g][0].Name != "Animation" || byItem[show][0].Name != "Kids" {
 		t.Fatalf("batched by item, each by name: %v %v", byItem, err)
 	}
@@ -105,7 +106,7 @@ func TestItemGenresAndAudience(t *testing.T) {
 	if all, _ := r.List(genre.Filter{}); len(all) != 5 || all[0].Name != "Animation" || all[4].Name != "Western" {
 		t.Fatalf("adults see every genre by name: %v", names(all))
 	}
-	if inTV, _ := r.List(genre.Filter{LibraryID: tv.ID}); len(inTV) != 1 || inTV[0].Name != "Kids" {
+	if inTV, _ := r.List(genre.Filter{LibraryID: &tv.ID}); len(inTV) != 1 || inTV[0].Name != "Kids" {
 		t.Fatalf("library filter: %v", names(inTV))
 	}
 	kid := item.Audience{Kid: true, Movie: []string{"G", "PG"}, TV: []string{"TV-Y"}}
@@ -123,7 +124,7 @@ func TestItemGenresAndAudience(t *testing.T) {
 	if ok, _ := r.Seen(crime, item.Audience{}); !ok {
 		t.Fatal("adult sees crime")
 	}
-	if ok, _ := r.Seen(999, item.Audience{}); ok {
+	if ok, _ := r.Seen(uid.N(999), item.Audience{}); ok {
 		t.Fatal("missing genre seen")
 	}
 	if err := items.Delete(r18); err != nil {
@@ -138,7 +139,7 @@ func TestAdminRenameSurvivesRefresh(t *testing.T) {
 	d := dbtest.OpenPreferLocal(t)
 	libs, items, r := library.New(d), item.New(d), genre.New(d)
 	mv := &library.Library{Name: "mv", Kind: library.Movies}
-	if err := libs.Create(mv); err != nil {
+	if err := libs.Create(mv, nil); err != nil {
 		t.Fatal(err)
 	}
 	it := &item.Item{LibraryID: mv.ID, Kind: item.Movie, ParsedTitle: "Alien"}

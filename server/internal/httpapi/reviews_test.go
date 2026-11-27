@@ -7,11 +7,12 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/api"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/review"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // show makes a show with one episode matched to TMDB id as a scan leaves
 // them: remote rows on both.
-func (e *env) matchedShow(lib, tmdbID int64) (show, ep int64) {
+func (e *env) matchedShow(lib uid.ID, tmdbID int64) (show, ep uid.ID) {
 	e.t.Helper()
 	show, ep = e.show(lib, "The Office", "TV-14")
 	now := time.Now().UTC()
@@ -46,7 +47,7 @@ func TestIdentityReviewsAdminReadAndDismiss(t *testing.T) {
 		t.Fatalf("%+v", page)
 	}
 	page = api.IdentityReviewPage{}
-	e.expect(200, "GET", "/identity-reviews?libraryId=999", e.admin.token, nil, &page)
+	e.expect(200, "GET", "/identity-reviews?libraryId="+itoa(uid.N(999)), e.admin.token, nil, &page)
 	if len(page.Items) != 0 {
 		t.Fatalf("%+v", page)
 	}
@@ -90,8 +91,8 @@ func TestIdentityReviewsAdminReadAndDismiss(t *testing.T) {
 		t.Fatalf("%+v", got)
 	}
 	e.expect(400, "PUT", one, e.admin.token, map[string]any{}, nil)
-	e.expect(404, "GET", "/identity-reviews/999", e.admin.token, nil, nil)
-	e.expect(404, "PUT", "/identity-reviews/999", e.admin.token, map[string]any{"dismissed": true}, nil)
+	e.expect(404, "GET", "/identity-reviews/"+itoa(uid.N(999)), e.admin.token, nil, nil)
+	e.expect(404, "PUT", "/identity-reviews/"+itoa(uid.N(999)), e.admin.token, map[string]any{"dismissed": true}, nil)
 	e.expect(403, "GET", "/identity-reviews", e.plain.token, nil, nil)
 	e.expect(403, "GET", one, e.plain.token, nil, nil)
 	e.expect(403, "PUT", one, e.plain.token, map[string]any{"dismissed": true}, nil)

@@ -116,21 +116,21 @@ export function watchArt(
         ? fetchImage(api, key.slice("image:".length))
         : itemId === "profile"
           ? api.GET("/profiles/{profileId}/avatar", {
-              params: { path: { profileId: Number(kind) } },
+              params: { path: { profileId: kind } },
               parseAs: "blob",
             })
           : itemId === "person"
             ? api.GET("/people/{personId}/artwork", {
-                params: { path: { personId: Number(kind) }, query },
+                params: { path: { personId: kind }, query },
                 parseAs: "blob",
               })
             : itemId === "collection"
               ? api.GET("/collections/{collectionId}/artwork/{kind}", {
-                  params: { path: { collectionId: Number(kind), kind: last as Kind }, query },
+                  params: { path: { collectionId: kind, kind: last as Kind }, query },
                   parseAs: "blob",
                 })
               : api.GET("/items/{itemId}/artwork/{kind}", {
-                  params: { path: { itemId: Number(itemId), kind: kind as Kind }, query },
+                  params: { path: { itemId, kind: kind as Kind }, query },
                   parseAs: "blob",
                 });
       urls.set(
@@ -231,5 +231,5 @@ export function watchArt(
 }
 
 /** The data-art key for item i: wide tiles show a movie's or show's backdrop, an episode's still. */
-export const artKey = (i: { id: number; kind: string }, wide = false): string =>
+export const artKey = (i: { id: string; kind: string }, wide = false): string =>
   `${i.id}/${wide && i.kind !== "episode" ? "backdrop" : "poster"}`;

@@ -14,6 +14,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/person"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/review"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/tmdb"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // RetryDelay is how long an item waits after a provider failure.
@@ -54,7 +55,7 @@ func (s *Scanner) MatchLibrary(ctx context.Context, lib *library.Library) (int, 
 	if err := s.checkIdentities(ctx, r, lib.ID); err != nil {
 		return r.failed, err
 	}
-	shows, err := s.Items.List(item.Filter{LibraryID: lib.ID, Kind: item.Show, Limit: 100000})
+	shows, err := s.Items.List(item.Filter{LibraryID: &lib.ID, Kind: item.Show, Limit: 100000})
 	if err != nil {
 		return r.failed, err
 	}
@@ -191,7 +192,7 @@ func (s *Scanner) storeCollection(ctx context.Context, it *item.Item, d *tmdb.De
 		return nil
 	}
 	if d.Collection == nil {
-		return s.Collections.SetTMDBMovie(it.ID, 0)
+		return s.Collections.SetTMDBMovie(it.ID, nil)
 	}
 	ref := *d.Collection
 	full, err := s.Provider.Collection(ctx, ref.ID)
@@ -208,10 +209,10 @@ func (s *Scanner) storeCollection(ctx context.Context, it *item.Item, d *tmdb.De
 		return err
 	}
 	s.cacheImages(ctx, ref.PosterPath, ref.BackdropPath)
-	return s.Collections.SetTMDBMovie(it.ID, c.ID)
+	return s.Collections.SetTMDBMovie(it.ID, &c.ID)
 }
 
-func (s *Scanner) storeGenresAndCredits(itemID int64, d *tmdb.Details) error {
+func (s *Scanner) storeGenresAndCredits(itemID uid.ID, d *tmdb.Details) error {
 	gs := make([]genre.Genre, len(d.Genres))
 	for i, g := range d.Genres {
 		gs[i] = genre.Genre{Name: g.Name, TMDBID: &g.ID}
@@ -271,7 +272,7 @@ var (
 // A matched title's names are read only with check, which each scan and
 // each metadata run asks of every title whose stamp differs; a refresh
 // that comes due between them fetches the match it has.
-func (s *Scanner) rematch(itemID int64, matched bool, was string, st stated, rv *review.Review) (take bool, stamp string, err error) {
+func (s *Scanner) rematch(itemID uid.ID, matched bool, was string, st stated, rv *review.Review) (take bool, stamp string, err error) {
 	byHand, stamp := matched && was == "", st.stamp
 	switch {
 	case rv == nil:
@@ -391,7 +392,7 @@ func (s *Scanner) cacheImages(ctx context.Context, poster, backdrop string) {
 // fillEpisodes stores per-episode metadata for the show's seasons in the
 // library and returns the show's typical episode length (0 if unknown).
 func (s *Scanner) fillEpisodes(ctx context.Context, show *item.Item, d *tmdb.Details, now time.Time) (int, error) {
-	seasons, err := s.Items.List(item.Filter{ParentID: show.ID, Kind: item.Season, Limit: 10000})
+	seasons, err := s.Items.List(item.Filter{ParentID: &show.ID, Kind: item.Season, Limit: 10000})
 	if err != nil {
 		return 0, err
 	}
@@ -414,7 +415,7 @@ func (s *Scanner) fillEpisodes(ctx context.Context, show *item.Item, d *tmdb.Det
 				runtimes = append(runtimes, e.Runtime)
 			}
 		}
-		kids, err := s.Items.List(item.Filter{ParentID: season.ID, Kind: item.Episode, Limit: 10000})
+		kids, err := s.Items.List(item.Filter{ParentID: &season.ID, Kind: item.Episode, Limit: 10000})
 		if err != nil {
 			return 0, err
 		}

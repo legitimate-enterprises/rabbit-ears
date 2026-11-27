@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/api"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/watchstate"
 )
 
@@ -15,7 +16,7 @@ import (
 type pair struct {
 	e             *env
 	heidi, claire string
-	lib, movie    int64
+	lib, movie    uid.ID
 	move          func(time.Duration)
 }
 
@@ -28,7 +29,7 @@ func newPair(t *testing.T) pair {
 	return pair{e, e.plain.token, claire.Token, lib, e.movie(lib, "Heat"), func(d time.Duration) { now = now.Add(d) }}
 }
 
-func (p pair) open(token string, item int64) api.WatchTogether {
+func (p pair) open(token string, item uid.ID) api.WatchTogether {
 	p.e.t.Helper()
 	var w api.WatchTogether
 	p.e.expect(201, "POST", "/watch-together", token, map[string]any{"itemId": item}, &w)
@@ -49,12 +50,12 @@ func (p pair) state(want int, token string, w api.WatchTogether, playing bool, p
 	return got
 }
 
-func (p pair) list(token string, item int64) []api.WatchTogether {
+func (p pair) list(token string, item ...uid.ID) []api.WatchTogether {
 	p.e.t.Helper()
 	var page api.WatchTogetherPage
 	path := "/watch-together"
-	if item != 0 {
-		path += "?itemId=" + itoa(item)
+	if len(item) > 0 {
+		path += "?itemId=" + itoa(item[0])
 	}
 	p.e.expect(200, "GET", path, token, nil, &page)
 	return page.Items
@@ -232,7 +233,7 @@ func TestWatchTogetherWhoMayTakePart(t *testing.T) {
 
 	e.expect(400, "POST", "/watch-together", p.heidi, map[string]any{"itemId": show}, nil)
 	e.expect(400, "POST", "/watch-together", p.heidi, map[string]any{"itemId": tb.channel}, nil)
-	e.expect(404, "POST", "/watch-together", p.heidi, map[string]any{"itemId": 999_999}, nil)
+	e.expect(404, "POST", "/watch-together", p.heidi, map[string]any{"itemId": uid.N(999_999)}, nil)
 	p.open(p.heidi, ep)
 	video := p.open(p.heidi, tb.newer)
 
@@ -244,7 +245,7 @@ func TestWatchTogetherWhoMayTakePart(t *testing.T) {
 	if l := p.list(bea, p.movie); len(l) != 0 {
 		t.Fatalf("a third adult does not see a joined one: %+v", l)
 	}
-	if l := p.list(p.claire, 0); len(l) != 1 || l[0].Id != w.Id {
+	if l := p.list(p.claire); len(l) != 1 || l[0].Id != w.Id {
 		t.Fatalf("a member sees theirs: %+v", l)
 	}
 	e.expect(409, "POST", togetherPath(w)+"/join", bea, nil, nil)
@@ -263,11 +264,11 @@ func TestWatchTogetherWhoMayTakePart(t *testing.T) {
 	e.expect(404, "POST", togetherPath(w)+"/join", other, nil, nil)
 	p.state(404, other, w, false, 0)
 	e.expect(404, "DELETE", togetherPath(w), other, nil, nil)
-	if l := p.list(other, 0); len(l) != 0 {
+	if l := p.list(other); len(l) != 0 {
 		t.Fatalf("another household lists %+v", l)
 	}
 
-	e.expect(404, "GET", "/watch-together/999999", p.heidi, nil, nil)
+	e.expect(404, "GET", "/watch-together/"+uid.N(999_999).String(), p.heidi, nil, nil)
 }
 
 // A Watch together reaches beyond the household those who see its opener:
@@ -284,10 +285,10 @@ func TestWatchTogetherReachesWhoSeesItsOpener(t *testing.T) {
 	if evs := e.heard(admin, &c); !slices.ContainsFunc(evs, func(ev api.Event) bool { return is(ev, api.EventKindWatchTogether, "opened") }) {
 		t.Fatalf("a linked adult does not hear of it: %+v", evs)
 	}
-	if l := p.list(admin, 0); len(l) != 1 || l[0].Id != w.Id {
+	if l := p.list(admin); len(l) != 1 || l[0].Id != w.Id {
 		t.Fatalf("a linked adult lists %+v", l)
 	}
-	if l := p.list(tv, 0); len(l) != 0 {
+	if l := p.list(tv); len(l) != 0 {
 		t.Fatalf("a link off TVs lists on a TV: %+v", l)
 	}
 	e.expect(404, "POST", togetherPath(w)+"/join", tv, nil, nil)
@@ -307,7 +308,7 @@ func TestWatchTogetherReachesWhoSeesItsOpener(t *testing.T) {
 	e.putIn(k.Id, e.admin.household)
 	e.rate(p.movie, "G")
 	w = p.open(p.heidi, p.movie)
-	if l := p.list(e.kidDevice(e.admin, k.Id), 0); len(l) != 1 || l[0].Id != w.Id {
+	if l := p.list(e.kidDevice(e.admin, k.Id)); len(l) != 1 || l[0].Id != w.Id {
 		t.Fatalf("a shared kid lists %+v", l)
 	}
 }
@@ -323,7 +324,7 @@ func TestWatchTogetherWithKids(t *testing.T) {
 	rated := e.kid(e.plain, "Rae")
 	var listed api.Account
 	e.expect(201, "POST", "/profiles", p.heidi, map[string]any{"name": "Lee", "birthday": "2018-05-01", "filterMode": "allow_list"}, &listed)
-	for _, id := range []int64{c.r, c.pg} {
+	for _, id := range []uid.ID{c.r, c.pg} {
 		e.expect(204, "PUT", "/profiles/"+itoa(listed.Id)+"/allowed-items/"+itoa(id), p.heidi, nil, nil)
 	}
 	rae, lee := e.kidDevice(e.plain, rated.Id), e.kidDevice(e.plain, listed.Id)
@@ -333,14 +334,14 @@ func TestWatchTogetherWithKids(t *testing.T) {
 		e.expect(want, "POST", togetherPath(w)+"/join", token, nil, &got)
 		return got
 	}
-	refused := func(token string, item int64) {
+	refused := func(token string, item uid.ID) {
 		t.Helper()
 		e.expect(404, "POST", "/watch-together", token, map[string]any{"itemId": item}, nil)
 	}
 	// hidden is a Watch together the profile cannot tell from none.
 	hidden := func(token string, w api.WatchTogether) {
 		t.Helper()
-		for _, l := range append(p.list(token, w.ItemId), p.list(token, 0)...) {
+		for _, l := range append(p.list(token, w.ItemId), p.list(token)...) {
 			if l.Id == w.Id || l.ItemId == w.ItemId {
 				t.Fatalf("listed %+v", l)
 			}
@@ -369,14 +370,14 @@ func TestWatchTogetherWithKids(t *testing.T) {
 		t.Fatalf("the kid paused: %+v", s)
 	}
 	e.expect(204, "DELETE", togetherPath(w), rae, nil, nil)
-	for _, id := range []int64{c.r, c.unrated, c.adultEp, tb.newer} {
+	for _, id := range []uid.ID{c.r, c.unrated, c.adultEp, tb.newer} {
 		refused(rae, id)
 	}
 	p.open(rae, c.kidEp)
 
 	// A kid joins one an adult opened on a title the kid may see.
 	w = p.open(p.heidi, c.g)
-	if l := p.list(rae, 0); len(l) != 2 || l[0].Id != w.Id || l[0].Members[0].Name != e.plain.account.Name {
+	if l := p.list(rae); len(l) != 2 || l[0].Id != w.Id || l[0].Members[0].Name != e.plain.account.Name {
 		t.Fatalf("a kid sees it waiting, above their own: %+v", l)
 	}
 	if s := p.poll(rae, w); s.Status != api.Waiting {
@@ -519,9 +520,9 @@ func TestWatchTogetherRaces(t *testing.T) {
 func TestWatchTogetherBesidePlayback(t *testing.T) {
 	p := newPair(t)
 	e := p.e
-	file := func(m int64) {
+	file := func(m uid.ID) {
 		e.expect(201, "POST", "/media-files", e.admin.token, map[string]any{"itemId": m, "path": e.onDisk("/films/" + itoa(m) + ".mp4"), "sizeBytes": 1,
-			"modifiedAt": "2026-01-01T00:00:00Z"}, nil)
+			"fileModifiedAt": "2026-01-01T00:00:00Z"}, nil)
 	}
 	m, other := p.movie, e.movie(p.lib, "Ran")
 	bea := e.householdAdult(e.plain, "Bea", "bea@example.test")
@@ -594,7 +595,7 @@ func TestWatchTogetherOutlastsASong(t *testing.T) {
 func TestWatchTogetherOpensAtAWatchedTitlesPosition(t *testing.T) {
 	p := newPair(t)
 	must(t, p.e.svc.WatchStates.Repo().Save(&watchstate.State{AccountID: p.e.plain.account.ID, ItemID: p.movie, PositionMs: 42_000,
-		Watched: true, UpdatedAt: time.Now().UTC()}))
+		Watched: true, ChangedAt: time.Now().UTC()}))
 	if w := p.open(p.heidi, p.movie); w.PositionMs != 42_000 {
 		t.Fatalf("opened at %d", w.PositionMs)
 	}

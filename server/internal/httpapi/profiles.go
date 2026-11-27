@@ -18,12 +18,13 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/live"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/logstore"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/service"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/watchstate"
 )
 
 // member resolves a member of the device household, anything else being not
 // found. While a kid is active, every other profile is forbidden.
-func (s *Server) member(ctx context.Context, id int64) (*account.Account, error) {
+func (s *Server) member(ctx context.Context, id uid.ID) (*account.Account, error) {
 	a, err := s.svc.Accounts.Profile(caller(ctx).device.HouseholdID, id)
 	if err == nil && caller(ctx).asKid() && id != caller(ctx).profile.ID {
 		return nil, errForbidden
@@ -35,7 +36,7 @@ func (s *Server) member(ctx context.Context, id int64) (*account.Account, error)
 // active profile or, while an adult is active, a kid of its household.
 // Another adult's is not found; the device reaches it by switching to them,
 // which asks their PIN.
-func (s *Server) profile(ctx context.Context, id int64) (*account.Account, error) {
+func (s *Server) profile(ctx context.Context, id uid.ID) (*account.Account, error) {
 	a, err := s.member(ctx, id)
 	if err == nil && a.Kind == account.Adult && a.ID != caller(ctx).profile.ID {
 		return nil, errNotFound
@@ -45,7 +46,7 @@ func (s *Server) profile(ctx context.Context, id int64) (*account.Account, error
 
 // managed resolves a profile an adult of the device household active on it
 // may change.
-func (s *Server) managed(ctx context.Context, id int64) (*account.Account, error) {
+func (s *Server) managed(ctx context.Context, id uid.ID) (*account.Account, error) {
 	a, err := s.member(ctx, id)
 	if err == nil && !caller(ctx).manages() {
 		return nil, errForbidden
@@ -55,7 +56,7 @@ func (s *Server) managed(ctx context.Context, id int64) (*account.Account, error
 
 // pinTarget resolves a kid, or the active adult themselves: each adult owns
 // their PIN, present or not.
-func (s *Server) pinTarget(ctx context.Context, id int64) (*account.Account, error) {
+func (s *Server) pinTarget(ctx context.Context, id uid.ID) (*account.Account, error) {
 	if p := caller(ctx); id == p.profile.ID && !p.asKid() {
 		return p.profile, nil
 	}
@@ -66,7 +67,7 @@ func (s *Server) pinTarget(ctx context.Context, id int64) (*account.Account, err
 	return a, err
 }
 
-func (s *Server) kid(ctx context.Context, id int64) (*account.Account, error) {
+func (s *Server) kid(ctx context.Context, id uid.ID) (*account.Account, error) {
 	a, err := s.managed(ctx, id)
 	if err == nil && a.Kind != account.Kid {
 		return nil, errForbidden
@@ -136,14 +137,14 @@ func (s *Server) withAvatars(ctx context.Context, as ...*api.Account) {
 			logstore.Log("gravatar").Warn("Gravatar picture unavailable", "err", err)
 		}
 		if path != "" {
-			a.AvatarUrl = optStr(fmt.Sprintf("%s/profiles/%d/avatar", BasePath, a.Id))
+			a.AvatarUrl = optStr(fmt.Sprintf("%s/profiles/%s/avatar", BasePath, a.Id))
 		}
 	}
 }
 
 // placed fills, on profiles shown on a device of a household, how many
 // households each is in and whether an adult is only present in that one.
-func (s *Server) placed(householdID int64, as ...*api.Account) error {
+func (s *Server) placed(householdID uid.ID, as ...*api.Account) error {
 	for _, a := range as {
 		hs, err := s.svc.Accounts.Repo().Households(&account.Account{ID: a.Id, HouseholdID: a.HouseholdId})
 		if err != nil {
@@ -217,7 +218,7 @@ func (s *Server) SetProfilePreferences(ctx context.Context, r api.SetProfilePref
 	}
 	a.HideKidsContent = or(r.Body.HideKidsContent, a.HideKidsContent)
 	a.NoAutoplay = !or(r.Body.Autoplay, !a.NoAutoplay)
-	if err := s.svc.Accounts.Repo().Update(a); err != nil {
+	if err := s.svc.Accounts.Repo().Update(a, actor(ctx)); err != nil {
 		return nil, err
 	}
 	if err := s.profileChanged(a); err != nil {
@@ -302,7 +303,7 @@ func (s *Server) MoveDevice(ctx context.Context, r api.MoveDeviceRequestObject) 
 	if err := s.svc.Devices.Repo().Move(p.device.ID, r.Body.HouseholdId); err != nil {
 		return nil, err
 	}
-	if err := s.svc.Together.LeaveDevice(p.device.ID, 0); err != nil {
+	if err := s.svc.Together.LeaveDevice(p.device.ID, nil); err != nil {
 		return nil, err
 	}
 	return api.MoveDevice204Response{}, s.svc.Playback.EndDevice(p.device.ID)
@@ -313,7 +314,7 @@ func (s *Server) SignOut(ctx context.Context, _ api.SignOutRequestObject) (api.S
 	if err := s.svc.Devices.Repo().Revoke(caller(ctx).device.ID, time.Now().UTC()); err != nil {
 		return nil, err
 	}
-	if err := s.svc.Together.LeaveDevice(caller(ctx).device.ID, 0); err != nil {
+	if err := s.svc.Together.LeaveDevice(caller(ctx).device.ID, nil); err != nil {
 		return nil, err
 	}
 	return api.SignOut204Response{}, s.svc.Playback.EndDevice(caller(ctx).device.ID)
@@ -332,12 +333,12 @@ func (s *Server) signedOut(out *service.SignedOut, err error) error {
 	}
 	for _, id := range out.Devices {
 		s.svc.Local.Forget(id)
-		if err := s.svc.Together.LeaveDevice(id, 0); err != nil {
+		if err := s.svc.Together.LeaveDevice(id, nil); err != nil {
 			return err
 		}
 	}
 	for _, id := range out.Reset {
-		if err := s.svc.Together.LeaveDevice(id, 0); err != nil {
+		if err := s.svc.Together.LeaveDevice(id, nil); err != nil {
 			return err
 		}
 	}
@@ -394,7 +395,10 @@ func (s *Server) CreateProfile(ctx context.Context, r api.CreateProfileRequestOb
 	if err := kidFrom(r.Body, &a); err != nil {
 		return nil, err
 	}
-	if err := s.svc.Accounts.Repo().Create(&a); err != nil {
+	if r.Body.Id != nil {
+		a.ID = *r.Body.Id
+	}
+	if err := s.svc.Accounts.Repo().Create(&a, actor(ctx)); err != nil {
 		return nil, err
 	}
 	s.householdChanged(hh)
@@ -424,6 +428,9 @@ func (s *Server) GetProfile(ctx context.Context, r api.GetProfileRequestObject) 
 
 // ReplaceProfile rewrites a kid of the device household.
 func (s *Server) ReplaceProfile(ctx context.Context, r api.ReplaceProfileRequestObject) (api.ReplaceProfileResponseObject, error) {
+	if err := sameID(r.Body.Id, r.ProfileId); err != nil {
+		return nil, err
+	}
 	a, err := s.kid(ctx, r.ProfileId)
 	if err != nil {
 		return nil, err
@@ -431,7 +438,7 @@ func (s *Server) ReplaceProfile(ctx context.Context, r api.ReplaceProfileRequest
 	if err := kidFrom(r.Body, a); err != nil {
 		return nil, err
 	}
-	if err := s.svc.Accounts.Repo().Update(a); err != nil {
+	if err := s.svc.Accounts.Repo().Update(a, actor(ctx)); err != nil {
 		return nil, err
 	}
 	if err := s.profileChanged(a); err != nil {
@@ -470,13 +477,13 @@ func (s *Server) DeleteProfile(ctx context.Context, r api.DeleteProfileRequestOb
 		return nil, err
 	}
 	if len(hs) > 1 || present {
-		if err := s.signedOut(s.svc.Households.Leave(a, hh)); err != nil {
+		if err := s.signedOut(s.svc.Households.Leave(a, hh, actor(ctx))); err != nil {
 			return nil, err
 		}
 		s.householdChanged(hh)
 		return api.DeleteProfile204Response{}, nil
 	}
-	return api.DeleteProfile204Response{}, s.deleteAccount(a)
+	return api.DeleteProfile204Response{}, s.deleteAccount(a, actor(ctx))
 }
 
 // owner returns the device household when its owner is the active profile.
@@ -490,7 +497,7 @@ func (s *Server) owner(ctx context.Context) (*household.Household, error) {
 
 // ownerManaged resolves a member of the device household other than its
 // owner, for the owner active on the device.
-func (s *Server) ownerManaged(ctx context.Context, id int64) (*account.Account, error) {
+func (s *Server) ownerManaged(ctx context.Context, id uid.ID) (*account.Account, error) {
 	a, err := s.managed(ctx, id)
 	if err != nil {
 		return nil, err
@@ -508,7 +515,11 @@ func (s *Server) ResendProfileJoinCode(ctx context.Context, r api.ResendProfileJ
 	if err != nil {
 		return nil, err
 	}
-	j, err := s.svc.Auth.ResendJoinCode(a, int(api.HouseholdAdultInputExpiresInDaysN7))
+	var joinCodeID *uid.ID
+	if r.Body != nil {
+		joinCodeID = r.Body.JoinCodeId
+	}
+	j, err := s.svc.Auth.ResendJoinCode(a, int(api.HouseholdAdultInputExpiresInDaysN7), joinCodeID, actor(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -523,7 +534,7 @@ func (s *Server) MakeProfileAdult(ctx context.Context, r api.MakeProfileAdultReq
 		return nil, err
 	}
 	j, out, err := s.svc.Auth.MakeAdult(a, caller(ctx).device.HouseholdID, string(r.Body.Email),
-		int(or(r.Body.ExpiresInDays, api.MakeAdultInputExpiresInDaysN7)))
+		int(or(r.Body.ExpiresInDays, api.MakeAdultInputExpiresInDaysN7)), r.Body.JoinCodeId, actor(ctx))
 	if err := s.signedOut(out, err); err != nil {
 		return nil, err
 	}
@@ -538,7 +549,8 @@ func (s *Server) AddHouseholdAdult(ctx context.Context, r api.AddHouseholdAdultR
 	if err != nil {
 		return nil, err
 	}
-	a, j, err := s.svc.Auth.InviteAdult(h.ID, r.Body.Name, string(r.Body.Email), int(or(r.Body.ExpiresInDays, api.HouseholdAdultInputExpiresInDaysN7)))
+	a, j, err := s.svc.Auth.InviteAdult(h.ID, r.Body.Name, string(r.Body.Email), int(or(r.Body.ExpiresInDays, api.HouseholdAdultInputExpiresInDaysN7)),
+		r.Body.Id, r.Body.JoinCodeId, actor(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -553,7 +565,7 @@ func (s *Server) ListAllowedItems(ctx context.Context, r api.ListAllowedItemsReq
 	}
 	ids, err := s.svc.Accounts.Repo().Allowed(r.ProfileId)
 	if ids == nil {
-		ids = []int64{}
+		ids = []uid.ID{}
 	}
 	return api.ListAllowedItems200JSONResponse{ItemIds: ids}, err
 }
@@ -587,7 +599,7 @@ func (s *Server) ListWatchStates(ctx context.Context, r api.ListWatchStatesReque
 		return nil, err
 	}
 	limit, offset := paging(r.Params.Limit, r.Params.Offset)
-	rows, err := s.svc.WatchStates.Repo().List(r.ProfileId, or(r.Params.ParentId, 0), service.BrowseAudienceFor(who), limit+1, offset)
+	rows, err := s.svc.WatchStates.Repo().List(r.ProfileId, r.Params.ParentId, service.BrowseAudienceFor(who), limit+1, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -645,7 +657,7 @@ func (s *Server) RecordPlay(ctx context.Context, r api.RecordPlayRequestObject) 
 
 // watchedEdition is the edition id, of the item, a watch state names: the
 // default for nil, and nil when the item has none.
-func (s *Server) watchedEdition(itemID int64, id *int64) (*int64, error) {
+func (s *Server) watchedEdition(itemID uid.ID, id *uid.ID) (*uid.ID, error) {
 	if id != nil {
 		ed, err := s.edition(itemID, *id)
 		return &ed, err
@@ -661,7 +673,7 @@ func (s *Server) watchedEdition(itemID int64, id *int64) (*int64, error) {
 
 // watchable resolves a profile of the device and an item that profile may
 // see; an item outside a kid's filter is not found.
-func (s *Server) watchable(ctx context.Context, profileID, itemID int64) error {
+func (s *Server) watchable(ctx context.Context, profileID, itemID uid.ID) error {
 	who, err := s.profile(ctx, profileID)
 	if err != nil {
 		return err
@@ -672,7 +684,7 @@ func (s *Server) watchable(ctx context.Context, profileID, itemID int64) error {
 
 // saveWatchState loads or starts a state, applies change, stamps it played
 // now and saves it.
-func (s *Server) saveWatchState(accountID, itemID int64, change func(*watchstate.State)) (*watchstate.State, error) {
+func (s *Server) saveWatchState(accountID, itemID uid.ID, change func(*watchstate.State)) (*watchstate.State, error) {
 	return s.saveWatchStateAt(accountID, itemID, nil, change)
 }
 
@@ -692,7 +704,7 @@ func watchedAt(at *time.Time) *time.Time {
 // saveWatchStateAt is saveWatchState as of at, nil for now. A change as of
 // an earlier instant than the stored state's is dropped, and the stored
 // state answered.
-func (s *Server) saveWatchStateAt(accountID, itemID int64, at *time.Time, change func(*watchstate.State)) (*watchstate.State, error) {
+func (s *Server) saveWatchStateAt(accountID, itemID uid.ID, at *time.Time, change func(*watchstate.State)) (*watchstate.State, error) {
 	var w *watchstate.State
 	var tell bool
 	err := s.svc.WatchStates.Repo().InTx(func(repo *watchstate.Repo) error {
@@ -709,7 +721,7 @@ func (s *Server) saveWatchStateAt(accountID, itemID int64, at *time.Time, change
 // saveWatchStateIn is saveWatchStateAt through repo, reporting whether the
 // change is to be told instead of telling it, so a caller in a transaction
 // tells only what commits.
-func saveWatchStateIn(repo *watchstate.Repo, accountID, itemID int64, at *time.Time, change func(*watchstate.State)) (*watchstate.State, bool, error) {
+func saveWatchStateIn(repo *watchstate.Repo, accountID, itemID uid.ID, at *time.Time, change func(*watchstate.State)) (*watchstate.State, bool, error) {
 	w, err := repo.Get(accountID, itemID)
 	if errors.Is(err, db.ErrNotFound) {
 		w, err = &watchstate.State{AccountID: accountID, ItemID: itemID}, nil
@@ -738,7 +750,7 @@ func saveWatchStateIn(repo *watchstate.Repo, accountID, itemID int64, at *time.T
 	// leaves or reaches the start, which is what puts it in or out of
 	// progress; a position that only plays on is told when its session ends.
 	jump := w.PositionMs - was.PositionMs
-	return w, was.UpdatedAt.IsZero() || w.Watched != was.Watched || max(jump, -jump) >= watchStateJump ||
+	return w, was.ChangedAt.IsZero() || w.Watched != was.Watched || max(jump, -jump) >= watchStateJump ||
 		(w.PositionMs == 0) != (was.PositionMs == 0), nil
 }
 
@@ -746,8 +758,8 @@ func saveWatchStateIn(repo *watchstate.Repo, accountID, itemID int64, at *time.T
 // than the reports of a session playing on are apart.
 const watchStateJump = 30_000
 
-func (s *Server) watchStateChanged(accountID, itemID int64) {
-	s.svc.Events.Publish(live.Event{Kind: live.WatchState, AccountIDs: []int64{accountID}, ItemID: itemID})
+func (s *Server) watchStateChanged(accountID, itemID uid.ID) {
+	s.svc.Events.Publish(live.Event{Kind: live.WatchState, AccountIDs: []uid.ID{accountID}, ItemID: &itemID})
 }
 
 // DeleteWatchState forgets one item's state for a profile.
@@ -810,7 +822,7 @@ func (s *Server) ChangePassword(ctx context.Context, r api.ChangePasswordRequest
 	if p.asKid() {
 		return nil, errForbidden
 	}
-	return api.ChangePassword204Response{}, s.signedOut(s.svc.Auth.ChangePassword(service.SourceKey(clientIP(ctx)), p.device.ID, p.profile, r.Body.CurrentPassword, r.Body.NewPassword))
+	return api.ChangePassword204Response{}, s.signedOut(s.svc.Auth.ChangePassword(service.SourceKey(clientIP(ctx)), p.device.ID, p.profile, r.Body.CurrentPassword, r.Body.NewPassword, actor(ctx)))
 }
 
 // AcceptJoin consumes a join link and signs the device in.
@@ -830,7 +842,7 @@ func (s *Server) SetProfilePin(ctx context.Context, r api.SetProfilePinRequestOb
 	if err != nil {
 		return nil, err
 	}
-	return api.SetProfilePin204Response{}, s.svc.Auth.SetPIN(a, r.Body.Pin)
+	return api.SetProfilePin204Response{}, s.svc.Auth.SetPIN(a, r.Body.Pin, actor(ctx))
 }
 
 // ClearProfilePin removes a PIN.
@@ -839,7 +851,7 @@ func (s *Server) ClearProfilePin(ctx context.Context, r api.ClearProfilePinReque
 	if err != nil {
 		return nil, err
 	}
-	return api.ClearProfilePin204Response{}, s.svc.Auth.SetPIN(a, "")
+	return api.ClearProfilePin204Response{}, s.svc.Auth.SetPIN(a, "", actor(ctx))
 }
 
 // UnlockProfile switches the device to a profile of its household. A kid
@@ -860,7 +872,7 @@ func (s *Server) LockDevice(ctx context.Context, _ api.LockDeviceRequestObject) 
 	if err := s.svc.Devices.Repo().Lock(id, time.Now().UTC()); err != nil {
 		return nil, err
 	}
-	if err := s.svc.Together.LeaveDevice(id, 0); err != nil {
+	if err := s.svc.Together.LeaveDevice(id, nil); err != nil {
 		return nil, err
 	}
 	return api.LockDevice204Response{}, s.svc.Playback.EndDevice(id)

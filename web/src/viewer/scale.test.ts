@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { setToken } from "../admin/api";
 import { boot } from "./app";
 import { nextEpisode, type Item, type WatchState } from "./data";
+import { uid } from "../api/uid";
 
 const ts = "2026-01-01T00:00:00Z";
 const day = (n: number) => new Date(Date.UTC(2026, 0, 1) + n * 3_600_000).toISOString();
@@ -12,12 +13,14 @@ const day = (n: number) => new Date(Date.UTC(2026, 0, 1) + n * 3_600_000).toISOS
 /** 300 shows of 5 seasons and 20,000 episodes, 3,000 movies, and a profile's 1,225 watch states. */
 function library() {
   const all: Item[] = [];
-  const add = (i: Partial<Item> & Pick<Item, "id" | "kind">) =>
+  const add = (n: number, i: Partial<Item> & Pick<Item, "kind">) =>
     all.push({
-      libraryId: 1,
-      parsedTitle: `T${i.id}`,
-      addedAt: day(i.id % 5000),
-      updatedAt: ts,
+      id: uid(n),
+      libraryId: uid(1),
+      parsedTitle: `T${n}`,
+      addedAt: day(n % 5000),
+      createdAt: ts,
+      modifiedAt: ts,
       ...i,
     });
   let id = 1;
@@ -26,23 +29,21 @@ function library() {
   for (let s = 0; s < 300; s++) {
     const show = id++;
     shows.push(show);
-    add({
-      id: show,
+    add(show, {
       kind: "show",
-      libraryId: 2,
+      libraryId: uid(2),
       parsedTitle: `Show ${String(s).padStart(3, "0")}`,
     });
     episodesOf.set(show, []);
     for (let n = 1; n <= 5; n++) {
       const season = id++;
-      add({ id: season, kind: "season", libraryId: 2, parentId: show, seasonNumber: n });
+      add(season, { kind: "season", libraryId: uid(2), parentId: uid(show), seasonNumber: n });
       const count = s * 5 + n <= 500 ? 14 : 13;
       for (let e = 1; e <= count; e++) {
-        add({
-          id: id++,
+        add(id++, {
           kind: "episode",
-          libraryId: 2,
-          parentId: season,
+          libraryId: uid(2),
+          parentId: uid(season),
           seasonNumber: n,
           episodeNumber: e,
         });
@@ -50,20 +51,20 @@ function library() {
       }
     }
   }
-  for (let m = 0; m < 3000; m++) add({ id: id++, kind: "movie", parsedTitle: `Movie ${m}` });
+  for (let m = 0; m < 3000; m++) add(id++, { kind: "movie", parsedTitle: `Movie ${m}` });
   const byId = new Map(all.map((i) => [i.id, i]));
   // The profile has watched 20 episodes each of 50 shows, round the shows, and is partway
   // into the 21st of every other one; between rounds it watched 200 movies and is partway into 3.
   const states: WatchState[] = [];
   let t = 0;
-  const state = (itemId: number, going: boolean) =>
+  const state = (itemId: string, going: boolean) =>
     states.push({
       itemId,
       positionMs: going ? 60_000 : 0,
       watched: !going,
       playCount: 1,
       lastPlayedAt: day(t++),
-      updatedAt: ts,
+      changedAt: ts,
     });
   const films = all.filter((i) => i.kind === "movie").slice(0, 200);
   for (let round = 0; round < 21; round++) {
@@ -82,7 +83,7 @@ function library() {
       .pop();
     const touched = eps.some((e) => ws.has(e.id));
     return {
-      showId: show,
+      showId: uid(show),
       seasons: 5,
       episodes: eps.length,
       unwatched: eps.filter((e) => !ws.get(e.id)?.watched).length,
@@ -107,7 +108,7 @@ function pageOf<T>(rows: T[], u: URL) {
   };
 }
 const acct = {
-  id: 1,
+  id: uid(1),
   kind: "adult",
   name: "Bea",
   isAdmin: false,
@@ -116,35 +117,35 @@ const acct = {
   pending: false,
   filterMode: "ratings",
   createdAt: ts,
-  updatedAt: ts,
+  modifiedAt: ts,
 };
 function answer(path: string, u: URL): unknown {
   const q = u.searchParams;
   if (path === "/health") return { status: "ok", version: "1.0.0", setupRequired: false };
   if (path === "/me")
     return {
-      device: { id: 1 },
+      device: { id: uid(1) },
       account: acct,
-      activeProfileId: 1,
-      household: { id: 1, name: "Bea", adultId: 1, createdAt: ts },
+      activeProfileId: uid(1),
+      household: { id: uid(1), name: "Bea", adultId: uid(1), createdAt: ts },
       profiles: [acct],
     };
   if (path === "/items") {
     const rows = lib.all.filter(
       (i) =>
         (!q.get("kind") || i.kind === q.get("kind")) &&
-        (!q.get("parentId") || i.parentId === Number(q.get("parentId"))),
+        (!q.get("parentId") || i.parentId === q.get("parentId")),
     );
     if (q.get("sort") === "added")
-      rows.sort((a, b) => b.addedAt.localeCompare(a.addedAt) || b.id - a.id);
+      rows.sort((a, b) => b.addedAt.localeCompare(a.addedAt) || b.id.localeCompare(a.id));
     return pageOf(rows, u);
   }
-  let m = /^\/items\/(\d+)$/.exec(path);
-  if (m) return lib.byId.get(Number(m[1])) ?? json({ code: "not_found", message: "x" }, 404);
-  if (/^\/items\/\d+\/credits$/.test(path)) return { cast: [], crew: [] };
-  if (path === "/profiles/1/watch-state") {
-    const under = Number(q.get("parentId"));
-    const parent = (id?: number) => lib.byId.get(id ?? 0)?.parentId;
+  let m = /^\/items\/([^/]+)$/.exec(path);
+  if (m) return lib.byId.get(m[1]) ?? json({ code: "not_found", message: "x" }, 404);
+  if (/^\/items\/[^/]+\/credits$/.test(path)) return { cast: [], crew: [] };
+  if (path === `/profiles/${uid(1)}/watch-state`) {
+    const under = q.get("parentId");
+    const parent = (id?: string) => (id === undefined ? undefined : lib.byId.get(id)?.parentId);
     return pageOf(
       under
         ? lib.states.filter((w) => parent(w.itemId) === under || parent(parent(w.itemId)) === under)
@@ -152,24 +153,27 @@ function answer(path: string, u: URL): unknown {
       u,
     );
   }
-  m = /^\/profiles\/1\/watch-state\/(\d+)$/.exec(path);
+  m = new RegExp(`^/profiles/${uid(1)}/watch-state/([^/]+)$`).exec(path);
   if (m)
     return (
-      lib.states.find((w) => w.itemId === Number(m![1])) ??
-      json({ code: "not_found", message: "x" }, 404)
+      lib.states.find((w) => w.itemId === m![1]) ?? json({ code: "not_found", message: "x" }, 404)
     );
-  if (path === "/profiles/1/show-progress") return pageOf(lib.progress, u);
+  if (path === `/profiles/${uid(1)}/show-progress`) return pageOf(lib.progress, u);
   if (
-    ["/genres", "/youtube/videos", "/stations", "/profiles/1/playlists", "/collections"].includes(
-      path,
-    )
+    [
+      "/genres",
+      "/youtube/videos",
+      "/stations",
+      `/profiles/${uid(1)}/playlists`,
+      "/collections",
+    ].includes(path)
   )
     return { items: [] };
   return json({ code: "not_found", message: `no fake ${path}` }, 404);
 }
 const fetch = async (req: Request) => {
   const u = new URL(req.url, "http://x");
-  const path = u.pathname.replace("/api/v1", "");
+  const path = u.pathname.replace("/api/v2", "");
   const out = answer(path, u);
   const r = out instanceof Response ? out : json(out);
   // Artwork is per tile drawn, not what the page reads to draw.
@@ -216,7 +220,7 @@ describe("a large library", () => {
     expect(shown("[aria-label='Next up'] a .sub")[0]).toMatch(/^S2 E7 - /);
     // A tile plays its episode; its arrow shows over the art.
     const first = document.querySelector("[aria-label='Next up'] .strip a")!;
-    expect(first.getAttribute("href")).toMatch(/^#\/play\/\d+/);
+    expect(first.getAttribute("href")).toMatch(/^#\/play\/[0-9a-f-]{36}$/);
     expect(first.getAttribute("aria-label")).toMatch(/^Play Show 001, S2 E7 /);
     expect(first.querySelector(".art .playmark")).not.toBeNull();
   });

@@ -12,6 +12,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/account"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/device"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // ErrUnauthenticated means a token is unknown, revoked, or belongs to a
@@ -26,7 +27,7 @@ func HashToken(token string) string {
 
 // Register issues a new device for an adult in a household and returns its
 // bearer token, which is never stored and cannot be shown again.
-func (s *DeviceService) Register(accountID, householdID int64, name, platform string) (string, *device.Device, error) {
+func (s *DeviceService) Register(accountID, householdID uid.ID, name, platform string) (string, *device.Device, error) {
 	return register(s.repo, &device.Device{Name: name, Platform: platform, AccountID: accountID, HouseholdID: householdID})
 }
 
@@ -86,7 +87,7 @@ func (s *DeviceService) Authenticate(token string) (*device.Device, *account.Acc
 
 // Profile returns an account only if it is in the household, so a device
 // can never reach a profile of a household it is not in.
-func (s *AccountService) Profile(householdID, accountID int64) (*account.Account, error) {
+func (s *AccountService) Profile(householdID, accountID uid.ID) (*account.Account, error) {
 	a, err := s.repo.Get(accountID)
 	if err != nil {
 		return nil, err

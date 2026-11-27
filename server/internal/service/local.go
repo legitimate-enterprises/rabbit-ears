@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 const (
@@ -43,22 +44,22 @@ type LocalCheckService struct {
 	Now  func() time.Time
 	mu   sync.Mutex
 	open map[string]openCheck
-	home map[int64]time.Time // by device, when it last confirmed
+	home map[uid.ID]time.Time // by device, when it last confirmed
 }
 
 type openCheck struct {
 	key     []byte
-	device  int64
+	device  uid.ID
 	expires time.Time
 }
 
 // NewLocalCheckService returns a LocalCheckService.
 func NewLocalCheckService() *LocalCheckService {
-	return &LocalCheckService{Now: time.Now, open: map[string]openCheck{}, home: map[int64]time.Time{}}
+	return &LocalCheckService{Now: time.Now, open: map[string]openCheck{}, home: map[uid.ID]time.Time{}}
 }
 
 // Start opens a check for the device.
-func (s *LocalCheckService) Start(device int64) (LocalCheck, error) {
+func (s *LocalCheckService) Start(device uid.ID) (LocalCheck, error) {
 	id, err := newKey()
 	if err != nil {
 		return LocalCheck{}, err
@@ -107,8 +108,8 @@ func (s *LocalCheckService) Confirm(id, nonce, proof string, local bool) (string
 }
 
 // Forget drops a device's standing and its open checks, as when it is
-// signed out: a device id can be reused once its row is deleted.
-func (s *LocalCheckService) Forget(device int64) {
+// signed out.
+func (s *LocalCheckService) Forget(device uid.ID) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.home, device)
@@ -120,7 +121,7 @@ func (s *LocalCheckService) Forget(device int64) {
 }
 
 // Home reports a device that confirmed a check within LocalHomeTTL.
-func (s *LocalCheckService) Home(device int64) bool {
+func (s *LocalCheckService) Home(device uid.ID) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	at, ok := s.home[device]

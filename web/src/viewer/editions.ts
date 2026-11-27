@@ -32,11 +32,11 @@ const savedIn = (eds: Edition[], w?: WatchState) =>
 export const preselect = (eds: Edition[], w?: WatchState) => savedIn(eds, w) ?? defaultEdition(eds);
 
 /** Resume is offered only for the edition the saved position belongs to. */
-export const resumes = (eds: Edition[], w: WatchState | undefined, editionId?: number) =>
+export const resumes = (eds: Edition[], w: WatchState | undefined, editionId?: string) =>
   inProgress(w) && (eds.length < 2 || savedIn(eds, w)?.id === editionId);
 
 /** The player route for itemId, resuming a saved position in the edition it belongs to. */
-export const resumeHref = (itemId: number, w?: WatchState) =>
+export const resumeHref = (itemId: string, w?: WatchState) =>
   `#/play/${itemId}${inProgress(w) && w!.editionId ? `?edition=${w!.editionId}` : ""}`;
 
 /** A playlist row's title, followed by its edition when the server names one. */
@@ -49,8 +49,8 @@ export const needsEdition = (x: unknown) =>
 
 /** Asks which edition; undefined when closed without a pick. */
 export const askEdition = (eds: Edition[]) =>
-  new Promise<number | undefined>((done) => {
-    const pick = (id?: number) => (d.close(), done(id));
+  new Promise<string | undefined>((done) => {
+    const pick = (id?: string) => (d.close(), done(id));
     const d = dialog(
       "Which edition?",
       h(

@@ -67,7 +67,7 @@ var generated = []string{
 	// the order a member reads, seq numbering it before that filter.
 	`CREATE VIEW playlist_row AS WITH e AS (SELECT id, rank, item_id, collection_id, edition_id FROM playlist_entry)` + playlist.Branches + `
 		SELECT pe.playlist_id, ROW_NUMBER() OVER (PARTITION BY pe.playlist_id ORDER BY ` + playlist.RowOrder + `) - 1 AS seq, x.entry_id,
-			x.item_id, COALESCE(x.edition_id, 0) AS edition_id, ` + playlist.Runtime + ` AS runtime_ms
+			x.item_id, x.edition_id, ` + playlist.Runtime + ` AS runtime_ms
 		FROM x CROSS JOIN playlist_entry pe ON pe.id = x.entry_id WHERE ` + playlist.Playable,
 	// The stations each profile lists on the replica's household's devices.
 	`CREATE VIEW profile_station AS SELECT a.account_id, s.id AS station_id FROM profile_audience a CROSS JOIN station s

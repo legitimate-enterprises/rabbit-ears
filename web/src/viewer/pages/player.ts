@@ -61,7 +61,7 @@ export const cannotPlay = (e: unknown) => {
 
 export async function player(
   ctx: Ctx,
-  itemId: number,
+  itemId: string,
   query: URLSearchParams,
   live?: Live,
 ): Promise<HTMLElement[]> {
@@ -110,7 +110,7 @@ export async function player(
   // The file in play, which need not be the item's first: subtitles, chapters and length are its own.
   const file = () => files.find((f) => f.id === pb.stream.mediaFileId);
   const show = item?.kind === "episode" && !live ? await showOf(ctx, item) : undefined;
-  const playlistId = Number(query.get("playlist")) || undefined;
+  const playlistId = query.get("playlist") || undefined;
   const n = Number(query.get("n"));
   const [cur] = playlistId ? await playRows(ctx, playlistId, n).catch(() => []) : [];
   const row = cur?.itemId === itemId ? cur : undefined;
@@ -126,7 +126,7 @@ export async function player(
   };
 
   const video = h("video", { playsInline: true, preload: "auto" }) as HTMLVideoElement;
-  const audioTrackId = query.has("audio") ? Number(query.get("audio")) : undefined;
+  const audioTrackId = query.get("audio") ?? undefined;
   let env!: Env;
   const pb: Playback =
     live?.pb ??
@@ -134,7 +134,7 @@ export async function player(
       profileId: ctx.profile.id,
       itemId,
       // A Watch together always plays the default edition.
-      editionId: tg ? undefined : (row?.editionId ?? (Number(query.get("edition")) || undefined)),
+      editionId: tg ? undefined : (row?.editionId ?? (query.get("edition") || undefined)),
       positionMs: query.has("pos")
         ? Number(query.get("pos"))
         : tg?.status === "joined"
@@ -165,7 +165,7 @@ export async function player(
   let level: Level | undefined;
   // The Auto row's "Now …" line, kept current with level.
   let autoSub: HTMLElement | undefined;
-  let subId: number | undefined;
+  let subId: string | undefined;
   let subOff = false;
   let ended = false;
   let done = false;
@@ -446,7 +446,7 @@ export async function player(
     open = undefined;
   };
   const nextSub = () => subOpts[(subOpts.findIndex((o) => o.checked) + 1) % subOpts.length]?.on();
-  const pick = (id: number | undefined, off: boolean) => {
+  const pick = (id: string | undefined, off: boolean) => {
     subId = id;
     subOff = off;
     if (off)

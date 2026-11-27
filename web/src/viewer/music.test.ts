@@ -5,6 +5,7 @@ import { setToken } from "../admin/api";
 import { boot } from "./app";
 import { music, resetMusic } from "./audio";
 import { at, calls, mockFetch, none, root, until } from "./testSupport";
+import { uid } from "../api/uid";
 
 vi.mock("hls.js", () => ({
   default: class {
@@ -17,7 +18,7 @@ const button = (r: ParentNode, label: string) =>
   [...r.querySelectorAll<HTMLElement>("button, a")].find((b) => b.textContent === label)!;
 const ts = "2026-01-01T00:00:00Z";
 const acct = (id: number, name: string, kind = "adult") => ({
-  id,
+  id: uid(id),
   kind,
   name,
   isAdmin: false,
@@ -26,37 +27,37 @@ const acct = (id: number, name: string, kind = "adult") => ({
   pending: false,
   filterMode: "ratings",
   createdAt: ts,
-  updatedAt: ts,
+  modifiedAt: ts,
 });
 const me = (active: number) => ({
-  device: { id: 1 },
+  device: { id: uid(1) },
   account: acct(1, "Heidi"),
-  activeProfileId: active,
-  household: { id: 1, name: "Heidi", adultId: 1, createdAt: ts },
+  activeProfileId: uid(active),
+  household: { id: uid(1), name: "Heidi", adultId: uid(1), createdAt: ts },
   profiles: [acct(1, "Heidi"), acct(2, "Jax", "kid")],
 });
 const page = (items: unknown[]) => ({ items });
 const album = (id: number, title: string, extra = {}) => ({
-  id,
-  libraryId: 3,
-  artistId: 50,
+  id: uid(id),
+  libraryId: uid(3),
+  artistId: uid(50),
   artistName: "Radiohead",
   title,
   year: 2007,
   songCount: 4,
   durationMs: 1_000_000,
   lossless: true,
-  genres: [{ id: 1, name: "Rock" }],
+  genres: [{ id: uid(1), name: "Rock" }],
   addedAt: ts,
   ...extra,
 });
 const song = (id: number, title: string) => ({
-  id,
-  libraryId: 3,
-  albumId: 100,
+  id: uid(id),
+  libraryId: uid(3),
+  albumId: uid(100),
   albumTitle: "In Rainbows",
-  albumArtistId: 50,
-  artistId: 50,
+  albumArtistId: uid(50),
+  artistId: uid(50),
   artistName: "Radiohead",
   title,
   trackNumber: id,
@@ -67,7 +68,7 @@ const song = (id: number, title: string) => ({
 const SONGS = [song(1, "15 Step"), song(2, "Bodysnatchers"), song(3, "Nude"), song(4, "Reckoner")];
 let session = 0;
 const stream = () => ({
-  sessionId: ++session,
+  sessionId: uid(++session),
   entry: {
     position: 0,
     verdict: "direct_play",
@@ -76,7 +77,7 @@ const stream = () => ({
     subtitleAction: "none",
     bad: false,
   },
-  streamUrl: `/api/v1/streams/k${session}/0/file`,
+  streamUrl: `/api/v2/streams/k${session}/0/file`,
   streamKind: "file",
   positionMs: 0,
   negotiated: {
@@ -104,9 +105,9 @@ const stream = () => ({
 const base = (active = 1) => ({
   "GET /health": { status: "ok", version: "1.0.0", setupRequired: false },
   "GET /me": me(active),
-  "GET /profiles/1/watch-state": page([]),
-  "GET /profiles/1/show-progress": page([]),
-  "GET /profiles/2/show-progress": page([]),
+  [`GET /profiles/${uid(1)}/watch-state`]: page([]),
+  [`GET /profiles/${uid(1)}/show-progress`]: page([]),
+  [`GET /profiles/${uid(2)}/show-progress`]: page([]),
   "GET /genres": page([]),
   "GET /items": page([]),
   "GET /music/albums": (_: unknown, u: URL) =>
@@ -119,17 +120,17 @@ const base = (active = 1) => ({
               artistName: "John Coltrane",
               year: 1958,
               lossless: false,
-              genres: [{ id: 2, name: "Jazz" }],
+              genres: [{ id: uid(2), name: "Jazz" }],
               addedAt: "2026-02-01T00:00:00Z",
             }),
           ],
     ),
-  "GET /music/albums/100": album(100, "In Rainbows"),
+  [`GET /music/albums/${uid(100)}`]: album(100, "In Rainbows"),
   "GET /music/songs": page(SONGS),
   "GET /music/artists": page([
     {
-      id: 50,
-      libraryId: 3,
+      id: uid(50),
+      libraryId: uid(3),
       name: "Radiohead",
       sortName: "Radiohead",
       albumCount: 9,
@@ -139,9 +140,9 @@ const base = (active = 1) => ({
     },
   ]),
   "POST /playback/sessions": () => stream(),
-  "PUT /playback/sessions/1/position": none,
-  "DELETE /playback/sessions/1": none,
-  "DELETE /playback/sessions/2": none,
+  [`PUT /playback/sessions/${uid(1)}/position`]: none,
+  [`DELETE /playback/sessions/${uid(1)}`]: none,
+  [`DELETE /playback/sessions/${uid(2)}`]: none,
 });
 
 beforeEach(async () => {
@@ -211,7 +212,7 @@ describe("music section", () => {
     await until(() => r.querySelector(".grid .poster"));
     button(r, "Artists").click();
     await until(() => r.querySelector(".grid .poster b")?.textContent === "Radiohead");
-    expect(r.querySelector(".grid .poster")!.getAttribute("href")).toBe("#/artist/50");
+    expect(r.querySelector(".grid .poster")!.getAttribute("href")).toBe(`#/artist/${uid(50)}`);
     expect(r.querySelector(".grid .sub")!.textContent).toBe("9 albums");
     button(r, "Songs").click();
     await until(() => r.querySelector(".tracks"));
@@ -222,7 +223,9 @@ describe("music section", () => {
   it("gives kids Music with its own player, and no Playlists view", async () => {
     await at("#/music");
     const r = root();
-    await boot(r, { fetch: mockFetch({ ...base(2), "GET /profiles/2/watch-state": page([]) }) });
+    await boot(r, {
+      fetch: mockFetch({ ...base(2), [`GET /profiles/${uid(2)}/watch-state`]: page([]) }),
+    });
     await until(() => r.querySelector("[aria-label='Albums'] .poster"));
     expect(text(r.querySelectorAll("header nav a"))).toEqual([
       "Home",
@@ -244,7 +247,7 @@ describe("music section", () => {
 
 describe("music playback", () => {
   it("plays an album from a track; the mini player and Now playing follow it", async () => {
-    await at("#/album/100");
+    await at(`#/album/${uid(100)}`);
     const r = root();
     await boot(r, { fetch: mockFetch(base()) });
     await until(() => r.querySelector(".tracks"));
@@ -256,11 +259,11 @@ describe("music playback", () => {
     r.querySelectorAll<HTMLElement>(".tracks .tr")[1].click();
     await until(() => !r.querySelector<HTMLElement>(".mini")?.hidden && music()?.pb);
     const start = calls.find((c) => c.key === "POST /playback/sessions")!.body as {
-      itemId: number;
+      itemId: string;
       positionMs: number;
     };
-    expect(start).toMatchObject({ itemId: 2, positionMs: 0, profileId: 1 });
-    expect(music()!.audio.getAttribute("src")).toBe("/api/v1/streams/k1/0/file");
+    expect(start).toMatchObject({ itemId: uid(2), positionMs: 0, profileId: uid(1) });
+    expect(music()!.audio.getAttribute("src")).toBe("/api/v2/streams/k1/0/file");
     expect(r.querySelector(".mini b")!.textContent).toBe("Bodysnatchers");
     expect(r.querySelector(".mini .sub")!.textContent).toBe("Radiohead · In Rainbows");
     expect(r.querySelector("li[aria-current=true] b")!.textContent).toBe("Bodysnatchers");
@@ -268,12 +271,12 @@ describe("music playback", () => {
     r.querySelector<HTMLElement>(".mini a.np")!.click();
     await until(() => r.querySelector(".np-page .np-info"));
     expect(r.querySelector(".mini")).toBeTruthy();
-    expect(r.querySelector(".back")!.getAttribute("href")).toBe("#/album/100");
+    expect(r.querySelector(".back")!.getAttribute("href")).toBe(`#/album/${uid(100)}`);
     // Title, artist and album each have their own slot; the stream is not narrated.
     const slots = r.querySelectorAll(".np-text > *");
     expect(text(slots)).toEqual(["Bodysnatchers", "Radiohead", "In Rainbows"]);
-    expect(slots[1].getAttribute("href")).toBe("#/artist/50");
-    expect(slots[2].getAttribute("href")).toBe("#/album/100");
+    expect(slots[1].getAttribute("href")).toBe(`#/artist/${uid(50)}`);
+    expect(slots[2].getAttribute("href")).toBe(`#/album/${uid(100)}`);
     expect(r.querySelector(".np-page .status")).toBeNull();
     expect(r.querySelector(".np-page")!.textContent).not.toContain("Direct play");
     const up = () => text(r.querySelectorAll("section[aria-label='Up next'] .tr b"));
@@ -298,7 +301,7 @@ describe("music playback", () => {
   });
 
   it("flips the art to the file details and back, and forgets the choice on leaving", async () => {
-    await at("#/album/100");
+    await at(`#/album/${uid(100)}`);
     const r = root();
     await boot(r, { fetch: mockFetch(base()) });
     await until(() => r.querySelector(".tracks"));
@@ -342,7 +345,7 @@ describe("music playback", () => {
     expect(r.querySelector(".np-art .art")).toBeTruthy();
 
     info().click();
-    await at("#/album/100");
+    await at(`#/album/${uid(100)}`);
     await until(() => r.querySelector(".tracks"));
     r.querySelector<HTMLElement>(".mini a.np")!.click();
     await until(() => r.querySelector(".np-info"));
@@ -350,7 +353,7 @@ describe("music playback", () => {
   });
 
   it("offers no details when the stream carries none", async () => {
-    await at("#/album/100");
+    await at(`#/album/${uid(100)}`);
     const r = root();
     const noAudio = () => ({ ...stream(), audio: undefined });
     await boot(r, { fetch: mockFetch({ ...base(), "POST /playback/sessions": noAudio }) });
@@ -364,7 +367,7 @@ describe("music playback", () => {
   });
 
   it("ends a finished song's session at its end and starts the next one", async () => {
-    await at("#/album/100");
+    await at(`#/album/${uid(100)}`);
     const r = root();
     await boot(r, { fetch: mockFetch(base()) });
     await until(() => r.querySelector(".tracks"));
@@ -374,16 +377,16 @@ describe("music playback", () => {
     Object.defineProperty(m.audio, "currentTime", { configurable: true, value: 240 });
     m.audio.dispatchEvent(new Event("ended"));
     await until(() => calls.filter((c) => c.key === "POST /playback/sessions").length === 2);
-    const end = calls.find((c) => c.key === "DELETE /playback/sessions/1")!;
+    const end = calls.find((c) => c.key === `DELETE /playback/sessions/${uid(1)}`)!;
     expect(end.query).toBe("?positionMs=240000");
     expect(
-      (calls.filter((c) => c.key === "POST /playback/sessions")[1].body as { itemId: number })
+      (calls.filter((c) => c.key === "POST /playback/sessions")[1].body as { itemId: string })
         .itemId,
-    ).toBe(2);
+    ).toBe(uid(2));
   });
 
   it("starts a song again at its position when the server has ended its session", async () => {
-    await at("#/album/100");
+    await at(`#/album/${uid(100)}`);
     const r = root();
     await boot(r, { fetch: mockFetch(base()) });
     await until(() => r.querySelector(".tracks"));
@@ -392,16 +395,16 @@ describe("music playback", () => {
     const m = music()!;
     Object.defineProperty(m.audio, "currentTime", { configurable: true, value: 42 });
     m.audio.dispatchEvent(new Event("error"));
-    await until(() => m.audio.getAttribute("src") === "/api/v1/streams/k2/0/file");
+    await until(() => m.audio.getAttribute("src") === "/api/v2/streams/k2/0/file");
     expect(calls.filter((c) => c.key === "POST /playback/sessions")[1].body).toMatchObject({
-      itemId: 1,
+      itemId: uid(1),
       positionMs: 42_000,
     });
     expect(r.querySelector(".mini .sub")!.textContent).toBe("Radiohead · In Rainbows");
   });
 
   it("ends the song's session at its position when the page goes away", async () => {
-    await at("#/album/100");
+    await at(`#/album/${uid(100)}`);
     const r = root();
     await boot(r, { fetch: mockFetch(base()) });
     await until(() => r.querySelector(".tracks"));
@@ -409,14 +412,14 @@ describe("music playback", () => {
     await until(() => music()?.pb);
     Object.defineProperty(music()!.audio, "currentTime", { configurable: true, value: 42 });
     window.dispatchEvent(new Event("pagehide"));
-    await until(() => calls.some((c) => c.key === "DELETE /playback/sessions/1"));
-    expect(calls.find((c) => c.key === "DELETE /playback/sessions/1")!.query).toBe(
+    await until(() => calls.some((c) => c.key === `DELETE /playback/sessions/${uid(1)}`));
+    expect(calls.find((c) => c.key === `DELETE /playback/sessions/${uid(1)}`)!.query).toBe(
       "?positionMs=42000",
     );
   });
 
   it("Stop ends the song, empties the queue and hides the mini player", async () => {
-    await at("#/album/100");
+    await at(`#/album/${uid(100)}`);
     const r = root();
     await boot(r, { fetch: mockFetch(base()) });
     await until(() => r.querySelector(".tracks"));
@@ -427,14 +430,14 @@ describe("music playback", () => {
       [...mini.querySelectorAll(".mctl button")].map((b) => b.getAttribute("aria-label")),
     ).toEqual(["Previous", "Play", "Next", "Stop"]);
     mini.querySelector<HTMLElement>("[aria-label=Stop]")!.click();
-    await until(() => calls.some((c) => c.key === "DELETE /playback/sessions/1"));
+    await until(() => calls.some((c) => c.key === `DELETE /playback/sessions/${uid(1)}`));
     expect(mini.hidden).toBe(true);
     expect(music()!.q.current).toBeUndefined();
     expect(music()!.audio.getAttribute("src")).toBeNull();
   });
 
   it("hides the mini player when the last song ends", async () => {
-    await at("#/album/100");
+    await at(`#/album/${uid(100)}`);
     const r = root();
     await boot(r, { fetch: mockFetch(base()) });
     await until(() => r.querySelector(".tracks"));
@@ -445,7 +448,7 @@ describe("music playback", () => {
   });
 
   it("remembers the music volume on this device", async () => {
-    await at("#/album/100");
+    await at(`#/album/${uid(100)}`);
     const r = root();
     await boot(r, { fetch: mockFetch(base()) });
     await until(() => r.querySelector(".tracks"));
@@ -464,14 +467,14 @@ describe("music playback", () => {
   });
 
   it("pauses music for the video player and keeps the mini player off it", async () => {
-    await at("#/album/100");
+    await at(`#/album/${uid(100)}`);
     const r = root();
     await boot(r, { fetch: mockFetch(base()) });
     await until(() => r.querySelector(".tracks"));
     button(r, "Play").click();
     await until(() => music()?.pb);
     const paused = vi.spyOn(music()!.audio, "pause");
-    await at("#/play/30");
+    await at(`#/play/${uid(30)}`);
     expect(paused).toHaveBeenCalled();
     expect(r.querySelector(".mini")).toBeNull();
   });
@@ -479,20 +482,20 @@ describe("music playback", () => {
 
 describe("playlists", () => {
   const pl = (id: number, name: string, kind = "music") => ({
-    id,
-    profileId: 1,
+    id: uid(id),
+    profileId: uid(1),
     access: "owner",
     name,
     kind,
     itemCount: 2,
     durationMs: 480_000,
-    artItemId: 1,
+    artItemId: uid(1),
     createdAt: ts,
-    updatedAt: ts,
+    modifiedAt: ts,
   });
   const entry = (id: number, s: ReturnType<typeof song>, position: number) => ({
-    id,
-    playlistId: 9,
+    id: uid(id),
+    playlistId: uid(9),
     position,
     itemId: s.id,
     kind: "song",
@@ -508,22 +511,24 @@ describe("playlists", () => {
     await boot(r, {
       fetch: mockFetch({
         ...base(),
-        "GET /profiles/1/playlists": page([pl(9, "Road trip")]),
-        "POST /profiles/1/playlists": pl(10, "Late night"),
-        "GET /profiles/1/playlists/10": { ...pl(10, "Late night"), itemCount: 0 },
-        "GET /profiles/1/playlists/10/entries": page([]),
-        "GET /profiles/1/playlists/10/play-order": page([]),
+        [`GET /profiles/${uid(1)}/playlists`]: page([pl(9, "Road trip")]),
+        [`POST /profiles/${uid(1)}/playlists`]: pl(10, "Late night"),
+        [`GET /profiles/${uid(1)}/playlists/${uid(10)}`]: { ...pl(10, "Late night"), itemCount: 0 },
+        [`GET /profiles/${uid(1)}/playlists/${uid(10)}/entries`]: page([]),
+        [`GET /profiles/${uid(1)}/playlists/${uid(10)}/play-order`]: page([]),
       }),
     });
     await until(() => r.querySelector(".grid .poster"));
-    expect(calls.find((c) => c.key === "GET /profiles/1/playlists")!.query).toContain("kind=music");
+    expect(calls.find((c) => c.key === `GET /profiles/${uid(1)}/playlists`)!.query).toContain(
+      "kind=music",
+    );
     expect(r.querySelector(".grid .sub")!.textContent).toBe("2 songs");
     button(r, "New playlist").click();
     const dlg = document.querySelector("[role=dialog]")!;
     dlg.querySelector("input")!.value = "Late night";
     dlg.querySelector("form")!.requestSubmit();
     await until(() => r.querySelector("h1")?.textContent === "Late night");
-    expect(calls.find((c) => c.key === "POST /profiles/1/playlists")!.body).toEqual({
+    expect(calls.find((c) => c.key === `POST /profiles/${uid(1)}/playlists`)!.body).toEqual({
       name: "Late night",
       kind: "music",
     });
@@ -532,28 +537,28 @@ describe("playlists", () => {
 
   it("plays, reorders, removes, renames and deletes on the playlist page", async () => {
     let entries = [entry(1, SONGS[0], 0), entry(2, SONGS[2], 1)];
-    await at("#/playlist/9");
+    await at(`#/playlist/${uid(9)}`);
     const r = root();
     await boot(r, {
       fetch: mockFetch({
         ...base(),
-        "GET /profiles/1/playlists/9": pl(9, "Road trip"),
-        "GET /profiles/1/playlists/9/entries": () => page(entries),
-        "GET /profiles/1/playlists/9/play-order": () =>
+        [`GET /profiles/${uid(1)}/playlists/${uid(9)}`]: pl(9, "Road trip"),
+        [`GET /profiles/${uid(1)}/playlists/${uid(9)}/entries`]: () => page(entries),
+        [`GET /profiles/${uid(1)}/playlists/${uid(9)}/play-order`]: () =>
           page(
             entries.map((e) => ({ entryId: e.id, itemId: e.itemId, kind: "song", song: e.song })),
           ),
-        "PUT /profiles/1/playlists/9/entries/2": () => (
+        [`PUT /profiles/${uid(1)}/playlists/${uid(9)}/entries/${uid(2)}`]: () => (
           (entries = [entries[1], entries[0]]),
           entries[0]
         ),
-        "DELETE /profiles/1/playlists/9/entries/1": () => (
-          (entries = entries.filter((e) => e.id !== 1)),
+        [`DELETE /profiles/${uid(1)}/playlists/${uid(9)}/entries/${uid(1)}`]: () => (
+          (entries = entries.filter((e) => e.id !== uid(1))),
           none()
         ),
-        "PUT /profiles/1/playlists/9": pl(9, "Drive"),
-        "DELETE /profiles/1/playlists/9": none,
-        "GET /profiles/1/playlists": page([]),
+        [`PUT /profiles/${uid(1)}/playlists/${uid(9)}`]: pl(9, "Drive"),
+        [`DELETE /profiles/${uid(1)}/playlists/${uid(9)}`]: none,
+        [`GET /profiles/${uid(1)}/playlists`]: page([]),
       }),
     });
     await until(() => r.querySelector(".tracks"));
@@ -565,17 +570,20 @@ describe("playlists", () => {
     button(r, "Play").click();
     await until(() => music()?.pb);
     expect(calls.find((c) => c.key === "POST /playback/sessions")!.body).toMatchObject({
-      itemId: 1,
-      playlistId: 9,
+      itemId: uid(1),
+      playlistId: uid(9),
     });
-    expect(music()!.q.upNext.map((s) => s.id)).toEqual([3]);
+    expect(music()!.q.upNext.map((s) => s.id)).toEqual([uid(3)]);
 
     r.querySelectorAll(".qrow .tr")[1].dispatchEvent(
       new KeyboardEvent("keydown", { key: "ArrowUp", altKey: true, bubbles: true }),
     );
     await until(() => titles()[0] === "Nude");
-    expect(calls.find((c) => c.key === "PUT /profiles/1/playlists/9/entries/2")!.body).toEqual({
-      itemId: 3,
+    expect(
+      calls.find((c) => c.key === `PUT /profiles/${uid(1)}/playlists/${uid(9)}/entries/${uid(2)}`)!
+        .body,
+    ).toEqual({
+      itemId: uid(3),
       position: 0,
     });
 
@@ -587,8 +595,10 @@ describe("playlists", () => {
     expect(dlg.querySelector("input")!.value).toBe("Road trip");
     dlg.querySelector("input")!.value = "Drive";
     dlg.querySelector("form")!.requestSubmit();
-    await until(() => calls.some((c) => c.key === "PUT /profiles/1/playlists/9"));
-    expect(calls.find((c) => c.key === "PUT /profiles/1/playlists/9")!.body).toEqual({
+    await until(() => calls.some((c) => c.key === `PUT /profiles/${uid(1)}/playlists/${uid(9)}`));
+    expect(
+      calls.find((c) => c.key === `PUT /profiles/${uid(1)}/playlists/${uid(9)}`)!.body,
+    ).toEqual({
       name: "Drive",
       kind: "music",
     });
@@ -598,79 +608,92 @@ describe("playlists", () => {
     dlg = document.querySelector("[role=dialog]")!;
     button(dlg, "Delete").click();
     await until(() => location.hash === "#/music?view=playlists");
-    expect(calls.some((c) => c.key === "DELETE /profiles/1/playlists/9")).toBe(true);
+    expect(calls.some((c) => c.key === `DELETE /profiles/${uid(1)}/playlists/${uid(9)}`)).toBe(
+      true,
+    );
   });
 
   it("adds a movie to a movies playlist from its details; kids get no button", async () => {
     const movie = {
-      id: 30,
-      libraryId: 1,
+      id: uid(30),
+      libraryId: uid(1),
       kind: "movie",
       parsedTitle: "Dune",
       addedAt: ts,
-      updatedAt: ts,
+      createdAt: ts,
+      modifiedAt: ts,
     };
     const routes = {
       ...base(),
-      "GET /items/30": movie,
+      [`GET /items/${uid(30)}`]: movie,
       "GET /media-files": page([]),
-      "GET /items/30/credits": { cast: [], crew: [] },
-      "GET /profiles/1/playlists": page([pl(5, "Weekend", "movies")]),
-      "POST /profiles/1/playlists/5/entries": { ...entry(1, SONGS[0], 0), itemId: 30 },
+      [`GET /items/${uid(30)}/credits`]: { cast: [], crew: [] },
+      [`GET /profiles/${uid(1)}/playlists`]: page([pl(5, "Weekend", "movies")]),
+      [`POST /profiles/${uid(1)}/playlists/${uid(5)}/entries`]: {
+        ...entry(1, SONGS[0], 0),
+        itemId: uid(30),
+      },
     };
-    await at("#/movie/30");
+    await at(`#/movie/${uid(30)}`);
     const r = root();
     await boot(r, { fetch: mockFetch(routes) });
     await until(() => button(r, "Add to playlist"));
     button(r, "Add to playlist").click();
     await until(() => document.querySelector("[role=dialog] .choices button"));
-    expect(calls.find((c) => c.key === "GET /profiles/1/playlists")!.query).toContain(
+    expect(calls.find((c) => c.key === `GET /profiles/${uid(1)}/playlists`)!.query).toContain(
       "kind=movies",
     );
     button(document.querySelector("[role=dialog]")!, "Weekend").click();
     await until(() => button(r, "Added to Weekend"));
-    expect(calls.find((c) => c.key === "POST /profiles/1/playlists/5/entries")!.body).toEqual({
-      itemId: 30,
+    expect(
+      calls.find((c) => c.key === `POST /profiles/${uid(1)}/playlists/${uid(5)}/entries`)!.body,
+    ).toEqual({
+      itemId: uid(30),
     });
     expect(document.querySelector("[role=dialog]")).toBeNull();
 
     document.body.replaceChildren();
     const kid = root();
     await boot(kid, {
-      fetch: mockFetch({ ...routes, "GET /me": me(2), "GET /profiles/2/watch-state": page([]) }),
+      fetch: mockFetch({
+        ...routes,
+        "GET /me": me(2),
+        [`GET /profiles/${uid(2)}/watch-state`]: page([]),
+      }),
     });
     await until(() => kid.querySelector("h1"));
     expect(button(kid, "Add to playlist")).toBeUndefined();
   });
 
   const media = (id: number, kind: string, extra = {}) => ({
-    id,
-    libraryId: 1,
+    id: uid(id),
+    libraryId: uid(1),
     kind,
     parsedTitle: `T${id}`,
     addedAt: ts,
-    updatedAt: ts,
+    createdAt: ts,
+    modifiedAt: ts,
     ...extra,
   });
   const show = media(10, "show");
-  const season = media(11, "season", { parentId: 10, seasonNumber: 1 });
-  const ep = media(21, "episode", { parentId: 11, seasonNumber: 1, episodeNumber: 1 });
+  const season = media(11, "season", { parentId: uid(10), seasonNumber: 1 });
+  const ep = media(21, "episode", { parentId: uid(11), seasonNumber: 1, episodeNumber: 1 });
   const TREE = {
     "GET /items": (_: unknown, u: URL) => {
       const k = u.searchParams.get("kind");
       return page(k === "show" ? [show] : k === "season" ? [season] : k === "episode" ? [ep] : []);
     },
-    "GET /items/10": show,
-    "GET /items/11": season,
-    "GET /items/21": ep,
+    [`GET /items/${uid(10)}`]: show,
+    [`GET /items/${uid(11)}`]: season,
+    [`GET /items/${uid(21)}`]: ep,
   };
 
   it.each([
-    ["#/show/10", "tv", "Weekend"],
-    ["#/season/11", "tv", "Weekend"],
-    ["#/episode/21", "tv", "Weekend"],
-    ["#/artist/50", "music", "Road trip"],
-    ["#/album/100", "music", "Road trip"],
+    [`#/show/${uid(10)}`, "tv", "Weekend"],
+    [`#/season/${uid(11)}`, "tv", "Weekend"],
+    [`#/episode/${uid(21)}`, "tv", "Weekend"],
+    [`#/artist/${uid(50)}`, "music", "Road trip"],
+    [`#/album/${uid(100)}`, "music", "Road trip"],
   ])("offers Add to playlist on %s from %s playlists only", async (hash, kind, name) => {
     await at(hash);
     const r = root();
@@ -678,11 +701,11 @@ describe("playlists", () => {
       fetch: mockFetch({
         ...base(),
         ...TREE,
-        "GET /items/10/credits": { cast: [], crew: [] },
+        [`GET /items/${uid(10)}/credits`]: { cast: [], crew: [] },
         "GET /media-files": page([]),
-        "GET /music/artists/50": {
-          id: 50,
-          libraryId: 3,
+        [`GET /music/artists/${uid(50)}`]: {
+          id: uid(50),
+          libraryId: uid(3),
           name: "Radiohead",
           sortName: "Radiohead",
           albumCount: 9,
@@ -690,13 +713,13 @@ describe("playlists", () => {
           genres: [],
           addedAt: ts,
         },
-        "GET /profiles/1/playlists": page([pl(5, name, kind)]),
+        [`GET /profiles/${uid(1)}/playlists`]: page([pl(5, name, kind)]),
       }),
     });
     await until(() => button(r, "Add to playlist"));
     button(r, "Add to playlist").click();
     await until(() => document.querySelector("[role=dialog] .choices button"));
-    expect(calls.find((c) => c.key === "GET /profiles/1/playlists")!.query).toContain(
+    expect(calls.find((c) => c.key === `GET /profiles/${uid(1)}/playlists`)!.query).toContain(
       `kind=${kind}`,
     );
   });
@@ -713,15 +736,18 @@ describe("playlists", () => {
         fetch: mockFetch({
           ...base(),
           ...TREE,
-          "GET /profiles/1/playlists": page([pl(9, "Weekend", kind)]),
-          "POST /profiles/1/playlists": pl(10, "Late", kind),
-          "GET /profiles/1/playlists/10": { ...pl(10, "Late", kind), itemCount: 0 },
-          "GET /profiles/1/playlists/10/entries": page([]),
-          "GET /profiles/1/playlists/10/play-order": page([]),
+          [`GET /profiles/${uid(1)}/playlists`]: page([pl(9, "Weekend", kind)]),
+          [`POST /profiles/${uid(1)}/playlists`]: pl(10, "Late", kind),
+          [`GET /profiles/${uid(1)}/playlists/${uid(10)}`]: {
+            ...pl(10, "Late", kind),
+            itemCount: 0,
+          },
+          [`GET /profiles/${uid(1)}/playlists/${uid(10)}/entries`]: page([]),
+          [`GET /profiles/${uid(1)}/playlists/${uid(10)}/play-order`]: page([]),
         }),
       });
       await until(() => r.querySelector(".grid .poster"));
-      expect(calls.find((c) => c.key === "GET /profiles/1/playlists")!.query).toContain(
+      expect(calls.find((c) => c.key === `GET /profiles/${uid(1)}/playlists`)!.query).toContain(
         `kind=${kind}`,
       );
       expect(r.querySelector(".vt [aria-current=page]")!.textContent).toBe("Playlists");
@@ -731,7 +757,7 @@ describe("playlists", () => {
       dlg.querySelector("input")!.value = "Late";
       dlg.querySelector("form")!.requestSubmit();
       await until(() => r.querySelector("h1")?.textContent === "Late");
-      expect(calls.find((c) => c.key === "POST /profiles/1/playlists")!.body).toEqual({
+      expect(calls.find((c) => c.key === `POST /profiles/${uid(1)}/playlists`)!.body).toEqual({
         name: "Late",
         kind,
       });
@@ -739,10 +765,10 @@ describe("playlists", () => {
   );
 
   it.each([
-    ["#/season/11", "tv"],
-    ["#/episode/21", "tv"],
-    ["#/artist/50", "music"],
-    ["#/album/100", "music"],
+    [`#/season/${uid(11)}`, "tv"],
+    [`#/episode/${uid(21)}`, "tv"],
+    [`#/artist/${uid(50)}`, "music"],
+    [`#/album/${uid(100)}`, "music"],
     ["#/now-playing", "music"],
   ])("offers Add to station on %s from the adult's own %s stations", async (hash, kind) => {
     await at(hash === "#/now-playing" ? "#/" : hash);
@@ -752,9 +778,9 @@ describe("playlists", () => {
         ...base(),
         ...TREE,
         "GET /media-files": page([]),
-        "GET /music/artists/50": {
-          id: 50,
-          libraryId: 3,
+        [`GET /music/artists/${uid(50)}`]: {
+          id: uid(50),
+          libraryId: uid(3),
           name: "Radiohead",
           sortName: "Radiohead",
           albumCount: 9,
@@ -763,14 +789,14 @@ describe("playlists", () => {
           addedAt: ts,
         },
         "GET /stations": page([
-          { id: 4, name: "Mine", kind, ownerId: 1, playlistId: 40 },
-          { id: 5, name: "Theirs", kind, ownerId: 3, playlistId: 50 },
+          { id: uid(4), name: "Mine", kind, ownerId: uid(1), playlistId: uid(40) },
+          { id: uid(5), name: "Theirs", kind, ownerId: uid(3), playlistId: uid(50) },
         ]),
       }),
     });
     if (hash === "#/now-playing") {
       await until(() => music());
-      await music()!.play(SONGS, 0, "In Rainbows", "#/album/100");
+      await music()!.play(SONGS, 0, "In Rainbows", `#/album/${uid(100)}`);
       await at("#/now-playing");
     }
     await until(() => button(r, "Add to station"));
@@ -781,15 +807,17 @@ describe("playlists", () => {
   });
 
   it("asks Reschedule now? once something goes into a station, and Later leaves the schedule", async () => {
-    await at("#/album/100");
+    await at(`#/album/${uid(100)}`);
     const r = root();
     await boot(r, {
       fetch: mockFetch({
         ...base(),
         ...TREE,
         "GET /media-files": page([]),
-        "GET /stations": page([{ id: 4, name: "Mine", kind: "music", ownerId: 1, playlistId: 40 }]),
-        "POST /profiles/1/playlists/40/entries": { id: 1 },
+        "GET /stations": page([
+          { id: uid(4), name: "Mine", kind: "music", ownerId: uid(1), playlistId: uid(40) },
+        ]),
+        [`POST /profiles/${uid(1)}/playlists/${uid(40)}/entries`]: { id: uid(1) },
       }),
     });
     await until(() => button(r, "Add to station"));
@@ -801,35 +829,35 @@ describe("playlists", () => {
     );
     button(document.querySelector("[role=dialog]")!, "Later").click();
     await until(() => !document.querySelector("[role=dialog]"));
-    expect(calls.some((c) => c.key === "POST /stations/4/reschedule")).toBe(false);
+    expect(calls.some((c) => c.key === `POST /stations/${uid(4)}/reschedule`)).toBe(false);
   });
 
   it("shows a container entry as one row and plays the play order from its first row", async () => {
     const tv = { ...pl(9, "Binge", "tv"), itemCount: 13 };
-    await at("#/playlist/9");
+    await at(`#/playlist/${uid(9)}`);
     const r = root();
     await boot(r, {
       fetch: mockFetch({
         ...base(),
-        "GET /profiles/1/playlists/9": tv,
-        "GET /profiles/1/playlists/9/entries": page([
+        [`GET /profiles/${uid(1)}/playlists/${uid(9)}`]: tv,
+        [`GET /profiles/${uid(1)}/playlists/${uid(9)}/entries`]: page([
           {
-            id: 1,
-            playlistId: 9,
+            id: uid(1),
+            playlistId: uid(9),
             position: 0,
-            itemId: 11,
+            itemId: uid(11),
             kind: "season",
             itemCount: 12,
             durationMs: 3_600_000,
-            item: media(11, "season", { parentId: 10, seasonNumber: 1 }),
+            item: media(11, "season", { parentId: uid(10), seasonNumber: 1 }),
             show: media(10, "show", { parsedTitle: "Slow Burn" }),
             addedAt: ts,
           },
           {
-            id: 2,
-            playlistId: 9,
+            id: uid(2),
+            playlistId: uid(9),
             position: 1,
-            itemId: 30,
+            itemId: uid(30),
             kind: "episode",
             itemCount: 1,
             durationMs: 1_800_000,
@@ -838,9 +866,9 @@ describe("playlists", () => {
             addedAt: ts,
           },
         ]),
-        "GET /profiles/1/playlists/9/play-order": page([
-          { entryId: 1, itemId: 21, kind: "episode" },
-          { entryId: 2, itemId: 30, kind: "episode" },
+        [`GET /profiles/${uid(1)}/playlists/${uid(9)}/play-order`]: page([
+          { entryId: uid(1), itemId: uid(21), kind: "episode" },
+          { entryId: uid(2), itemId: uid(30), kind: "episode" },
         ]),
       }),
     });
@@ -849,6 +877,6 @@ describe("playlists", () => {
     expect(r.querySelector(".meta")!.textContent).toBe("13 episodes8m");
     expect(r.querySelectorAll(".qrow").length).toBe(2);
     button(r, "Play").click();
-    await until(() => location.hash === "#/play/21?playlist=9&n=0");
+    await until(() => location.hash === `#/play/${uid(21)}?playlist=${uid(9)}&n=0`);
   });
 });

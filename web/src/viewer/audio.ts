@@ -37,7 +37,7 @@ export class Music {
 
   constructor(
     private api: Api,
-    private profileId: number,
+    private profileId: string,
   ) {
     const a = this.audio;
     keepVolume(a);
@@ -281,7 +281,7 @@ export class Music {
 }
 interface Opts {
   shuffle?: boolean;
-  playlistId?: number;
+  playlistId?: string;
 }
 
 let engine: Music | undefined;
@@ -291,7 +291,7 @@ export function resetMusic(ctx?: Ctx) {
   engine = ctx && new Music(ctx.api, ctx.profile.id);
 }
 
-export const albumArt = (albumId: number, cls: string) =>
+export const albumArt = (albumId: string, cls: string) =>
   h(`div.art.${cls}`, {
     "aria-hidden": "true",
     style: `background:${color(albumId)}`,

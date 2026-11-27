@@ -9,34 +9,35 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/mediafile"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/playback"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/session"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 func ip(n int) *int          { return &n }
-func id(n int64) *int64      { return &n }
+func id(n int) *uid.ID       { i := uid.N(n); return &i }
 func fps(f float64) *float64 { return &f }
 func yes() *bool             { b := true; return &b }
 func no() *bool              { b := false; return &b }
 
 func h264() *mediafile.Track {
-	return &mediafile.Track{ID: 1, StreamIndex: 0, Kind: mediafile.Video, Codec: "h264", Profile: "High", Level: ip(41),
+	return &mediafile.Track{ID: uid.N(1), StreamIndex: 0, Kind: mediafile.Video, Codec: "h264", Profile: "High", Level: ip(41),
 		Width: ip(1920), Height: ip(1080), FrameRate: fps(24), BitDepth: ip(8)}
 }
 
 func hevcHDR() *mediafile.Track {
-	return &mediafile.Track{ID: 1, StreamIndex: 0, Kind: mediafile.Video, Codec: "hevc", Profile: "Main 10", Level: ip(153),
+	return &mediafile.Track{ID: uid.N(1), StreamIndex: 0, Kind: mediafile.Video, Codec: "hevc", Profile: "Main 10", Level: ip(153),
 		Width: ip(3840), Height: ip(2160), FrameRate: fps(24), BitDepth: ip(10), HDRFormat: "hdr10"}
 }
 
-func audio(trackID int64, codec string, ch int, def bool) *mediafile.Track {
-	return &mediafile.Track{ID: trackID, StreamIndex: int(trackID), Kind: mediafile.Audio, Codec: codec, Channels: ip(ch), Language: "eng", IsDefault: def}
+func audio(trackID int, codec string, ch int, def bool) *mediafile.Track {
+	return &mediafile.Track{ID: uid.N(trackID), StreamIndex: trackID, Kind: mediafile.Audio, Codec: codec, Channels: ip(ch), Language: "eng", IsDefault: def}
 }
 
-func sub(trackID int64, codec string, text, forced bool) *mediafile.Track {
+func sub(trackID int, codec string, text, forced bool) *mediafile.Track {
 	t := no()
 	if text {
 		t = yes()
 	}
-	return &mediafile.Track{ID: trackID, StreamIndex: int(trackID), Kind: mediafile.Subtitle, Codec: codec, Language: "eng", IsForced: forced, SubtitleIsText: t}
+	return &mediafile.Track{ID: uid.N(trackID), StreamIndex: trackID, Kind: mediafile.Subtitle, Codec: codec, Language: "eng", IsForced: forced, SubtitleIsText: t}
 }
 
 // web is a local SDR browser: H.264 and HEVC Main 10 in hardware up to 4K,
@@ -95,7 +96,7 @@ func TestDecide(t *testing.T) {
 		want want
 	}{
 		{"direct play", mp4(h264(), audio(2, "aac", 2, true)), web, playback.Selection{}, want{[]string{dp, rx, at, vt, vt}, func(t *testing.T, p []*session.PlanEntry) {
-			if p[0].VideoAction != "copy" || p[0].AudioAction != "copy" || *p[0].AudioTrackID != 2 || p[0].TopHeight != 1080 || !p[0].SingleRung {
+			if p[0].VideoAction != "copy" || p[0].AudioAction != "copy" || *p[0].AudioTrackID != uid.N(2) || p[0].TopHeight != 1080 || !p[0].SingleRung {
 				t.Errorf("%+v", p[0])
 			}
 			if p[3].Encoder != session.EncoderHardware || p[4].Encoder != session.EncoderSoftware || p[3].VideoCodec != "h264" {
@@ -120,19 +121,19 @@ func TestDecide(t *testing.T) {
 			playback.Selection{}, want{[]string{dp, rx, at, vt, vt}, nil}},
 		{"alternative audio track before transcode", mkv(h264(), audio(2, "truehd", 8, true), audio(3, "aac", 2, false)), web, playback.Selection{},
 			want{[]string{rx, at, vt, vt}, func(t *testing.T, p []*session.PlanEntry) {
-				if *p[0].AudioTrackID != 3 || p[0].AudioAction != "copy" || *p[1].AudioTrackID != 2 || p[1].AudioAction != "convert" {
+				if *p[0].AudioTrackID != uid.N(3) || p[0].AudioAction != "copy" || *p[1].AudioTrackID != uid.N(2) || p[1].AudioAction != "convert" {
 					t.Errorf("copy the AAC, then convert the TrueHD: %+v %+v", p[0], p[1])
 				}
 			}}},
 		{"MP3 converts for HLS even when the client decodes it", playback.Media{Container: "avi", Bitrate: 1e6, Tracks: []*mediafile.Track{
-			{ID: 1, Kind: mediafile.Video, Codec: "mpeg4", Width: ip(576), Height: ip(432)}, audio(2, "mp3", 2, true)}},
+			{ID: uid.N(1), Kind: mediafile.Video, Codec: "mpeg4", Width: ip(576), Height: ip(432)}, audio(2, "mp3", 2, true)}},
 			func() playback.Snapshot { s := web(); s.Audio = []string{"aac", "mp3"}; return s }, playback.Selection{},
 			want{[]string{vt, vt}, func(t *testing.T, p []*session.PlanEntry) {
 				if p[0].AudioAction != "convert" {
 					t.Errorf("MP3 in fMP4 is refused by Chrome and Safari: %+v", p[0])
 				}
 			}}},
-		{"video transcode for an undecodable codec", mp4(&mediafile.Track{ID: 1, Kind: mediafile.Video, Codec: "vc1", Width: ip(1920), Height: ip(1080)}, audio(2, "aac", 2, true)), web,
+		{"video transcode for an undecodable codec", mp4(&mediafile.Track{ID: uid.N(1), Kind: mediafile.Video, Codec: "vc1", Width: ip(1920), Height: ip(1080)}, audio(2, "aac", 2, true)), web,
 			playback.Selection{}, want{[]string{vt, vt}, func(t *testing.T, p []*session.PlanEntry) {
 				if p[0].VideoCodec != "h264" || p[0].AudioAction != "copy" || p[0].TopHeight != 1080 || p[0].ToneMap {
 					t.Errorf("%+v", p[0])
@@ -183,7 +184,7 @@ func TestDecide(t *testing.T) {
 		{"forced subtitle selected as a sidecar", mp4(h264(), audio(2, "aac", 2, true), sub(3, "subrip", true, false), sub(4, "subrip", true, true)), web, playback.Selection{},
 			want{[]string{dp, rx, at, vt, vt}, func(t *testing.T, p []*session.PlanEntry) {
 				for _, e := range p {
-					if e.SubtitleAction != session.SubtitleSidecar || *e.SubtitleTrackID != 4 {
+					if e.SubtitleAction != session.SubtitleSidecar || *e.SubtitleTrackID != uid.N(4) {
 						t.Errorf("%+v", e)
 					}
 				}
@@ -196,20 +197,20 @@ func TestDecide(t *testing.T) {
 			}}},
 		{"chosen subtitle overrides forced", mp4(h264(), audio(2, "aac", 2, true), sub(3, "subrip", true, false), sub(4, "subrip", true, true)), web,
 			playback.Selection{SubtitleTrackID: id(3)}, want{[]string{dp, rx, at, vt, vt}, func(t *testing.T, p []*session.PlanEntry) {
-				if *p[0].SubtitleTrackID != 3 {
+				if *p[0].SubtitleTrackID != uid.N(3) {
 					t.Errorf("%+v", p[0])
 				}
 			}}},
 		{"bitmap subtitle burns in", mkv(h264(), audio(2, "aac", 2, true), sub(3, "hdmv_pgs_subtitle", false, true)), web, playback.Selection{},
 			want{[]string{vt, vt}, func(t *testing.T, p []*session.PlanEntry) {
-				if p[0].SubtitleAction != session.SubtitleBurn || *p[0].SubtitleTrackID != 3 {
+				if p[0].SubtitleAction != session.SubtitleBurn || *p[0].SubtitleTrackID != uid.N(3) {
 					t.Errorf("%+v", p[0])
 				}
 			}}},
 		{"bitmap burn-in is the last rung for a client that renders it", mp4(h264(), audio(2, "aac", 2, true), sub(3, "hdmv_pgs_subtitle", false, true)),
 			func() playback.Snapshot { s := web(); s.Subtitles = []string{"webvtt", "pgs"}; return s }, playback.Selection{},
 			want{[]string{dp, vt, vt}, func(t *testing.T, p []*session.PlanEntry) {
-				if p[0].SubtitleAction != session.SubtitleNone || *p[0].SubtitleTrackID != 3 || p[2].SubtitleAction != session.SubtitleBurn {
+				if p[0].SubtitleAction != session.SubtitleNone || *p[0].SubtitleTrackID != uid.N(3) || p[2].SubtitleAction != session.SubtitleBurn {
 					t.Errorf("%+v %+v", p[0], p[2])
 				}
 			}}},
@@ -240,7 +241,7 @@ func TestDecide(t *testing.T) {
 				t.Errorf("%+v", p[0])
 			}
 		}}},
-		{"never upscale past the source", mp4(&mediafile.Track{ID: 1, Kind: mediafile.Video, Codec: "mpeg4", Width: ip(640), Height: ip(360)}, audio(2, "aac", 2, true)), web,
+		{"never upscale past the source", mp4(&mediafile.Track{ID: uid.N(1), Kind: mediafile.Video, Codec: "mpeg4", Width: ip(640), Height: ip(360)}, audio(2, "aac", 2, true)), web,
 			playback.Selection{}, want{[]string{vt, vt}, func(t *testing.T, p []*session.PlanEntry) {
 				if p[0].TopHeight != 360 || !p[0].SingleRung {
 					t.Errorf("%+v", p[0])
@@ -291,7 +292,7 @@ func TestDecideForAppleTVHD(t *testing.T) {
 		{Codec: "hevc", Profiles: []string{"Main", "Main 10"}, Hardware: true, MaxWidth: 1920, MaxHeight: 1080, MaxFrameRate: 30, MaxBitDepth: 10},
 	}
 	uhd := func(codec, profile string, level int) *mediafile.Track {
-		return &mediafile.Track{ID: 1, Kind: mediafile.Video, Codec: codec, Profile: profile, Level: ip(level),
+		return &mediafile.Track{ID: uid.N(1), Kind: mediafile.Video, Codec: codec, Profile: profile, Level: ip(level),
 			Width: ip(3840), Height: ip(2160), FrameRate: fps(24), BitDepth: ip(8)}
 	}
 	for _, v := range []*mediafile.Track{uhd("h264", "High", 51), uhd("hevc", "Main", 153)} {
@@ -349,7 +350,7 @@ func TestMenu(t *testing.T) {
 	small := h264()
 	small.Width, small.Height = ip(1280), ip(720)
 	def := h264()
-	def.ID, def.StreamIndex, def.IsDefault = 3, 2, true
+	def.ID, def.StreamIndex, def.IsDefault = uid.N(3), 2, true
 	m.Tracks = []*mediafile.Track{small, audio(2, "aac", 2, true), def}
 	if r := playback.Menu(m, s, playback.Selection{}); r[0].Height != 1080 {
 		t.Fatalf("Original is the default video track the plan was decided for: %+v", r[0])
@@ -406,7 +407,7 @@ func TestReasonExplainsNonDirectVerdicts(t *testing.T) {
 }
 
 func uhd() *mediafile.Track {
-	return &mediafile.Track{ID: 1, StreamIndex: 0, Kind: mediafile.Video, Codec: "h264", Profile: "High", Level: ip(51),
+	return &mediafile.Track{ID: uid.N(1), StreamIndex: 0, Kind: mediafile.Video, Codec: "h264", Profile: "High", Level: ip(51),
 		Width: ip(3840), Height: ip(2160), FrameRate: fps(24), BitDepth: ip(8)}
 }
 

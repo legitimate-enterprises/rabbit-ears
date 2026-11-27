@@ -12,6 +12,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/device"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/live"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/service"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // Live updates: every signed-in client follows one stream of events by long
@@ -23,22 +24,22 @@ import (
 func (s *Server) hears(ctx context.Context, e live.Event) (bool, error) {
 	p := caller(ctx)
 	if !e.Hears(p.device.HouseholdID, p.profile.ID) {
-		if e.OpenerID == 0 || e.OpenerID == p.profile.ID {
+		if e.OpenerID == nil || *e.OpenerID == p.profile.ID {
 			return false, nil
 		}
-		if ok, err := s.svc.Accounts.Repo().Sees(p.profile, e.OpenerID, device.TV(p.device.Platform)); err != nil || !ok {
+		if ok, err := s.svc.Accounts.Repo().Sees(p.profile, *e.OpenerID, device.TV(p.device.Platform)); err != nil || !ok {
 			return false, err
 		}
 	}
 	a := service.AudienceFor(p.profile)
-	if e.ItemID != 0 {
-		if ok, err := s.svc.Items.Repo().Visible(e.ItemID, a); err != nil || !ok {
+	if e.ItemID != nil {
+		if ok, err := s.svc.Items.Repo().Visible(*e.ItemID, a); err != nil || !ok {
 			return false, err
 		}
 	}
 	// An adult hears of a station gone, to drop it; a kid only of one seen.
-	if e.StationID != 0 && a.Kid {
-		if _, err := s.seenStation(ctx, e.StationID); errors.Is(err, db.ErrNotFound) {
+	if e.StationID != nil && a.Kid {
+		if _, err := s.seenStation(ctx, *e.StationID); errors.Is(err, db.ErrNotFound) {
 			return false, nil
 		} else if err != nil {
 			return false, err
@@ -48,15 +49,9 @@ func (s *Server) hears(ctx context.Context, e live.Event) (bool, error) {
 }
 
 func toEvent(e live.Event) api.Event {
-	id := func(v int64) *int64 {
-		if v == 0 {
-			return nil
-		}
-		return &v
-	}
-	return api.Event{Kind: api.EventKind(e.Kind), Change: optStr(e.Change), ItemId: id(e.ItemID), SessionId: id(e.SessionID),
-		DeviceId: id(e.DeviceID), StationId: id(e.StationID), PlaylistId: id(e.PlaylistID), WatchTogetherId: id(e.WatchTogetherID),
-		LibraryId: id(e.LibraryID)}
+	return api.Event{Kind: api.EventKind(e.Kind), Change: optStr(e.Change), ItemId: e.ItemID, SessionId: e.SessionID,
+		DeviceId: e.DeviceID, StationId: e.StationID, PlaylistId: e.PlaylistID, WatchTogetherId: e.WatchTogetherID,
+		LibraryId: e.LibraryID}
 }
 
 // ListEvents answers what the active profile is to hear since a cursor,
@@ -117,21 +112,22 @@ func (s *Server) stillSignedIn(ctx context.Context) error {
 	return err
 }
 
-// intField reads an integer field of a generated request or response.
-func intField(v any, name string) (int64, bool) {
+// idField reads an id field of a generated request or response.
+func idField(v any, name string) (uid.ID, bool) {
 	f := reflect.Indirect(reflect.ValueOf(v))
 	if f.Kind() != reflect.Struct {
-		return 0, false
+		return uid.ID{}, false
 	}
-	if f = f.FieldByName(name); !f.IsValid() || !f.CanInt() {
-		return 0, false
+	if f = f.FieldByName(name); !f.IsValid() || !f.CanInterface() {
+		return uid.ID{}, false
 	}
-	return f.Int(), true
+	id, ok := f.Interface().(uid.ID)
+	return id, ok
 }
 
 // playlistAudience is who sees a playlist: its owner and everyone its
 // shares reach; nobody when it does not exist.
-func (s *Server) playlistAudience(id int64) []int64 {
+func (s *Server) playlistAudience(id uid.ID) []uid.ID {
 	out, _ := s.svc.Playlists.Repo().Audience(id)
 	return out
 }
@@ -141,7 +137,7 @@ func (s *Server) playlistAudience(id int64) []int64 {
 // after, so that an unshare and a delete are heard by whom they concern.
 func (s *Server) announcePlaylists(f api.StrictHandlerFunc, operationID string) api.StrictHandlerFunc {
 	return func(ctx context.Context, w http.ResponseWriter, r *http.Request, request any) (any, error) {
-		id, named := intField(request, "PlaylistId")
+		id, named := idField(request, "PlaylistId")
 		if r.Method == http.MethodGet || !named && operationID != "CreatePlaylist" {
 			return f(ctx, w, r, request)
 		}
@@ -151,10 +147,10 @@ func (s *Server) announcePlaylists(f api.StrictHandlerFunc, operationID string) 
 			return res, err
 		}
 		if !named {
-			id, _ = intField(res, "Id")
+			id, _ = idField(res, "Id")
 		}
 		if to := append(before, s.playlistAudience(id)...); len(to) > 0 {
-			s.svc.Events.Publish(live.Event{Kind: live.Playlist, PlaylistID: id, AccountIDs: to})
+			s.svc.Events.Publish(live.Event{Kind: live.Playlist, PlaylistID: &id, AccountIDs: to})
 		}
 		// Unsharing and deleting a playlist delete the stations that played it.
 		if r.Method == http.MethodDelete {

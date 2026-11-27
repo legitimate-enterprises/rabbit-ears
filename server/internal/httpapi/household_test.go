@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/api"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // householdAdult is the owner adding an adult who then accepts on their own
@@ -18,7 +19,7 @@ func (e *env) householdAdult(owner user, name, email string) api.SignInResult {
 	return res
 }
 
-func profileByID(page api.AccountPage, id int64) *api.Account {
+func profileByID(page api.AccountPage, id uid.ID) *api.Account {
 	for i := range page.Items {
 		if page.Items[i].Id == id {
 			return &page.Items[i]

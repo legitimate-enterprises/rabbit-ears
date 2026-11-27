@@ -39,6 +39,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/task"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/together"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/transcode"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/watchstate"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/youtube"
 )
@@ -160,6 +161,10 @@ func New(d *sql.DB) *Services {
 	return s
 }
 
+// ref is a pointer to a copy of id, which no later change to its source
+// reaches.
+func ref(id uid.ID) *uid.ID { return &id }
+
 // eventBacklog is how many events the stream keeps; a follower further
 // back than that reloads what it shows.
 const eventBacklog = 512
@@ -179,19 +184,18 @@ func NewLibraryService(repo *library.Repo, tasks *task.Repo) *LibraryService {
 // Repo exposes the repository.
 func (s *LibraryService) Repo() *library.Repo { return s.repo }
 
-// AddFolder attaches a root path to a library and requests its scan.
-func (s *LibraryService) AddFolder(libraryID int64, path string) (*library.Folder, error) {
-	f, err := s.repo.AddFolder(libraryID, path)
-	if err != nil {
-		return nil, err
+// AddFolder attaches f's root path to its library and requests its scan.
+func (s *LibraryService) AddFolder(f *library.Folder, by *uid.ID) error {
+	if err := s.repo.AddFolder(f, by); err != nil {
+		return err
 	}
-	return f, s.RequestScan(libraryID)
+	return s.RequestScan(f.LibraryID)
 }
 
 // UpdateFolder gives a folder a new path and requests the library's scan,
 // which marks the files under the old path missing.
-func (s *LibraryService) UpdateFolder(f *library.Folder) error {
-	if err := s.repo.UpdateFolder(f); err != nil {
+func (s *LibraryService) UpdateFolder(f *library.Folder, by *uid.ID) error {
+	if err := s.repo.UpdateFolder(f, by); err != nil {
 		return err
 	}
 	return s.RequestScan(f.LibraryID)
@@ -208,7 +212,7 @@ func (s *LibraryService) RemoveFolder(f *library.Folder) error {
 
 // RequestScan is Run now on the library's scan task. A library the
 // scheduler has not synced yet has none, and its first scan is due at once.
-func (s *LibraryService) RequestScan(libraryID int64) error {
+func (s *LibraryService) RequestScan(libraryID uid.ID) error {
 	ts, err := s.tasks.List()
 	if err != nil {
 		return err
@@ -287,11 +291,11 @@ func (s *ItemService) Artwork(ctx context.Context, it *item.Item, a item.Audienc
 
 // artistArt finds an artist's newest album with art; artists have no
 // backdrop.
-func (s *ItemService) artistArt(ctx context.Context, id int64, a item.Audience, backdrop bool) (string, error) {
+func (s *ItemService) artistArt(ctx context.Context, id uid.ID, a item.Audience, backdrop bool) (string, error) {
 	if backdrop {
 		return "", db.ErrNotFound
 	}
-	albums, err := s.repo.Albums(item.MusicFilter{ArtistID: id, Sort: "year", Clean: a.Kid, Limit: 1000})
+	albums, err := s.repo.Albums(item.MusicFilter{ArtistID: &id, Sort: "year", Clean: a.Kid, Limit: 1000})
 	if err != nil {
 		return "", err
 	}

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // Verdicts, cheapest first.
@@ -34,11 +35,11 @@ const ServerFailure = "server: "
 
 // Session is one device playing one file for one account.
 type Session struct {
-	ID           int64
-	DeviceID     int64
-	AccountID    int64
-	ItemID       int64
-	MediaFileID  int64
+	ID           uid.ID
+	DeviceID     uid.ID
+	AccountID    uid.ID
+	ItemID       uid.ID
+	MediaFileID  uid.ID
 	PositionMs   int64
 	CurrentEntry int    // position of the plan entry in use
 	StreamKey    string // secret carried by the session's stream URLs
@@ -46,15 +47,19 @@ type Session struct {
 	// watched, saves no position and counts as no play.
 	Station   bool
 	StartedAt time.Time
-	UpdatedAt time.Time
-	EndedAt   *time.Time
+	CreatedAt time.Time
+	// ModifiedAt is when the device last reported, which keeps the session
+	// from being reaped: only its reports and End set it, never the server
+	// changing the session's key, program or plan entry.
+	ModifiedAt time.Time
+	EndedAt    *time.Time
 	// MovedTo is the device Move here took the session to, which ended it.
-	MovedTo *int64
+	MovedTo *uid.ID
 }
 
 // PlanEntry is one rung of the ordered fallback plan.
 type PlanEntry struct {
-	SessionID      int64
+	SessionID      uid.ID
 	Position       int
 	Verdict        string
 	VideoAction    string
@@ -63,17 +68,17 @@ type PlanEntry struct {
 	Bad            bool
 	BadReason      string
 
-	AudioTrackID    *int64 // nil: the file's first audio track
-	AudioChannels   int    // output channels when audio converts
-	SubtitleTrackID *int64 // nil: no subtitle
-	VideoCodec      string // output codec when video converts
-	Encoder         string // EncoderHardware or EncoderSoftware when video converts
-	ToneMap         bool   // HDR source converted to SDR
-	TopHeight       int    // height of the best rung
-	TopBitrate      int64  // bitrate of the best rung, bits per second
-	SingleRung      bool   // no lower rungs are offered
-	Floor           bool   // a 240p rung sits under the standard ones
-	TS              bool   // HLS segments are MPEG-TS rather than fragmented MP4
+	AudioTrackID    *uid.ID // nil: the file's first audio track
+	AudioChannels   int     // output channels when audio converts
+	SubtitleTrackID *uid.ID // nil: no subtitle
+	VideoCodec      string  // output codec when video converts
+	Encoder         string  // EncoderHardware or EncoderSoftware when video converts
+	ToneMap         bool    // HDR source converted to SDR
+	TopHeight       int     // height of the best rung
+	TopBitrate      int64   // bitrate of the best rung, bits per second
+	SingleRung      bool    // no lower rungs are offered
+	Floor           bool    // a 240p rung sits under the standard ones
+	TS              bool    // HLS segments are MPEG-TS rather than fragmented MP4
 }
 
 // Same reports whether two entries would produce the same stream, ignoring
@@ -87,12 +92,12 @@ func (e *PlanEntry) Same(o *PlanEntry) bool {
 		a.Floor == b.Floor && a.TS == b.TS
 }
 
-func eq(a, b *int64) bool { return a == nil && b == nil || a != nil && b != nil && *a == *b }
+func eq(a, b *uid.ID) bool { return a == nil && b == nil || a != nil && b != nil && *a == *b }
 
 // Sample is one group E telemetry report.
 type Sample struct {
-	ID              int64
-	SessionID       int64
+	ID              uid.ID
+	SessionID       uid.ID
 	At              time.Time
 	MeasuredBitrate int64
 	BufferMs        int64
@@ -100,6 +105,8 @@ type Sample struct {
 	CurrentRung     *int
 	RungHeight      *int   // the variant the player is on
 	RungBitrate     *int64 // that variant's declared bits per second
+	CreatedAt       time.Time
+	ModifiedAt      time.Time
 }
 
 // Repo persists sessions and plans.
@@ -108,36 +115,33 @@ type Repo struct{ d db.DBTX }
 // New returns a repository over d.
 func New(d db.DBTX) *Repo { return &Repo{d} }
 
-const cols = `id, device_id, account_id, item_id, media_file_id, position_ms, current_entry, started_at, updated_at, ended_at, stream_key, station,
-	moved_to_device_id`
+const cols = `id, device_id, account_id, item_id, media_file_id, position_ms, current_entry, started_at, modified_at, ended_at, stream_key, station,
+	moved_to_device_id, created_at`
 
-const scols = `s.id, s.device_id, s.account_id, s.item_id, s.media_file_id, s.position_ms, s.current_entry, s.started_at, s.updated_at,
-	s.ended_at, s.stream_key, s.station, s.moved_to_device_id`
+const scols = `s.id, s.device_id, s.account_id, s.item_id, s.media_file_id, s.position_ms, s.current_entry, s.started_at, s.modified_at,
+	s.ended_at, s.stream_key, s.station, s.moved_to_device_id, s.created_at`
 
 func scan(s db.Scanner) (*Session, error) {
 	var v Session
-	var started, updated int64
-	var ended, moved sql.NullInt64
+	var started, modified, created int64
+	var ended sql.NullInt64
 	var key sql.NullString
-	if err := s.Scan(&v.ID, &v.DeviceID, &v.AccountID, &v.ItemID, &v.MediaFileID, &v.PositionMs, &v.CurrentEntry, &started, &updated, &ended, &key, &v.Station,
-		&moved); err != nil {
+	if err := s.Scan(&v.ID, &v.DeviceID, &v.AccountID, &v.ItemID, &v.MediaFileID, &v.PositionMs, &v.CurrentEntry, &started, &modified, &ended, &key, &v.Station,
+		&v.MovedTo, &created); err != nil {
 		return nil, db.Wrap(err)
 	}
-	if moved.Valid {
-		v.MovedTo = &moved.Int64
-	}
 	v.StreamKey = key.String
-	v.StartedAt, v.UpdatedAt, v.EndedAt = db.FromMs(started), db.FromMs(updated), db.FromNullMs(ended)
+	v.StartedAt, v.ModifiedAt, v.EndedAt, v.CreatedAt = db.FromMs(started), db.FromMs(modified), db.FromNullMs(ended), db.FromMs(created)
 	return &v, nil
 }
 
-func insertPlan(d db.DBTX, id int64, plan []*PlanEntry) error {
+func insertPlan(d db.DBTX, id uid.ID, plan []*PlanEntry) error {
 	for i, e := range plan {
 		e.SessionID, e.Position = id, i
 		if _, err := d.Exec(`INSERT INTO session_plan_entry (session_id, position, verdict, video_action, audio_action, subtitle_action, bad, bad_reason,
 			audio_track_id, audio_channels, subtitle_track_id, video_codec, encoder, tone_map, top_height, top_bitrate, single_rung, floor_rung, ts_segments)
 			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, id, i, e.Verdict, e.VideoAction, e.AudioAction, e.SubtitleAction, e.Bad, db.NullStr(e.BadReason),
-			db.NullID(e.AudioTrackID), e.AudioChannels, db.NullID(e.SubtitleTrackID), e.VideoCodec, e.Encoder, e.ToneMap, e.TopHeight, e.TopBitrate, e.SingleRung,
+			e.AudioTrackID, e.AudioChannels, e.SubtitleTrackID, e.VideoCodec, e.Encoder, e.ToneMap, e.TopHeight, e.TopBitrate, e.SingleRung,
 			e.Floor, e.TS); err != nil {
 			return db.Wrap(err)
 		}
@@ -145,36 +149,39 @@ func insertPlan(d db.DBTX, id int64, plan []*PlanEntry) error {
 	return nil
 }
 
-// Create inserts s and its plan atomically; plan positions are assigned in order.
+// Create inserts s and its plan atomically, minting its ID unless set; plan
+// positions are assigned in order.
 func (r *Repo) Create(s *Session, plan []*PlanEntry) error {
-	now := time.Now().UTC()
-	s.StartedAt, s.UpdatedAt = now, now
+	if s.ID.IsZero() {
+		s.ID = uid.New()
+	}
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	s.StartedAt, s.CreatedAt, s.ModifiedAt = now, now, now
 	return db.InTx(r.d, func(d db.DBTX) error {
-		res, err := d.Exec(`INSERT INTO playback_session (device_id, account_id, item_id, media_file_id, position_ms, current_entry, started_at, updated_at,
-			stream_key, station) VALUES (?,?,?,?,?,?,?,?,?,?)`, s.DeviceID, s.AccountID, s.ItemID, s.MediaFileID, s.PositionMs, s.CurrentEntry, db.Ms(now),
-			db.Ms(now), db.NullStr(s.StreamKey), s.Station)
+		_, err := d.Exec(`INSERT INTO playback_session (id, device_id, account_id, item_id, media_file_id, position_ms, current_entry, started_at,
+			created_at, modified_at, stream_key, station) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, s.ID, s.DeviceID, s.AccountID, s.ItemID, s.MediaFileID,
+			s.PositionMs, s.CurrentEntry, db.Ms(now), db.Ms(now), db.Ms(now), db.NullStr(s.StreamKey), s.Station)
 		if err != nil {
 			return db.Wrap(err)
 		}
-		s.ID, _ = res.LastInsertId()
 		return insertPlan(d, s.ID, plan)
 	})
 }
 
 // Get returns one session or db.ErrNotFound.
-func (r *Repo) Get(id int64) (*Session, error) {
+func (r *Repo) Get(id uid.ID) (*Session, error) {
 	return scan(r.d.QueryRow(`SELECT `+cols+` FROM playback_session WHERE id = ?`, id))
 }
 
 // SetStreamKey replaces the key a session's stream URLs carry, so URLs
 // handed out before a new plan stop working.
-func (r *Repo) SetStreamKey(id int64, key string) error {
+func (r *Repo) SetStreamKey(id uid.ID, key string) error {
 	return db.ExecOne(r.d, `UPDATE playback_session SET stream_key = ? WHERE id = ?`, key, id)
 }
 
 // SetProgram points a station's session at the program now on: its item
 // and the file of it the device plays.
-func (r *Repo) SetProgram(id, itemID, mediaFileID int64) error {
+func (r *Repo) SetProgram(id, itemID, mediaFileID uid.ID) error {
 	return db.ExecOne(r.d, `UPDATE playback_session SET item_id = ?, media_file_id = ? WHERE id = ?`, itemID, mediaFileID, id)
 }
 
@@ -196,14 +203,14 @@ func (r *Repo) Active() ([]*Session, error) {
 }
 
 // ActiveByDevice lists the device's sessions still open, newest first.
-func (r *Repo) ActiveByDevice(deviceID int64) ([]*Session, error) {
+func (r *Repo) ActiveByDevice(deviceID uid.ID) ([]*Session, error) {
 	return r.list(`SELECT `+cols+` FROM playback_session WHERE device_id = ? AND ended_at IS NULL ORDER BY id DESC`, deviceID)
 }
 
 // Playing lists an account's open sessions that reported since the given
 // time, newest first, without those tuned in to a station.
-func (r *Repo) Playing(accountID int64, since time.Time) ([]*Session, error) {
-	return r.list(`SELECT `+cols+` FROM playback_session WHERE account_id = ? AND ended_at IS NULL AND station = 0 AND updated_at >= ?
+func (r *Repo) Playing(accountID uid.ID, since time.Time) ([]*Session, error) {
+	return r.list(`SELECT `+cols+` FROM playback_session WHERE account_id = ? AND ended_at IS NULL AND station = 0 AND modified_at >= ?
 		ORDER BY id DESC`, accountID, db.Ms(since))
 }
 
@@ -216,20 +223,20 @@ func (r *Repo) List(limit, offset int) ([]*Session, error) {
 }
 
 // SetPosition records playback progress.
-func (r *Repo) SetPosition(id, positionMs int64, at time.Time) error {
-	return db.ExecOne(r.d, `UPDATE playback_session SET position_ms = ?, updated_at = ? WHERE id = ? AND ended_at IS NULL`, positionMs, db.Ms(at), id)
+func (r *Repo) SetPosition(id uid.ID, positionMs int64, at time.Time) error {
+	return db.ExecOne(r.d, `UPDATE playback_session SET position_ms = ?, modified_at = ? WHERE id = ? AND ended_at IS NULL`, positionMs, db.Ms(at), id)
 }
 
 // End closes a session and drops its telemetry, which only the live slow
 // loop reads; ending twice returns db.ErrNotFound.
-func (r *Repo) End(id int64, at time.Time) error { return r.end(id, nil, at) }
+func (r *Repo) End(id uid.ID, at time.Time) error { return r.end(id, nil, at) }
 
 // Move is End for a session another device took over.
-func (r *Repo) Move(id, toDeviceID int64, at time.Time) error { return r.end(id, &toDeviceID, at) }
+func (r *Repo) Move(id, toDeviceID uid.ID, at time.Time) error { return r.end(id, &toDeviceID, at) }
 
-func (r *Repo) end(id int64, movedTo *int64, at time.Time) error {
+func (r *Repo) end(id uid.ID, movedTo *uid.ID, at time.Time) error {
 	return db.InTx(r.d, func(d db.DBTX) error {
-		if err := db.ExecOne(d, `UPDATE playback_session SET ended_at = ?1, updated_at = ?1, moved_to_device_id = ?2 WHERE id = ?3 AND ended_at IS NULL`,
+		if err := db.ExecOne(d, `UPDATE playback_session SET ended_at = ?1, modified_at = ?1, moved_to_device_id = ?2 WHERE id = ?3 AND ended_at IS NULL`,
 			db.Ms(at), movedTo, id); err != nil {
 			return err
 		}
@@ -239,7 +246,7 @@ func (r *Repo) end(id int64, movedTo *int64, at time.Time) error {
 }
 
 // Delete removes a session and its plan.
-func (r *Repo) Delete(id int64) error {
+func (r *Repo) Delete(id uid.ID) error {
 	return db.ExecOne(r.d, `DELETE FROM playback_session WHERE id = ?`, id)
 }
 
@@ -252,31 +259,24 @@ func (r *Repo) entries(q string, args ...any) ([]*PlanEntry, error) {
 	return db.Collect(rows, err, func(s db.Scanner) (*PlanEntry, error) {
 		var e PlanEntry
 		var reason sql.NullString
-		var audio, sub sql.NullInt64
 		if err := s.Scan(&e.SessionID, &e.Position, &e.Verdict, &e.VideoAction, &e.AudioAction, &e.SubtitleAction, &e.Bad, &reason,
-			&audio, &e.AudioChannels, &sub, &e.VideoCodec, &e.Encoder, &e.ToneMap, &e.TopHeight, &e.TopBitrate, &e.SingleRung,
+			&e.AudioTrackID, &e.AudioChannels, &e.SubtitleTrackID, &e.VideoCodec, &e.Encoder, &e.ToneMap, &e.TopHeight, &e.TopBitrate, &e.SingleRung,
 			&e.Floor, &e.TS); err != nil {
 			return nil, err
 		}
 		e.BadReason = reason.String
-		if audio.Valid {
-			e.AudioTrackID = &audio.Int64
-		}
-		if sub.Valid {
-			e.SubtitleTrackID = &sub.Int64
-		}
 		return &e, nil
 	})
 }
 
 // Plan lists a session's entries in order.
-func (r *Repo) Plan(id int64) ([]*PlanEntry, error) {
+func (r *Repo) Plan(id uid.ID) ([]*PlanEntry, error) {
 	return r.entries(`SELECT `+ecols+` FROM session_plan_entry e WHERE e.session_id = ? ORDER BY e.position`, id)
 }
 
 // ReplacePlan swaps the whole plan and points the session at its first
 // entry.
-func (r *Repo) ReplacePlan(id int64, plan []*PlanEntry) error {
+func (r *Repo) ReplacePlan(id uid.ID, plan []*PlanEntry) error {
 	return db.InTx(r.d, func(d db.DBTX) error {
 		if err := db.ExecOne(d, `UPDATE playback_session SET current_entry = 0 WHERE id = ?`, id); err != nil {
 			return err
@@ -296,7 +296,7 @@ var ErrMoved = errors.New("session moved to another plan entry")
 // the next good one. It returns the new current position; the current one
 // with ErrMoved when the session had left entry; or db.ErrNotFound when the
 // plan is exhausted (the session is left on the bad entry).
-func (r *Repo) FailEntry(id int64, entry int, reason string) (int, error) {
+func (r *Repo) FailEntry(id uid.ID, entry int, reason string) (int, error) {
 	next := -1
 	err := db.InTx(r.d, func(d db.DBTX) error {
 		var cur int
@@ -327,33 +327,39 @@ func (r *Repo) FailEntry(id int64, entry int, reason string) (int, error) {
 	return next, err
 }
 
-// AddSample stores one telemetry report, fills ID and marks the session
-// updated, which keeps it from being reaped.
+// AddSample stores one telemetry report, minting its ID unless set, and
+// marks the session modified, which keeps it from being reaped.
 func (r *Repo) AddSample(v *Sample) error {
+	if v.ID.IsZero() {
+		v.ID = uid.New()
+	}
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	v.CreatedAt, v.ModifiedAt = now, now
 	return db.InTx(r.d, func(d db.DBTX) error {
-		res, err := d.Exec(`INSERT INTO throughput_sample (session_id, at, measured_bitrate, buffer_ms, stall_count, current_rung, rung_height, rung_bitrate)
-			VALUES (?,?,?,?,?,?,?,?)`, v.SessionID, db.Ms(v.At), v.MeasuredBitrate, v.BufferMs, v.StallCount, v.CurrentRung, v.RungHeight, v.RungBitrate)
+		_, err := d.Exec(`INSERT INTO throughput_sample (id, session_id, at, measured_bitrate, buffer_ms, stall_count, current_rung, rung_height, rung_bitrate,
+			created_at, modified_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`, v.ID, v.SessionID, db.Ms(v.At), v.MeasuredBitrate, v.BufferMs, v.StallCount,
+			v.CurrentRung, v.RungHeight, v.RungBitrate, db.Ms(now), db.Ms(now))
 		if err != nil {
 			return db.Wrap(err)
 		}
-		v.ID, _ = res.LastInsertId()
-		_, err = d.Exec(`UPDATE playback_session SET updated_at = ? WHERE id = ? AND ended_at IS NULL`, db.Ms(v.At), v.SessionID)
+		_, err = d.Exec(`UPDATE playback_session SET modified_at = ? WHERE id = ? AND ended_at IS NULL`, db.Ms(v.At), v.SessionID)
 		return db.Wrap(err)
 	})
 }
 
 // Samples lists a session's last telemetry reports, at most last of them,
 // oldest first.
-func (r *Repo) Samples(sessionID int64, last int) ([]*Sample, error) {
-	rows, err := r.d.Query(`SELECT * FROM (SELECT id, session_id, at, measured_bitrate, buffer_ms, stall_count, current_rung, rung_height, rung_bitrate
-		FROM throughput_sample WHERE session_id = ? ORDER BY at DESC, id DESC LIMIT ?) ORDER BY at, id`, sessionID, last)
+func (r *Repo) Samples(sessionID uid.ID, last int) ([]*Sample, error) {
+	rows, err := r.d.Query(`SELECT * FROM (SELECT id, session_id, at, measured_bitrate, buffer_ms, stall_count, current_rung, rung_height, rung_bitrate,
+		created_at, modified_at FROM throughput_sample WHERE session_id = ? ORDER BY at DESC, id DESC LIMIT ?) ORDER BY at, id`, sessionID, last)
 	return db.Collect(rows, err, func(s db.Scanner) (*Sample, error) {
 		var v Sample
-		var at int64
-		if err := s.Scan(&v.ID, &v.SessionID, &at, &v.MeasuredBitrate, &v.BufferMs, &v.StallCount, &v.CurrentRung, &v.RungHeight, &v.RungBitrate); err != nil {
+		var at, created, modified int64
+		if err := s.Scan(&v.ID, &v.SessionID, &at, &v.MeasuredBitrate, &v.BufferMs, &v.StallCount, &v.CurrentRung, &v.RungHeight, &v.RungBitrate,
+			&created, &modified); err != nil {
 			return nil, err
 		}
-		v.At = db.FromMs(at)
+		v.At, v.CreatedAt, v.ModifiedAt = db.FromMs(at), db.FromMs(created), db.FromMs(modified)
 		return &v, nil
 	})
 }

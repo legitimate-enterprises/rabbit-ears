@@ -16,15 +16,16 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/library"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/mediafile"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/session"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 type world struct {
 	d       *sql.DB
 	r       *download.Repo
-	adult   int64
-	kid     int64
-	device  int64
-	movie   int64
+	adult   uid.ID
+	kid     uid.ID
+	device  uid.ID
+	movie   uid.ID
 	file    *mediafile.File
 	devices *device.Repo
 }
@@ -40,26 +41,26 @@ func setup(t *testing.T) world {
 	t.Helper()
 	d := dbtest.Open(t)
 	a := &account.Account{Kind: account.Adult, Email: "a@example.test", Name: "A"}
-	must(t, account.New(d).Create(a))
+	must(t, account.New(d).Create(a, nil))
 	h := &household.Household{Name: "H", AdultID: a.ID}
-	must(t, household.New(d).Create(h))
+	must(t, household.New(d).Create(h, nil))
 	k := &account.Account{Kind: account.Kid, Name: "K", HouseholdID: &h.ID, MovieCeiling: "PG"}
-	must(t, account.New(d).Create(k))
+	must(t, account.New(d).Create(k, nil))
 	dev := &device.Device{TokenHash: "x", Name: "Phone", Platform: "ios", AccountID: a.ID, HouseholdID: h.ID}
 	must(t, device.New(d).Create(dev))
 	l := &library.Library{Name: "Movies", Kind: library.Movies}
-	must(t, library.New(d).Create(l))
+	must(t, library.New(d).Create(l, nil))
 	m := &item.Item{LibraryID: l.ID, Kind: item.Movie, ParsedTitle: "Heat"}
 	must(t, item.New(d).Create(m))
-	f := &mediafile.File{ItemID: m.ID, Path: "/m/heat.mkv", SizeBytes: 10, ModifiedAt: time.UnixMilli(1000).UTC(), Container: "mkv"}
+	f := &mediafile.File{ItemID: &m.ID, Path: "/m/heat.mkv", SizeBytes: 10, FileModifiedAt: time.UnixMilli(1000).UTC(), Container: "mkv"}
 	must(t, mediafile.New(d).CreateFile(f))
 	return world{d, download.New(d), a.ID, k.ID, dev.ID, m.ID, f, device.New(d)}
 }
 
 func (w world) conversion(height int) *download.Conversion {
-	return &download.Conversion{MediaFileID: w.file.ID, SourceModifiedAt: w.file.ModifiedAt, Container: "mp4", PredictedBytes: 99,
+	return &download.Conversion{MediaFileID: w.file.ID, SourceModifiedAt: w.file.FileModifiedAt, Container: "mp4", PredictedBytes: 99,
 		Entry: &session.PlanEntry{Verdict: session.VideoTranscode, VideoAction: "convert", AudioAction: "copy", VideoCodec: "h264", TopHeight: height, TopBitrate: 4e6,
-			AudioTrackID: new(int64(7))}}
+			AudioTrackID: new(uid.N(7))}}
 }
 
 func TestRequestSharesOneConversionAndRequeuesAFailedOne(t *testing.T) {
@@ -68,12 +69,12 @@ func TestRequestSharesOneConversionAndRequeuesAFailedOne(t *testing.T) {
 	for _, c := range []*download.Conversion{a, b, other} {
 		must(t, w.r.Request(c))
 	}
-	if a.ID == 0 || b.ID != a.ID || other.ID == a.ID || a.Status != download.Queued {
+	if a.ID.IsZero() || b.ID != a.ID || other.ID == a.ID || a.Status != download.Queued {
 		t.Fatalf("%+v %+v %+v", a, b, other)
 	}
 	stored, err := w.r.Conversion(a.ID)
 	must(t, err)
-	if stored.Entry.TopHeight != 720 || *stored.Entry.AudioTrackID != 7 || stored.Entry.VideoCodec != "h264" {
+	if stored.Entry.TopHeight != 720 || *stored.Entry.AudioTrackID != uid.N(7) || stored.Entry.VideoCodec != "h264" {
 		t.Fatalf("as stored: %+v %+v", stored, stored.Entry)
 	}
 	now := time.Now().UTC()
@@ -97,6 +98,23 @@ func TestRequestSharesOneConversionAndRequeuesAFailedOne(t *testing.T) {
 	if changed.ID == a.ID {
 		t.Fatal("a source modified since is another conversion")
 	}
+
+	// No audio track and no burned subtitle are one key too, read back as none.
+	first, second := w.conversion(360), w.conversion(360)
+	first.Entry.AudioTrackID, second.Entry.AudioTrackID = nil, nil
+	must(t, w.r.Request(first))
+	must(t, w.r.Request(second))
+	if second.ID != first.ID || second.Entry.AudioTrackID != nil || second.Entry.SubtitleTrackID != nil ||
+		second.Entry.SubtitleAction != session.SubtitleNone {
+		t.Fatalf("without tracks: %+v %+v", second, second.Entry)
+	}
+	burned := w.conversion(360)
+	burned.Entry.AudioTrackID, burned.Entry.SubtitleAction, burned.Entry.SubtitleTrackID = nil, session.SubtitleBurn, new(uid.N(9))
+	must(t, w.r.Request(burned))
+	if got, err := w.r.Conversion(burned.ID); err != nil || burned.ID == first.ID || got.Entry.SubtitleAction != session.SubtitleBurn ||
+		*got.Entry.SubtitleTrackID != uid.N(9) || got.Entry.AudioTrackID != nil {
+		t.Fatalf("a burned subtitle: %+v %v", got, err)
+	}
 }
 
 func TestRequeueAfterRestart(t *testing.T) {
@@ -104,7 +122,7 @@ func TestRequeueAfterRestart(t *testing.T) {
 	c := w.conversion(720)
 	must(t, w.r.Request(c))
 	must(t, w.r.Create(&download.Download{DeviceID: w.device, AccountID: w.adult, ItemID: w.movie, MediaFileID: w.file.ID, ConversionID: &c.ID,
-		Quality: "720p"}))
+		Quality: "720p"}, nil))
 	must(t, w.r.Start(c.ID, time.Now()))
 	if turns, err := w.r.Turns(); err != nil || len(turns) != 0 {
 		t.Fatalf("a converting one is no turn: %+v %v", turns, err)
@@ -120,9 +138,9 @@ func TestDownloadsOfADeviceAndProfile(t *testing.T) {
 	c := w.conversion(720)
 	must(t, w.r.Request(c))
 	mine := &download.Download{DeviceID: w.device, AccountID: w.adult, ItemID: w.movie, MediaFileID: w.file.ID, ConversionID: &c.ID, Quality: "720p"}
-	must(t, w.r.Create(mine))
+	must(t, w.r.Create(mine, nil))
 	dup := *mine
-	dup.ID, dup.Quality = 0, "1080p"
+	dup.ID, dup.Quality = uid.ID{}, "1080p"
 	found, err := w.r.Find(&dup)
 	if err != nil || found.ID != mine.ID || found.Quality != "720p" {
 		t.Fatalf("the same claim is found: %+v %v", found, err)
@@ -131,14 +149,14 @@ func TestDownloadsOfADeviceAndProfile(t *testing.T) {
 	if _, err := w.r.Find(orig); !errors.Is(err, db.ErrNotFound) {
 		t.Fatalf("the file itself is another claim: %v", err)
 	}
-	must(t, w.r.Create(orig))
+	must(t, w.r.Create(orig, nil))
 	kids := &download.Download{DeviceID: w.device, AccountID: w.kid, ItemID: w.movie, MediaFileID: w.file.ID, Quality: "original"}
-	must(t, w.r.Create(kids))
+	must(t, w.r.Create(kids, nil))
 	got, err := w.r.List(w.device, w.adult, item.Audience{}, 10, 0)
 	if err != nil || len(got) != 2 || got[0].ID != mine.ID || got[1].ID != orig.ID {
 		t.Fatalf("a profile's own, oldest first: %+v %v", got, err)
 	}
-	kid := item.Audience{Kid: true, AccountID: w.kid, Movie: []string{"G", "PG"}}
+	kid := item.Audience{Kid: true, AccountID: &w.kid, Movie: []string{"G", "PG"}}
 	if got, err := w.r.List(w.device, w.kid, kid, 10, 0); err != nil || len(got) != 0 {
 		t.Fatalf("an unrated movie is no kid's: %+v %v", got, err)
 	}
@@ -148,7 +166,7 @@ func TestDownloadsOfADeviceAndProfile(t *testing.T) {
 	if v, err := w.r.Of(orig.ID, w.device, w.adult, item.Audience{}); err != nil || v.ID != orig.ID {
 		t.Fatalf("%+v %v", v, err)
 	}
-	if _, err := w.r.Of(orig.ID, w.device+1, w.adult, item.Audience{}); !errors.Is(err, db.ErrNotFound) {
+	if _, err := w.r.Of(orig.ID, uid.N(424242), w.adult, item.Audience{}); !errors.Is(err, db.ErrNotFound) {
 		t.Fatalf("another device's is absent: %v", err)
 	}
 	if n, err := w.r.Count(c.ID); err != nil || n != 1 {
@@ -164,9 +182,9 @@ func TestExpireAndUnneeded(t *testing.T) {
 	long := time.Now().UTC().Add(-96 * time.Hour)
 	must(t, w.r.Start(done.ID, long))
 	must(t, w.r.Finish(done.ID, 1, long))
-	claim := func(c *int64, at time.Time) *download.Download {
+	claim := func(c *uid.ID, at time.Time) *download.Download {
 		v := &download.Download{DeviceID: w.device, AccountID: w.adult, ItemID: w.movie, MediaFileID: w.file.ID, ConversionID: c, Quality: "x", CreatedAt: at}
-		must(t, w.r.Create(v))
+		must(t, w.r.Create(v, nil))
 		return v
 	}
 	waiting := claim(&pending.ID, long)
@@ -179,7 +197,7 @@ func TestExpireAndUnneeded(t *testing.T) {
 		kept bool
 	}{{waiting, true}, {fetchedLong, false}, {fresh, true}, {original, false}} {
 		if _, err := w.r.Get(c.d.ID); (err == nil) != c.kept {
-			t.Errorf("download %d kept=%v: %v", c.d.ID, c.kept, err)
+			t.Errorf("download %s kept=%v: %v", c.d.ID, c.kept, err)
 		}
 	}
 	if un, err := w.r.Unneeded(); err != nil || len(un) != 0 {

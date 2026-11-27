@@ -8,6 +8,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/playlist"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/service"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/watchstate"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/youtube"
 )
@@ -24,7 +25,7 @@ func (s *Server) PutWatchStates(ctx context.Context, r api.PutWatchStatesRequest
 		return nil, err
 	}
 	a := service.AudienceFor(who)
-	var marks []int64
+	var marks []uid.ID
 	for _, id := range r.Body.ItemIds {
 		it, err := s.visibleTo(a, id)
 		if err != nil {
@@ -46,7 +47,7 @@ func (s *Server) PutWatchStates(ctx context.Context, r api.PutWatchStatesRequest
 				}
 			}
 		case item.Season:
-			eps, err := s.svc.Items.Repo().List(item.Filter{ParentID: it.ID, Kind: item.Episode, Audience: a, Limit: 10000})
+			eps, err := s.svc.Items.Repo().List(item.Filter{ParentID: &it.ID, Kind: item.Episode, Audience: a, Limit: 10000})
 			if err != nil {
 				return nil, err
 			}
@@ -54,7 +55,7 @@ func (s *Server) PutWatchStates(ctx context.Context, r api.PutWatchStatesRequest
 				marks = append(marks, ep.ID)
 			}
 		case item.Channel:
-			vs, err := s.svc.YouTube.Repo().Videos(youtube.VideoFilter{ChannelID: it.ID, Limit: -1})
+			vs, err := s.svc.YouTube.Repo().Videos(youtube.VideoFilter{ChannelID: &it.ID, Limit: -1})
 			if err != nil {
 				return nil, err
 			}
@@ -66,7 +67,7 @@ func (s *Server) PutWatchStates(ctx context.Context, r api.PutWatchStatesRequest
 		}
 	}
 	at := watchedAt(r.Body.At)
-	var tell []int64
+	var tell []uid.ID
 	err = s.svc.WatchStates.Repo().InTx(func(repo *watchstate.Repo) error {
 		for _, id := range marks {
 			_, changed, err := saveWatchStateIn(repo, r.ProfileId, id, at, func(w *watchstate.State) { w.Mark(r.Body.Watched, 0) })
@@ -128,7 +129,7 @@ func (s *Server) AddPlaylistEntries(ctx context.Context, r api.AddPlaylistEntrie
 			if err != nil {
 				return nil, err
 			}
-			entries = append(entries, &playlist.Entry{PlaylistID: p.ID, CollectionID: v.ID})
+			entries = append(entries, &playlist.Entry{ID: or(in.Id, uid.ID{}), PlaylistID: p.ID, CollectionID: &v.ID})
 			continue
 		}
 		it, err := s.seen(ctx, *in.ItemId)
@@ -138,13 +139,13 @@ func (s *Server) AddPlaylistEntries(ctx context.Context, r api.AddPlaylistEntrie
 		if !service.Holds(p.Kind, it.Kind) {
 			return nil, invalid("entries", service.ErrWrongPlaylistKind.Error())
 		}
-		ed := or(in.EditionId, 0)
-		if ed == 0 && (it.Kind == item.Movie || it.Kind == item.Episode || it.Kind == item.Song) {
+		ed := in.EditionId
+		if ed == nil && (it.Kind == item.Movie || it.Kind == item.Episode || it.Kind == item.Song) {
 			if d, err := s.svc.Editions.Repo().Default(it.ID); err == nil {
-				ed = d.ID
+				ed = &d.ID
 			}
-		} else if ed != 0 {
-			if e, err := s.svc.Editions.Repo().Get(ed); err != nil || e.ItemID != it.ID {
+		} else if ed != nil {
+			if e, err := s.svc.Editions.Repo().Get(*ed); err != nil || e.ItemID != it.ID {
 				return nil, invalid("entries", service.ErrNotItsEdition.Error())
 			}
 		}
@@ -154,9 +155,10 @@ func (s *Server) AddPlaylistEntries(ctx context.Context, r api.AddPlaylistEntrie
 		} else if err != nil {
 			return nil, err
 		}
+		e.ID = or(in.Id, uid.ID{})
 		entries = append(entries, e)
 	}
-	if err := s.svc.Playlists.Repo().AddEntries(entries); err != nil {
+	if err := s.svc.Playlists.Repo().AddEntries(entries, actor(ctx)); err != nil {
 		return nil, err
 	}
 	return api.AddPlaylistEntries204Response{}, nil

@@ -7,13 +7,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"testing"
 	"time"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/library"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/musicbrainz"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 func intp(n int) *int { return &n }
@@ -156,7 +156,7 @@ func TestScanMusic(t *testing.T) {
 		albums[1].ParsedTitle != "Folder Album" || *albums[1].ParsedYear != 2019 {
 		t.Fatalf("albums %+v %+v", albums[0], albums[1])
 	}
-	songs, err := e.items.Songs(item.MusicFilter{AlbumID: albums[0].ID})
+	songs, err := e.items.Songs(item.MusicFilter{AlbumID: &albums[0].ID})
 	if err != nil || len(songs) != 3 {
 		t.Fatalf("songs %v %v", songs, err)
 	}
@@ -220,11 +220,11 @@ func TestScanMusic(t *testing.T) {
 	opening := filepath.Join(album, "01 Opening.flac")
 	song, err := e.items.ByPath(e.lib.ID, item.Song, opening)
 	must(t, err)
-	_, err = e.d.Exec(`INSERT INTO account (kind, name, created_at, updated_at) VALUES ('adult', 'A', 0, 0)`)
+	_, err = e.d.Exec(`INSERT INTO account (id, kind, name, created_at, modified_at) VALUES (?, 'adult', 'A', 0, 0)`, uid.N(1))
 	must(t, err)
-	_, err = e.d.Exec(`INSERT INTO playlist (account_id, name, kind, created_at, updated_at) VALUES (1, 'P', 'music', 0, 0)`)
+	_, err = e.d.Exec(`INSERT INTO playlist (id, account_id, name, kind, created_at, modified_at) VALUES (?1, ?1, 'P', 'music', 0, 0)`, uid.N(1))
 	must(t, err)
-	_, err = e.d.Exec(`INSERT INTO playlist_entry (playlist_id, item_id, rank, added_at) VALUES (1, ?, 'a0', 0)`, song.ID)
+	_, err = e.d.Exec(`INSERT INTO playlist_entry (id, playlist_id, item_id, rank, added_at, created_at, modified_at) VALUES (?1, ?1, ?2, 'a0', 0, 0, 0)`, uid.N(1), song.ID)
 	must(t, err)
 	retagged := filepath.Join(t.TempDir(), "x.flac")
 	if out, err := exec.Command("ffmpeg", "-v", "error", "-i", opening, "-map", "0", "-c", "copy", "-metadata", "album=Second Album", retagged).CombinedOutput(); err != nil { //nolint:gosec // fixture and temp paths
@@ -246,7 +246,7 @@ func TestScanMusic(t *testing.T) {
 	var entries int
 	must(t, e.d.QueryRow(`SELECT COUNT(*) FROM playlist_entry WHERE item_id = ?`, song.ID).Scan(&entries))
 	if moved.ID != song.ID || entries != 1 {
-		t.Fatalf("song %d became %d, %d playlist entries left", song.ID, moved.ID, entries)
+		t.Fatalf("song %s became %s, %d playlist entries left", song.ID, moved.ID, entries)
 	}
 }
 
@@ -374,7 +374,7 @@ func TestSyncSchedulesMusicScans(t *testing.T) {
 		kinds = append(kinds, x.Kind)
 	}
 	slices.Sort(kinds)
-	if want := []string{"local", "metadata", "previews", "scan:" + strconv.FormatInt(e.lib.ID, 10)}; !slices.Equal(kinds, want) {
+	if want := []string{"local", "metadata", "previews", "scan:" + e.lib.ID.String()}; !slices.Equal(kinds, want) {
 		t.Fatalf("tasks %v, want %v", kinds, want)
 	}
 }

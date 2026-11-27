@@ -11,6 +11,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/household"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/offer"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/station"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // Membership errors.
@@ -23,7 +24,7 @@ var (
 // Join puts a, a kid or a joined adult who is not revoked, into a household:
 // a kid stands in it as in any other, an adult is only present there. One in
 // it already stays as it is.
-func (s *HouseholdService) Join(a *account.Account, householdID int64) error {
+func (s *HouseholdService) Join(a *account.Account, householdID uid.ID) error {
 	return db.InTx(s.d, func(d db.DBTX) error {
 		if _, err := household.New(d).Get(householdID); err != nil {
 			return err
@@ -35,7 +36,7 @@ func (s *HouseholdService) Join(a *account.Account, householdID int64) error {
 	})
 }
 
-func join(d db.DBTX, a *account.Account, householdID int64) error {
+func join(d db.DBTX, a *account.Account, householdID uid.ID) error {
 	accounts := account.New(d)
 	if in, err := accounts.In(a.ID, householdID); err != nil || in {
 		return err
@@ -44,9 +45,9 @@ func join(d db.DBTX, a *account.Account, householdID int64) error {
 }
 
 // Leave takes a out of a household that is not its only one.
-func (s *HouseholdService) Leave(a *account.Account, householdID int64) (*SignedOut, error) {
+func (s *HouseholdService) Leave(a *account.Account, householdID uid.ID, by *uid.ID) (*SignedOut, error) {
 	out := &SignedOut{}
-	return out, db.InTx(s.d, func(d db.DBTX) error { return leave(d, a, householdID, out) })
+	return out, db.InTx(s.d, func(d db.DBTX) error { return leave(d, a, householdID, out, by) })
 }
 
 // leave takes a out of a household. Devices there acting as a go back to
@@ -54,7 +55,7 @@ func (s *HouseholdService) Leave(a *account.Account, householdID int64) (*Signed
 // what only that household shared with it go. A kid stands equally
 // in each household, so leaving the one account.household_id names puts
 // another there; an adult's is their own household, which no other becomes.
-func leave(d db.DBTX, a *account.Account, householdID int64, out *SignedOut) error {
+func leave(d db.DBTX, a *account.Account, householdID uid.ID, out *SignedOut, by *uid.ID) error {
 	accounts := account.New(d)
 	hs, err := accounts.Households(a)
 	switch {
@@ -65,13 +66,13 @@ func leave(d db.DBTX, a *account.Account, householdID int64, out *SignedOut) err
 	case len(hs) == 1:
 		return ErrLastHousehold
 	}
-	if err := rehomeOut(d, a, householdID, hs); err != nil {
+	if err := rehomeOut(d, a, householdID, hs, by); err != nil {
 		return err
 	}
-	if err := station.New(d).DeleteUnseen(0, a.ID); err != nil {
+	if err := station.New(d).DeleteUnseen(nil, &a.ID); err != nil {
 		return err
 	}
-	if err := offer.New(d).DeleteOf(a.ID, householdID); err != nil {
+	if err := offer.New(d).DeleteOf(a.ID, &householdID); err != nil {
 		return err
 	}
 	devs, err := device.New(d).ReachingIn(a.ID, householdID)
@@ -98,7 +99,7 @@ func leave(d db.DBTX, a *account.Account, householdID int64, out *SignedOut) err
 
 // rehomeOut takes a's membership of a household away, hs being every
 // household a is in, own first.
-func rehomeOut(d db.DBTX, a *account.Account, householdID int64, hs []int64) error {
+func rehomeOut(d db.DBTX, a *account.Account, householdID uid.ID, hs []uid.ID, by *uid.ID) error {
 	accounts := account.New(d)
 	if a.HouseholdID == nil || *a.HouseholdID != householdID {
 		return accounts.RemoveMember(householdID, a.ID)
@@ -110,35 +111,39 @@ func rehomeOut(d db.DBTX, a *account.Account, householdID int64, hs []int64) err
 	case h.AdultID == a.ID:
 		return ErrOwnerStays
 	case a.Kind == account.Kid:
-		return accounts.Rehome(a, &hs[1])
+		return accounts.Rehome(a, &hs[1], by)
 	}
-	return accounts.Rehome(a, nil)
+	return accounts.Rehome(a, nil, by)
 }
 
-// CreateFor makes a household owned by adult and moves the adult into it.
-func (s *HouseholdService) CreateFor(name string, adult *account.Account) (*household.Household, error) {
+// CreateFor makes a household owned by adult, under id when given, and
+// moves the adult into it.
+func (s *HouseholdService) CreateFor(name string, adult *account.Account, id, by *uid.ID) (*household.Household, error) {
 	var h *household.Household
 	err := db.InTx(s.d, func(d db.DBTX) (err error) {
-		h, err = newHousehold(d, name, adult)
+		h, err = newHousehold(d, name, adult, id, by)
 		return err
 	})
 	return h, err
 }
 
-func newHousehold(d db.DBTX, name string, adult *account.Account) (*household.Household, error) {
+func newHousehold(d db.DBTX, name string, adult *account.Account, id, by *uid.ID) (*household.Household, error) {
 	h := &household.Household{Name: name, AdultID: adult.ID}
-	if err := household.New(d).Create(h); err != nil {
+	if id != nil {
+		h.ID = *id
+	}
+	if err := household.New(d).Create(h, by); err != nil {
 		return nil, err
 	}
 	adult.HouseholdID = &h.ID
-	return h, account.New(d).Update(adult)
+	return h, account.New(d).Update(adult, by)
 }
 
 // Delete removes a household with its devices and everyone only it holds
 // but its adult, signing out the devices acting as them; who stays is as
 // vacate leaves them. Deleting the last active admin with it is
-// ErrLastAdmin.
-func (s *HouseholdService) Delete(id int64) (*SignedOut, error) {
+// ErrLastAdmin. by is who moves out those who stay.
+func (s *HouseholdService) Delete(id uid.ID, by *uid.ID) (*SignedOut, error) {
 	out := &SignedOut{}
 	return out, db.InTx(s.d, func(d db.DBTX) error {
 		if _, err := household.New(d).Get(id); err != nil {
@@ -151,14 +156,14 @@ func (s *HouseholdService) Delete(id int64) (*SignedOut, error) {
 		if err := removing(d, gone, out); err != nil {
 			return err
 		}
-		if err := vacate(d, id, out); err != nil {
+		if err := vacate(d, id, out, by); err != nil {
 			return err
 		}
 		return keepingAnAdmin(d, func() error {
 			if err := household.New(d).Delete(id); err != nil {
 				return err
 			}
-			return station.New(d).DeleteUnseen(0, 0)
+			return station.New(d).DeleteUnseen(nil, nil)
 		})
 	})
 }
@@ -168,7 +173,7 @@ func (s *HouseholdService) Delete(id int64) (*SignedOut, error) {
 // there that stay move out first. A kid another household holds takes that
 // one as account.household_id; its owner, and an adult of it present
 // elsewhere, are left without a household.
-func vacate(d db.DBTX, householdID int64, out *SignedOut) error {
+func vacate(d db.DBTX, householdID uid.ID, out *SignedOut, by *uid.ID) error {
 	devs, err := device.New(d).InHousehold(householdID)
 	if err != nil {
 		return err
@@ -182,7 +187,7 @@ func vacate(d db.DBTX, householdID int64, out *SignedOut) error {
 		return err
 	}
 	for _, a := range staying {
-		var to *int64
+		var to *uid.ID
 		if a.Kind == account.Kid {
 			hs, err := accounts.Households(a)
 			if err != nil {
@@ -190,7 +195,7 @@ func vacate(d db.DBTX, householdID int64, out *SignedOut) error {
 			}
 			to = &hs[1]
 		}
-		if err := accounts.Rehome(a, to); err != nil {
+		if err := accounts.Rehome(a, to, by); err != nil {
 			return err
 		}
 	}

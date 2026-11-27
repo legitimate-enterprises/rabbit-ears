@@ -6,6 +6,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/mediafile"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/playback"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/session"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // phone is an SDR phone away from home on a metered path with an AAC-only
@@ -60,7 +61,7 @@ func TestDecideDownload(t *testing.T) {
 			}},
 		{"the chosen audio track", file("mkv", 10e6, h264(), audio(2, "aac", 2, true), audio(3, "ac3", 6, false)), phone, playback.Selection{AudioTrackID: id(3)},
 			playback.Original, func(t *testing.T, p playback.DownloadPlan) {
-				if *p.Entry.AudioTrackID != 3 || p.Entry.AudioAction != "convert" {
+				if *p.Entry.AudioTrackID != uid.N(3) || p.Entry.AudioAction != "convert" {
 					t.Errorf("%+v", p.Entry)
 				}
 			}},
@@ -76,7 +77,7 @@ func TestDecideDownload(t *testing.T) {
 		{"a forced bitmap subtitle is burned in", file("mkv", 10e6, h264(), audio(2, "aac", 2, true), sub(4, "hdmv_pgs_subtitle", false, true), sub(5, "subrip", true, false)),
 			phone, playback.Selection{}, playback.Original, func(t *testing.T, p playback.DownloadPlan) {
 				e := p.Entry
-				if p.Quality != playback.Original || e.Verdict != session.VideoTranscode || e.SubtitleAction != session.SubtitleBurn || *e.SubtitleTrackID != 4 || e.TopHeight != 1080 {
+				if p.Quality != playback.Original || e.Verdict != session.VideoTranscode || e.SubtitleAction != session.SubtitleBurn || *e.SubtitleTrackID != uid.N(4) || e.TopHeight != 1080 {
 					t.Errorf("%+v", e)
 				}
 			}},

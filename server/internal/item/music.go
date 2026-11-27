@@ -9,6 +9,7 @@ import (
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/mediafile"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
 // MusicBrainz is the provider of music metadata rows. Their PosterPath is a
@@ -29,15 +30,15 @@ const losslessTrack = `(t.codec IN ('flac','alac','wavpack') OR substr(t.codec, 
 
 // MusicFilter narrows the music views. Zero values mean no constraint.
 type MusicFilter struct {
-	LibraryID int64
-	ArtistID  int64 // albums: the album artist; songs: the performer or album artist
-	AlbumID   int64
-	GenreID   int64
-	IDs       []int64
-	Letter    string // A to Z or #, of the sort name
-	Q         string // case-insensitive substring of the name or title; prefix matches first
-	Sort      string // the API's sort names; empty is the view's default
-	AccountID int64  // whose plays fill an album's LastPlayedAt
+	LibraryID *uid.ID
+	ArtistID  *uid.ID // albums: the album artist; songs: the performer or album artist
+	AlbumID   *uid.ID
+	GenreID   *uid.ID
+	IDs       []uid.ID
+	Letter    string  // A to Z or #, of the sort name
+	Q         string  // case-insensitive substring of the name or title; prefix matches first
+	Sort      string  // the API's sort names; empty is the view's default
+	AccountID *uid.ID // whose plays fill an album's LastPlayedAt
 	// Clean keeps what a kid hears, as VisibleOf says, and counts and adds
 	// up only songs not explicit.
 	Clean  bool
@@ -69,13 +70,13 @@ func counted(s, clean string) string { return `(` + clean + ` = 0 OR ` + cleanSo
 // common is the WHERE shared by the views over item alias a: library,
 // genre (on a or on g, its album), letter, query, ids and Clean.
 func common(f MusicFilter, a, g string) string {
-	w := `(?1 = 0 OR ` + a + `.library_id = ?1) AND (?11 = 0 OR ` + CleanOf(a) + `)
-		AND (?4 = 0 OR EXISTS (SELECT 1 FROM item_genre_shown ig WHERE ig.item_id IN (` + a + `.id, ` + g + `.id) AND ig.genre_id = ?4))
+	w := `(?1 IS NULL OR ` + a + `.library_id = ?1) AND (?11 = 0 OR ` + CleanOf(a) + `)
+		AND (?4 IS NULL OR EXISTS (SELECT 1 FROM item_genre_shown ig WHERE ig.item_id IN (` + a + `.id, ` + g + `.id) AND ig.genre_id = ?4))
 		AND (?5 = '' OR ` + letterOf(a) + ` = ?5)
 		AND (?6 = '' OR instr(lower(` + a + `.parsed_title), lower(?6)) > 0)`
 	if len(f.IDs) > 0 {
 		// Only a term that stands alone lets the ids drive the primary key.
-		w += ` AND ` + a + `.id IN (SELECT value FROM json_each(?7))`
+		w += ` AND ` + a + `.id IN (SELECT unhex(value, '-') FROM json_each(?7))`
 	}
 	return w
 }
@@ -120,13 +121,13 @@ const SongRows = `item s JOIN item al ON al.id = s.parent_id JOIN item ar ON ar.
 // albumsFrom is the rows Albums pages and CountAlbums counts.
 func albumsFrom(f MusicFilter) string {
 	return ` FROM ` + AlbumRows + `
-		WHERE ` + kind(f, "al") + ` = 'album' AND (?2 = 0 OR al.parent_id = ?2) AND ` + common(f, "al", "al")
+		WHERE ` + kind(f, "al") + ` = 'album' AND (?2 IS NULL OR al.parent_id = ?2) AND ` + common(f, "al", "al")
 }
 
 // songsFrom is the rows Songs pages and CountSongs counts.
 func songsFrom(f MusicFilter) string {
 	return ` FROM ` + SongRows + `
-		WHERE ` + kind(f, "s") + ` = 'song' AND (?2 = 0 OR al.parent_id = ?2 OR s.artist_id = ?2) AND (?3 = 0 OR s.parent_id = ?3)
+		WHERE ` + kind(f, "s") + ` = 'song' AND (?2 IS NULL OR al.parent_id = ?2 OR s.artist_id = ?2) AND (?3 IS NULL OR s.parent_id = ?3)
 			AND ` + common(f, "s", "al")
 }
 
@@ -227,8 +228,8 @@ func (r *Repo) Albums(f MusicFilter) ([]*AlbumView, error) {
 type SongView struct {
 	*Item
 	AlbumTitle    string
-	AlbumArtistID int64
-	PerformerID   int64 // the song's own artist, else the album artist
+	AlbumArtistID uid.ID
+	PerformerID   uid.ID // the song's own artist, else the album artist
 	ArtistName    string
 	DurationMs    *int64
 	Year          *int // the song's, else its album's
@@ -259,7 +260,7 @@ func (r *Repo) Songs(f MusicFilter) ([]*SongView, error) {
 	}[f.Sort]
 	switch {
 	case by != "":
-	case f.AlbumID != 0:
+	case f.AlbumID != nil:
 		by = track
 	default:
 		by = sortKey("s") + `, s.id`
@@ -284,11 +285,11 @@ type LetterCount struct {
 }
 
 // Letters counts the artists or albums (kind) of a library, or of every
-// library for 0, under each letter of their sort name: A to Z, then #;
+// library for nil, under each letter of their sort name: A to Z, then #;
 // clean counts only what a kid hears.
-func (r *Repo) Letters(libraryID int64, kind string, clean bool) ([]LetterCount, error) {
+func (r *Repo) Letters(libraryID *uid.ID, kind string, clean bool) ([]LetterCount, error) {
 	rows, err := r.d.Query(`SELECT `+letterOf("i")+` AS letter, COUNT(*) FROM item i
-		WHERE i.kind = ?2 AND (?1 = 0 OR i.library_id = ?1) AND (?3 = 0 OR `+CleanOf("i")+`) GROUP BY letter`, libraryID, kind, clean)
+		WHERE i.kind = ?2 AND (?1 IS NULL OR i.library_id = ?1) AND (?3 = 0 OR `+CleanOf("i")+`) GROUP BY letter`, libraryID, kind, clean)
 	out, err := db.Collect(rows, err, func(s db.Scanner) (LetterCount, error) {
 		var c LetterCount
 		return c, db.Wrap(s.Scan(&c.Letter, &c.Count))
@@ -308,7 +309,7 @@ func (r *Repo) Letters(libraryID int64, kind string, clean bool) ([]LetterCount,
 // Recent is one recently played album, artist or music playlist.
 type Recent struct {
 	Kind     string // album, artist or playlist
-	ID       int64
+	ID       uid.ID
 	PlayedAt time.Time
 }
 
@@ -316,7 +317,7 @@ type Recent struct {
 // session counts for its album, its album artist and its performer; a music
 // playlist counts from its last_played_at. kind "" mixes albums and
 // playlists.
-func (r *Repo) RecentMusic(accountID int64, kind string, limit, offset int) ([]Recent, error) {
+func (r *Repo) RecentMusic(accountID uid.ID, kind string, limit, offset int) ([]Recent, error) {
 	parts := map[string]string{
 		"album": `SELECT 'album', s.parent_id, MAX(p.started_at) FROM playback_session p JOIN item s ON s.id = p.item_id
 			WHERE p.account_id = ?1 AND p.station = 0 AND s.kind = 'song' GROUP BY s.parent_id`,
@@ -346,13 +347,13 @@ func (r *Repo) RecentMusic(accountID int64, kind string, limit, offset int) ([]R
 
 // Named finds an item of a kind by title, ignoring case, under parentID
 // (nil for a root) in a library: the scanner's artist and album identity.
-func (r *Repo) Named(libraryID int64, parentID *int64, kind, title string) (*Item, error) {
+func (r *Repo) Named(libraryID uid.ID, parentID *uid.ID, kind, title string) (*Item, error) {
 	return scan(r.d.QueryRow(`SELECT `+cols+` FROM item WHERE library_id = ? AND kind = ? AND parent_id IS ? AND parsed_title = ? COLLATE NOCASE
 		ORDER BY id LIMIT 1`, libraryID, kind, parentID, title))
 }
 
 // Performs reports whether any song names this artist as its performer.
-func (r *Repo) Performs(artistID int64) (bool, error) {
+func (r *Repo) Performs(artistID uid.ID) (bool, error) {
 	var n int
 	err := r.d.QueryRow(`SELECT COUNT(*) FROM item WHERE artist_id = ?`, artistID).Scan(&n)
 	return n > 0, db.Wrap(err)
@@ -360,7 +361,7 @@ func (r *Repo) Performs(artistID int64) (bool, error) {
 
 // NeverLookedUp lists a library's albums that no provider was asked about:
 // no remote row, or one never fetched.
-func (r *Repo) NeverLookedUp(libraryID int64, limit int) ([]*Item, error) {
+func (r *Repo) NeverLookedUp(libraryID uid.ID, limit int) ([]*Item, error) {
 	return r.query(`SELECT `+prefixed("i")+` FROM item i LEFT JOIN item_metadata m ON m.item_id = i.id AND m.source = 'remote'
 		WHERE i.library_id = ? AND i.kind = 'album' AND (m.item_id IS NULL OR m.fetched_at IS NULL AND m.retry_at IS NULL)
 		ORDER BY i.id LIMIT ?`, libraryID, limit)
@@ -368,12 +369,12 @@ func (r *Repo) NeverLookedUp(libraryID int64, limit int) ([]*Item, error) {
 
 // scanWith scans an item's columns into it, then the extra columns.
 func scanWith(s db.Scanner, it *Item, extra ...any) error {
-	var parent, year, season, episode, disc, track, artist sql.NullInt64
+	var year, season, episode, disc, track sql.NullInt64
 	var kids, explicit sql.NullBool
 	var path, sortTitle sql.NullString
-	var added, updated int64
-	if err := s.Scan(append([]any{&it.ID, &it.LibraryID, &parent, &it.Kind, &path, &it.ParsedTitle, &year, &season, &episode,
-		&disc, &track, &artist, &sortTitle, &kids, &explicit, &added, &updated}, extra...)...); err != nil {
+	var added, created, modified int64
+	if err := s.Scan(append([]any{&it.ID, &it.LibraryID, &it.ParentID, &it.Kind, &path, &it.ParsedTitle, &year, &season, &episode,
+		&disc, &track, &it.ArtistID, &sortTitle, &kids, &explicit, &added, &created, &modified}, extra...)...); err != nil {
 		return db.Wrap(err)
 	}
 	if kids.Valid {
@@ -382,10 +383,10 @@ func scanWith(s db.Scanner, it *Item, extra ...any) error {
 	if explicit.Valid {
 		it.Explicit = &explicit.Bool
 	}
-	it.ParentID, it.ParsedYear = ptr64(parent), db.FromNullInt(year)
+	it.ParsedYear = db.FromNullInt(year)
 	it.SeasonNumber, it.EpisodeNumber = db.FromNullInt(season), db.FromNullInt(episode)
-	it.DiscNumber, it.TrackNumber, it.ArtistID = db.FromNullInt(disc), db.FromNullInt(track), ptr64(artist)
+	it.DiscNumber, it.TrackNumber = db.FromNullInt(disc), db.FromNullInt(track)
 	it.Path, it.SortTitle = path.String, sortTitle.String
-	it.AddedAt, it.UpdatedAt = db.FromMs(added), db.FromMs(updated)
+	it.AddedAt, it.CreatedAt, it.ModifiedAt = db.FromMs(added), db.FromMs(created), db.FromMs(modified)
 	return nil
 }

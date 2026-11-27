@@ -5,6 +5,7 @@ import (
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/api"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/youtube"
 )
 
@@ -13,7 +14,7 @@ import (
 // allow an item. Any adult writes them; a kid active is forbidden.
 
 // titleOf resolves a movie or show for an adult active on the device.
-func (s *Server) titleOf(ctx context.Context, id int64) (*item.Item, error) {
+func (s *Server) titleOf(ctx context.Context, id uid.ID) (*item.Item, error) {
 	if caller(ctx).asKid() {
 		return nil, errForbidden
 	}
@@ -60,7 +61,7 @@ func (s *Server) SetYouTubeChannelForKids(ctx context.Context, r api.SetYouTubeC
 	if err := s.svc.Items.Repo().SetKidsContent(ch.ID, &r.Body.ForKids); err != nil {
 		return nil, err
 	}
-	v, err := one(s.svc.YouTube.Repo().Channels(youtube.ChannelFilter{ID: ch.ID, AccountID: caller(ctx).profile.ID}))
+	v, err := one(s.svc.YouTube.Repo().Channels(youtube.ChannelFilter{ID: &ch.ID, AccountID: &caller(ctx).profile.ID}))
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +79,7 @@ func (s *Server) ListAllowedFor(ctx context.Context, r api.ListAllowedForRequest
 	}
 	ids, err := s.svc.Accounts.Repo().AllowedFor(caller(ctx).device.HouseholdID, r.ItemId)
 	if ids == nil {
-		ids = []int64{}
+		ids = []uid.ID{}
 	}
 	return api.ListAllowedFor200JSONResponse{ProfileIds: ids}, err
 }
