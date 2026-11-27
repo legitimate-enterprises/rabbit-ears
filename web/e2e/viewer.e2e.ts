@@ -68,6 +68,32 @@ test("an adult plays a fixture, by direct play where the browser decodes it in h
   await expect(page.getByRole("link", { name: "Resume" })).toBeVisible();
 });
 
+test("a started movie's poster and details show how much of it is watched", async ({
+  page,
+  request,
+}) => {
+  const headers = await seed(request);
+  const me = await (await request.get(`${api}/me`, { headers })).json();
+  const movies = (await (await request.get(`${api}/items?kind=movie`, { headers })).json()).items;
+  const casper = movies.find((m: { parsedTitle: string }) => /^Casper/.test(m.parsedTitle));
+  const state = `${api}/profiles/${me.account.id}/watch-state/${casper.id}`;
+  // A quarter into the 2-minute fixture, the runtime its scan reads from the file.
+  await request.put(state, { headers, data: { positionMs: 30_000, watched: false } });
+  try {
+    await signIn(page);
+    await openMovie(page, /Casper/);
+    await expect(page.getByRole("link", { name: "Resume" })).toBeVisible();
+    await expect(
+      page.locator(".detail").getByRole("img", { name: "25 percent watched" }),
+    ).toBeVisible();
+    await page.goBack();
+    const poster = page.locator("a.poster").and(page.getByRole("link", { name: /Casper/ }));
+    await expect(poster.getByRole("img", { name: "25 percent watched" })).toBeVisible();
+  } finally {
+    await request.delete(state, { headers });
+  }
+});
+
 test("a lower quality is decided by the server as a transcode and plays through HLS", async ({
   page,
   request,

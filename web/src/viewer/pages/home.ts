@@ -8,6 +8,8 @@ import {
   findItem,
   inProgress,
   newest,
+  playFraction,
+  resumeFraction,
   showProgress,
   title,
   today,
@@ -17,7 +19,7 @@ import {
   type WatchState,
 } from "../data";
 import { left, plural, runtime } from "../format";
-import { art, bar, empty, pct, playmark, section } from "../ui";
+import { art, empty, playmark, section, watched } from "../ui";
 import { resumeHref } from "../editions";
 import { artKey, placeholderKind, type PlaceholderKind } from "../artwork";
 import { videoTile } from "./youtube";
@@ -38,7 +40,7 @@ type Card = {
   id: string;
   thumb: string;
   ph: PlaceholderKind;
-  pct: number;
+  done?: number;
 };
 
 /** How many titles in progress Home shows: the hero and three more. */
@@ -177,7 +179,7 @@ export async function home(ctx: Ctx): Promise<HTMLElement[]> {
       id: i.id,
       thumb: artKey(i, true),
       ph: placeholderKind(i.kind),
-      pct: pct(w, i.metadata?.runtimeMinutes),
+      done: playFraction(i, ws),
     };
   };
   const videoCard = (v: Schemas["YouTubeVideo"]): Card => ({
@@ -192,7 +194,7 @@ export async function home(ctx: Ctx): Promise<HTMLElement[]> {
     id: v.id,
     thumb: `${v.id}/poster`,
     ph: "video",
-    pct: v.durationMs ? (v.positionMs / v.durationMs) * 100 : 0,
+    done: resumeFraction(v, v.durationMs),
   });
 
   const progress = [...going.map(([i]) => itemCard(i)), ...started.map(videoCard)].sort((a, b) =>
@@ -229,6 +231,7 @@ export async function home(ctx: Ctx): Promise<HTMLElement[]> {
                 h("a.btn.g", { href: featured.detail }, "Show details"),
               ),
             ),
+            watched(featured.done),
           ),
           progress.length > 1
             ? h(
@@ -244,7 +247,7 @@ export async function home(ctx: Ctx): Promise<HTMLElement[]> {
                       "data-art": c.thumb,
                       "data-ph": c.ph,
                     }),
-                    h("span", h("b", c.head), h("span.sub", c.line), bar(c.pct)),
+                    h("span", h("b", c.head), h("span.sub", c.line), watched(c.done)),
                   ),
                 ),
               )

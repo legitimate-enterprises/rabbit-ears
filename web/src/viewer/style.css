@@ -577,6 +577,7 @@ kbd {
   display: flex;
   align-items: flex-end;
   position: relative;
+  overflow: hidden;
 }
 /* Only over a painted backdrop, whose inline style names its url. */
 .hero-tile[style*="url("]::before {

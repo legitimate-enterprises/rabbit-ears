@@ -5,9 +5,20 @@ import { errorLine, h } from "../../admin/dom";
 import { saveSwitch } from "../../admin/common";
 import { ok, paged } from "../../admin/api";
 import type { Schemas } from "../../api/client";
-import { color, type Ctx } from "../data";
+import { color, resumeFraction, type Ctx } from "../data";
 import { minutes, plural, since } from "../format";
-import { allowedRows, back, bar, chip, empty, icon, menu, refresh, sel, viewTabs } from "../ui";
+import {
+  allowedRows,
+  back,
+  chip,
+  empty,
+  icon,
+  menu,
+  refresh,
+  sel,
+  viewTabs,
+  withWatched,
+} from "../ui";
 import { selection } from "../select";
 
 type Video = Schemas["YouTubeVideo"];
@@ -44,16 +55,18 @@ export const videoTile = (v: Video, withChannel: boolean) =>
   h(
     "a.poster.vid",
     { href: `#/video/${v.id}`, "data-id": v.id },
-    h(
-      "div.art.v",
-      {
-        "aria-hidden": "true",
-        style: `background:${color(v.id)}`,
-        "data-art": `${v.id}/poster`,
-        "data-ph": "video",
-      },
-      v.watched ? null : h("span.dot", { role: "img", "aria-label": "Unwatched" }),
-      v.positionMs > 0 && v.durationMs ? bar((v.positionMs / v.durationMs) * 100) : null,
+    withWatched(
+      h(
+        "div.art.v",
+        {
+          "aria-hidden": "true",
+          style: `background:${color(v.id)}`,
+          "data-art": `${v.id}/poster`,
+          "data-ph": "video",
+        },
+        v.watched ? null : h("span.dot", { role: "img", "aria-label": "Unwatched" }),
+      ),
+      resumeFraction(v, v.durationMs),
     ),
     h("b", v.title),
     h(

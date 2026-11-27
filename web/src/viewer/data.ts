@@ -174,6 +174,22 @@ export const title = (i: Item) => i.metadata?.title || i.parsedTitle;
 export const epCode = (i: Item) => `S${i.seasonNumber ?? 0} E${i.episodeNumber ?? 0}`;
 export const inProgress = (w?: WatchState) => !!w && w.positionMs > 0;
 
+/**
+ * How far into durationMs a play resumes, 0 to 1; undefined when it would start from the
+ * beginning or the duration is unknown.
+ */
+export const resumeFraction = (w: { positionMs: number } | undefined, durationMs = 0) =>
+  w && w.positionMs > 0 && durationMs > 0 ? Math.min(1, w.positionMs / durationMs) : undefined;
+
+/**
+ * resumeFraction of what i's play resumes: a movie or episode itself, a show or season the
+ * episode among eps it continues; undefined for a show or season without eps.
+ */
+export function playFraction(i: Item, ws: Map<string, WatchState>, eps?: Item[]) {
+  const e = i.kind === "show" || i.kind === "season" ? eps && nextEpisode(eps, ws) : i;
+  return e && resumeFraction(ws.get(e.id), (e.metadata?.runtimeMinutes ?? 0) * 60000);
+}
+
 /** The episode to play next: the one in progress, else the first unwatched after the latest played. */
 export function nextEpisode(eps: Item[], ws: Map<string, WatchState>): Item | undefined {
   const lastPlayed = eps

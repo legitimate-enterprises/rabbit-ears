@@ -9,6 +9,8 @@ import {
   episodesOf,
   itemOf,
   nextEpisode,
+  playFraction,
+  resumeFraction,
   seasonsOf,
   title,
   watchState,
@@ -25,17 +27,16 @@ import {
   allowedRows,
   art,
   back,
-  bar,
   btn,
   icon,
   menu,
   meta,
   opt,
-  pct,
   person,
   refresh,
   rule,
   tile,
+  withWatched,
 } from "../ui";
 import { artKey } from "../artwork";
 import { watchTogether } from "../together";
@@ -227,12 +228,17 @@ export async function movie(ctx: Ctx, [id]: string[]): Promise<HTMLElement[]> {
   };
   const play = h("a.btn.p", icon("play", 16), "Play");
   const label = play.lastChild as Text;
+  const poster = withWatched(
+    art(m, "poster220"),
+    resumeFraction(w, (m.metadata?.runtimeMinutes ?? 0) * 60000),
+  );
   const update = () => {
     const q = new URLSearchParams();
     if (editionId) q.set("edition", editionId);
     if (audioId) q.set("audio", audioId);
     play.setAttribute("href", `#/play/${m.id}${q.size ? `?${q}` : ""}`);
     label.data = resumes(eds, w, editionId) ? "Resume" : "Play";
+    poster.querySelector(".bar")?.toggleAttribute("hidden", !resumes(eds, w, editionId));
   };
   update();
   const collections = m.collections?.length
@@ -310,7 +316,7 @@ export async function movie(ctx: Ctx, [id]: string[]): Promise<HTMLElement[]> {
     back("Movies", "#/movies"),
     h(
       "div.detail",
-      art(m, "poster220"),
+      poster,
       h(
         "div.info",
         h("h1.big", title(m)),
@@ -365,7 +371,7 @@ export async function show(ctx: Ctx, [id]: string[]): Promise<HTMLElement[]> {
     back("TV", "#/tv"),
     h(
       "div.detail",
-      art(s, "poster220"),
+      withWatched(art(s, "poster220"), playFraction(s, ws, eps)),
       h(
         "div.info",
         h("h1.big", title(s)),
@@ -415,14 +421,17 @@ export async function show(ctx: Ctx, [id]: string[]): Promise<HTMLElement[]> {
           return h(
             "a.poster.season",
             { href: `#/season/${se.id}` },
-            h(
-              "div.art.p",
-              {
-                style: `background:var(--c${tint(se.id, 10)})`,
-                "data-art": artKey(se),
-                "data-ph": "show",
-              },
-              unseen ? h("span.badge", `${unseen} new`) : null,
+            withWatched(
+              h(
+                "div.art.p",
+                {
+                  style: `background:var(--c${tint(se.id, 10)})`,
+                  "data-art": artKey(se),
+                  "data-ph": "show",
+                },
+                unseen ? h("span.badge", `${unseen} new`) : null,
+              ),
+              playFraction(se, ws, es),
             ),
             h("b", seasonName(se)),
             h("span.sub", plural(es.length, "episode")),
@@ -439,17 +448,19 @@ function episodeRow(e: Item, ws: Map<string, WatchState>, current?: boolean) {
   return h(
     "a.ep",
     { href: `#/episode/${e.id}`, "aria-current": current ? "true" : undefined },
-    h(
-      "div.art.thumb200",
-      {
-        style: `background:var(--c${tint(e.id, 10)})`,
-        "data-art": artKey(e),
-        "data-ph": "show",
-      },
-      bar(pct(w, rt)),
-      w?.watched
-        ? h("span.seen", { role: "img", "aria-label": "Watched" }, icon("check", 12))
-        : null,
+    withWatched(
+      h(
+        "div.art.thumb200",
+        {
+          style: `background:var(--c${tint(e.id, 10)})`,
+          "data-art": artKey(e),
+          "data-ph": "show",
+        },
+        w?.watched
+          ? h("span.seen", { role: "img", "aria-label": "Watched" }, icon("check", 12))
+          : null,
+      ),
+      playFraction(e, ws),
     ),
     h(
       "span",
@@ -479,7 +490,7 @@ export async function season(ctx: Ctx, [id]: string[]): Promise<HTMLElement[]> {
     back(title(sh), `#/show/${sh.id}`),
     h(
       "div.detail",
-      art(se, "poster160"),
+      withWatched(art(se, "poster160"), playFraction(se, ws, eps)),
       h(
         "div.info",
         h("h1.big", `${title(sh)} `, h("span.dim", "·"), ` ${name}`),
@@ -560,15 +571,14 @@ export async function episode(ctx: Ctx, [id]: string[]): Promise<HTMLElement[]> 
     back(seasonName(se), `#/season/${se.id}`),
     h(
       "div.detail",
-      h(
-        "div.art.still",
-        {
+      withWatched(
+        h("div.art.still", {
           style: `background:var(--c${tint(e.id, 10)})`,
           "aria-hidden": "true",
           "data-art": artKey(e),
           "data-ph": "show",
-        },
-        bar(pct(w, rt)),
+        }),
+        playFraction(e, ws),
       ),
       h(
         "div.info",
@@ -654,12 +664,15 @@ export async function video(ctx: Ctx, [id]: string[]): Promise<HTMLElement[]> {
     back(v.channelTitle, `#/channel/${v.channelId}`),
     h(
       "div.detail",
-      h("div.art.v480", {
-        "aria-hidden": "true",
-        style: `background:var(--c${tint(v.id, 10)})`,
-        "data-art": `${v.id}/poster`,
-        "data-ph": "video",
-      }),
+      withWatched(
+        h("div.art.v480", {
+          "aria-hidden": "true",
+          style: `background:var(--c${tint(v.id, 10)})`,
+          "data-art": `${v.id}/poster`,
+          "data-ph": "video",
+        }),
+        resumeFraction(v, v.durationMs),
+      ),
       h(
         "div.info",
         h(

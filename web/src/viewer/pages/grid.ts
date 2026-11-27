@@ -4,6 +4,7 @@ import { tint } from "../../api/uid";
 import {
   inProgress,
   items,
+  playFraction,
   showProgress,
   title,
   titles,
@@ -12,7 +13,7 @@ import {
   type Item,
 } from "../data";
 import { plural, runtime } from "../format";
-import { chip, section, sel, viewTabs } from "../ui";
+import { chip, section, sel, viewTabs, withWatched } from "../ui";
 import { artKey, placeholderKind } from "../artwork";
 import { collectionTiles } from "./collections";
 import { hasPlaylists, playlistTiles } from "./playlists";
@@ -211,17 +212,20 @@ export async function grid(
             return h(
               "a.poster",
               { href: `#/${i.kind}/${i.id}`, "data-id": i.id },
-              h(
-                "div.art.p",
-                {
-                  style: `background:var(--c${tint(i.id, 10)})`,
-                  "data-art": artKey(i),
-                  "data-ph": placeholderKind(i.kind),
-                },
-                n ? h("span.badge", `${n} new`) : null,
-                kind === "movies" && isUnwatched(i)
-                  ? h("span.dot", { role: "img", "aria-label": "Unwatched" })
-                  : null,
+              withWatched(
+                h(
+                  "div.art.p",
+                  {
+                    style: `background:var(--c${tint(i.id, 10)})`,
+                    "data-art": artKey(i),
+                    "data-ph": placeholderKind(i.kind),
+                  },
+                  n ? h("span.badge", `${n} new`) : null,
+                  kind === "movies" && isUnwatched(i)
+                    ? h("span.dot", { role: "img", "aria-label": "Unwatched" })
+                    : null,
+                ),
+                ws && playFraction(i, ws),
               ),
               h("b", title(i)),
               h(

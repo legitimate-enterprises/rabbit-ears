@@ -3,7 +3,7 @@ import { artKey, placeholderKind, type PlaceholderKind } from "./artwork";
 import { ok } from "../admin/api";
 import { toast } from "./handoff";
 import type { Schemas } from "../api/client";
-import { color, PALETTE, title, type Ctx, type Item, type WatchState } from "./data";
+import { color, PALETTE, title, type Ctx, type Item } from "./data";
 
 const NS = "http://www.w3.org/2000/svg";
 const PATHS: Record<string, string> = {
@@ -144,8 +144,25 @@ export const back = (label: string, to: string) =>
 
 export const bar = (pct: number) =>
   h("div.bar", h("div", { style: `width:${Math.min(100, Math.max(0, pct))}%` }));
-export const pct = (w: WatchState | undefined, minutes?: number) =>
-  w && minutes ? (w.positionMs / 60000 / minutes) * 100 : 0;
+
+/** The bar for a resume at fraction f of the runtime, named for assistive tech; none for undefined. */
+export const watched = (f?: number) => {
+  if (f === undefined) return null;
+  const b = bar(f * 100);
+  b.setAttribute("role", "img");
+  b.setAttribute("aria-label", `${Math.round(f * 100)} percent watched`);
+  return b;
+};
+
+/** a with watched(f) along its bottom, and exposed then so the bar's name is read. */
+export const withWatched = (a: HTMLElement, f?: number) => {
+  const b = watched(f);
+  if (b) {
+    a.removeAttribute("aria-hidden");
+    a.append(b);
+  }
+  return a;
+};
 
 /** The profile's initial on its color, painted over with its Gravatar when the server has one. */
 export const avatar = (
