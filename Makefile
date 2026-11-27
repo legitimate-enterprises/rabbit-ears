@@ -76,5 +76,5 @@ clean: ## Remove build products and fixtures
 	rm -rf fixtures
 
 # There is no local publish path.
-release: ## Tag origin/main server-v<version> once CI is green there, and push the tag
-	scripts/cut-release.sh server
+release: ## Tag origin/main v<version> once CI is green there, and push the tag
+	scripts/cut-release.sh --yes

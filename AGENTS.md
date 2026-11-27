@@ -2,8 +2,8 @@
 
 - `server/` and `web/` each own their ecosystem's tooling; the root
   `Makefile` fans the standard targets out to them. The other clients are
-  repositories of their own; each tests against the `server-v<version>` tag
-  its copy of the spec names, so a released tag is never moved.
+  repositories of their own; each tests against the `v<version>` tag its
+  copy of the spec names, so a released tag is never moved.
 - Red-green: write the failing test first, then the minimum code. Unit,
   integration and, where reasonable, end-to-end tests are all first class.
   Judge coverage by the defects caught at seams: API boundaries, ffmpeg

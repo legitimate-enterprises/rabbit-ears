@@ -1,6 +1,6 @@
 name: release
 
-# A `server-v<version>` tag, which `make release` pushes, publishes that
+# A `v<version>` tag, which `make release` pushes, publishes that
 # version as a GitHub release: one archive per platform and their checksums.
 # It installs nothing; whoever runs a server takes the archive from there.
 #
@@ -8,7 +8,7 @@ name: release
 # Linux ones from it.
 on:
   push:
-    tags: ['server-v*']
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
 
 concurrency:
   group: release-${{ github.ref_name }}
