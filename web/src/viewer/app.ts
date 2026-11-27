@@ -279,7 +279,10 @@ function mount(root: HTMLElement, ctx: Ctx) {
     if (inPlace) {
       try {
         const kids = await (routes[key] ?? home)(ctx, args, query);
-        if (mine === gen) swap(main, kids);
+        if (mine !== gen) return;
+        // The viewer may have opened a menu or dialog while the page was read.
+        if (busy()) return void (due = setTimeout(quietly, 2000));
+        swap(main, kids);
       } catch (e) {
         // What is shown stays; only a device signed out leaves.
         if (e instanceof ApiError && e.status === 401) ctx.signOut();

@@ -436,6 +436,37 @@ describe("pages", () => {
     await until(() => count(`GET /profiles/${uid(1)}/watch-state`) === before + 1);
   });
 
+  it("keeps a menu opened while a redraw was still reading the page", async () => {
+    const s = stream();
+    let hold = Promise.resolve();
+    await at(`#/movie/${uid(10)}`);
+    const r = root();
+    const routes = home(s, () => []);
+    await boot(r, {
+      fetch: mockFetch({
+        ...routes,
+        [`GET /items/${uid(10)}`]: async () => (await hold, movie),
+        [`GET /items/${uid(10)}/credits`]: { cast: [], crew: [] },
+        "GET /media-files": page([]),
+      }),
+    });
+    const more = () => [...r.querySelectorAll("button")].find((b) => b.textContent === "More");
+    await until(more);
+    let release!: () => void;
+    hold = new Promise((done) => (release = done));
+    const asked = count(`GET /items/${uid(10)}`);
+    await s.say([{ kind: "watch_state", itemId: uid(10) }]);
+    await until(() => count(`GET /items/${uid(10)}`) > asked);
+    more()!.click();
+    const open = r.querySelector(".menu.drop:not([hidden])")!;
+    release();
+    await new Promise((done) => setTimeout(done, 100));
+    expect(open.isConnected).toBe(true);
+    // The redraw it gave way to follows once the menu closes.
+    more()!.click();
+    await until(() => count(`GET /items/${uid(10)}`) > asked + 1);
+  });
+
   it("paints artwork in a dialog, which sits outside the app's root", async () => {
     URL.createObjectURL = () => "blob:pick";
     const s = stream();
