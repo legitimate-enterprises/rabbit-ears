@@ -86,6 +86,10 @@ func serve(t *testing.T, dir string) (*exec.Cmd, <-chan error, string) {
 	cmd := exec.Command(os.Args[0], "-test.run=^TestHelperServer$")
 	cmd.Env = append(os.Environ(), "RABBIT_EARS_TEST_SERVER=1", "RABBIT_EARS_DB="+filepath.Join(dir, "t.db"),
 		"RABBIT_EARS_PORT="+itoa(port), "RABBIT_EARS_TMDB_KEY=")
+	// Read only once the child is reaped. WaitDelay bounds that reap when a
+	// grandchild still holds the output open.
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr, cmd.WaitDelay = &out, &out, time.Second
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -95,13 +99,21 @@ func serve(t *testing.T, dir string) (*exec.Cmd, <-chan error, string) {
 
 	// The port is taken before startup ends; an answer means serving.
 	addr := "127.0.0.1:" + itoa(port)
+	// A child stuck between listening and serving holds a request open.
+	client := &http.Client{Timeout: time.Second}
 	for deadline := time.Now().Add(15 * time.Second); ; time.Sleep(50 * time.Millisecond) {
-		if res, err := http.Get("http://" + addr + "/api/v2/health"); err == nil {
+		if res, err := client.Get("http://" + addr + "/api/v2/health"); err == nil {
 			_ = res.Body.Close()
 			return cmd, exited, addr
 		}
+		select {
+		case err := <-exited:
+			t.Fatalf("server exited before it listened: %v\n%s", err, out.String())
+		default:
+		}
 		if time.Now().After(deadline) {
-			t.Fatal("server never listened")
+			_ = cmd.Process.Kill()
+			t.Fatalf("server never answered: %v\n%s", <-exited, out.String())
 		}
 	}
 }
