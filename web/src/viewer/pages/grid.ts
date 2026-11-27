@@ -189,7 +189,8 @@ export async function grid(
           keep[filter](i) && (genre === undefined || !!inGenre.get(genreKey(genre))?.has(i.id)),
       )
       .sort((a, b) => {
-        if (sort === "Title") return title(a).localeCompare(title(b));
+        if (sort === "Title")
+          return (a.sortTitle ?? title(a)).localeCompare(b.sortTitle ?? title(b));
         if (sort === "Released") return (b.parsedYear ?? 0) - (a.parsedYear ?? 0);
         if (sort === "Last watched") return played(b) - played(a);
         return b.addedAt.localeCompare(a.addedAt);

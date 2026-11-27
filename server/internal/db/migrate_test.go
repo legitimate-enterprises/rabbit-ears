@@ -302,13 +302,15 @@ func TestBaselineFollowsTheTableRules(t *testing.T) {
 		}
 	}
 	if got := names(t, d, "view"); !slices.Equal(got, []string{"credit_shown", "item_file", "item_genre_shown",
-		"item_keyword_shown", "item_shown", "membership", "metadata_setting", "playlist_reach"}) {
+		"item_keyword_shown", "item_shown", "item_sort", "membership", "metadata_setting", "playlist_reach"}) {
 		t.Errorf("views %v", got)
 	}
 	// Sync triggers are installed by internal/replica, never by a migration.
 	if got := names(t, d, "trigger"); !slices.Equal(got, []string{"collection_art_insert", "collection_art_update",
 		"collection_tmdb_empty", "edition_file_orphan", "item_metadata_art_delete", "item_metadata_art_insert",
-		"item_metadata_art_update", "metadata_setting_art_update", "person_art_insert", "person_art_update"}) {
+		"item_metadata_art_update", "item_sort_insert", "item_sort_metadata_delete", "item_sort_metadata_insert",
+		"item_sort_metadata_update", "item_sort_setting_update", "item_sort_update", "metadata_setting_art_update", "person_art_insert",
+		"person_art_update"}) {
 		t.Errorf("triggers %v", got)
 	}
 }
@@ -466,5 +468,89 @@ func TestMigrateRefusesWithoutACopy(t *testing.T) {
 	}
 	if v, err := db.Version(d); err != nil || v != latest-1 {
 		t.Fatalf("schema version %d (%v), want %d untouched", v, err, latest-1)
+	}
+}
+
+// itemRows is every item row as text, each column but those left out.
+func itemRows(t *testing.T, d *sql.DB, leave ...string) []string {
+	t.Helper()
+	rows, err := d.Query(`SELECT name FROM pragma_table_info('item') ORDER BY cid`)
+	cols, err := db.Collect(rows, err, db.Column[string])
+	if err != nil {
+		t.Fatal(err)
+	}
+	cols = slices.DeleteFunc(cols, func(c string) bool { return slices.Contains(leave, c) })
+	q := `SELECT quote(` + strings.Join(cols, `) || ',' || quote(`) + `) FROM item ORDER BY id` //nolint:gosec // column names
+	rows, err = d.Query(q)
+	got, err := db.Collect(rows, err, db.Column[string])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+// Migrating a database whose libraries were scanned before sort titles
+// files every movie and show by the title it shows and changes no other
+// column or row; its statements run again change nothing.
+func TestMigrationFillsSortTitlesOfMoviesAndShows(t *testing.T) {
+	d := open(t)
+	if err := db.MigrateTo(d, 1); err != nil {
+		t.Fatal(err)
+	}
+	exec := func(q string, args ...any) {
+		t.Helper()
+		if _, err := d.Exec(q, args...); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	exec(`INSERT INTO server_info (id, name, metadata_source, metadata_mode, created_at, modified_at) VALUES (1, 'S', 'local', 'preferred', 0, 0)`)
+	for i, kind := range []string{"movies", "tv", "music"} {
+		exec(`INSERT INTO library (id, name, kind, created_at, modified_at) VALUES (?, ?, ?, 0, 0)`, uid.N(i+1), kind, kind)
+	}
+	add := func(id, lib int, parent *uid.ID, kind, parsed string, sort any) uid.ID {
+		exec(`INSERT INTO item (id, library_id, parent_id, kind, parsed_title, sort_title, added_at, created_at, modified_at)
+			VALUES (?, ?, ?, ?, ?, ?, 5, 6, 7)`, uid.N(id), uid.N(lib), parent, kind, parsed, sort)
+		return uid.N(id)
+	}
+	meta := func(id uid.ID, source, title string) {
+		exec(`INSERT INTO item_metadata (item_id, source, provider, status, title) VALUES (?, ?, 'tmdb', 'matched', ?)`, id, source, title)
+	}
+	meta(add(10, 1, nil, "movie", "Matrix", nil), "remote", "The Matrix")
+	quiet := add(11, 1, nil, "movie", "quiet place", nil)
+	meta(quiet, "remote", "Quiet")
+	meta(quiet, "local", "A Quiet Place")
+	add(12, 1, nil, "movie", "Die Hard", nil)
+	add(13, 1, nil, "movie", "An Education", "zzz")
+	show := add(20, 2, nil, "show", "The Office", nil)
+	season := add(21, 2, &show, "season", "The Season", nil)
+	add(22, 2, &season, "episode", "A Pilot", nil)
+	add(30, 3, nil, "artist", "The Beatles", "Beatles")
+	add(31, 3, nil, "artist", "A Tribe Called Quest", nil)
+	before := itemRows(t, d, "sort_title")
+
+	if err := db.Migrate(d); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := d.Query(`SELECT parsed_title || '=' || COALESCE(sort_title, '-') FROM item ORDER BY id`)
+	got, err := db.Collect(rows, err, db.Column[string])
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"Matrix=Matrix", "quiet place=Quiet Place", "Die Hard=Die Hard", "An Education=Education", "The Office=Office",
+		"The Season=-", "A Pilot=-", "The Beatles=Beatles", "A Tribe Called Quest=-"}
+	if !slices.Equal(got, want) {
+		t.Errorf("sort titles\n%q\nwant\n%q", got, want)
+	}
+	if after := itemRows(t, d, "sort_title"); !slices.Equal(after, before) {
+		t.Errorf("other columns changed\n%q\nwas\n%q", after, before)
+	}
+	migrated := itemRows(t, d)
+	body, err := os.ReadFile(filepath.Join("migrations", "0002_sort_title.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	exec(string(body))
+	if again := itemRows(t, d); !slices.Equal(again, migrated) {
+		t.Errorf("run again\n%q\nwas\n%q", again, migrated)
 	}
 }

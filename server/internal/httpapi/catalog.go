@@ -457,6 +457,10 @@ func (s *Server) PutItemMetadata(_ context.Context, r api.PutItemMetadataRequest
 			return nil, err
 		}
 	}
+	// The match may change the sort title.
+	if it, err = s.svc.Items.Repo().Get(it.ID); err != nil {
+		return nil, err
+	}
 	v, err := s.item(it, true)
 	return api.PutItemMetadata200JSONResponse(v), err
 }

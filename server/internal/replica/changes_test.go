@@ -222,7 +222,7 @@ func TestCursorResumesAcrossAConcurrentUpdate(t *testing.T) {
 	next, _ := pass(t, s, uid.N(201), to, 1, nil)
 	slices.Sort(next)
 	if len(next) != 3 ||
-		next[0] != "item:["+u(1)+"]=["+u(1)+" "+u(1)+" <nil> movie Uno <nil> <nil> <nil> <nil> <nil> <nil> <nil> 0 <nil> <nil>]" ||
+		next[0] != "item:["+u(1)+"]=["+u(1)+" "+u(1)+" <nil> movie Uno <nil> <nil> <nil> <nil> <nil> <nil> Uno 0 <nil> <nil>]" ||
 		next[1] != "playlist:["+u(501)+"]=["+u(501)+" "+u(101)+" Again movies <nil> 0 0 <nil> <nil> 0]" ||
 		next[2] != "watch_state:["+u(103)+" "+u(2)+"]=deleted" {
 		t.Errorf("next pass %v", next)

@@ -145,7 +145,7 @@ func toItem(it *item.Item, m *item.Metadata, admin bool) api.Item {
 			rating = m.ContentRating
 		}
 		kids := item.IsKidsContent(it.Kind, rating, it.KidsContent)
-		out.KidsContent, out.KidsContentOverride = &kids, it.KidsContent
+		out.KidsContent, out.KidsContentOverride, out.SortTitle = &kids, it.KidsContent, optStr(it.SortTitle)
 	}
 	if m != nil {
 		var release *openapi_types.Date

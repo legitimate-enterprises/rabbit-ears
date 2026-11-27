@@ -943,7 +943,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * The profile's progress through each show it may see, by title.
+         * The profile's progress through each show it may see, by Item.sortTitle.
          * @description Counts and the next episode cover only the seasons and episodes the profile may see. Episodes play in season order, specials (season 0 or none) last, then by episode number. An adult with hideKidsContent is not listed kids' content (Item.kidsContent, YouTubeChannel.forKids).
          */
         get: operations["listShowProgress"];
@@ -4776,8 +4776,9 @@ export interface components {
         /** @enum {string} */
         ItemKind: "movie" | "show" | "season" | "episode";
         /**
-         * @description title (the default) is by title, episodes and seasons by number;
-         *     added is newest first, as Recently added.
+         * @description title (the default) is by title, movies and shows by
+         *     Item.sortTitle, episodes and seasons by number; added is newest
+         *     first, as Recently added.
          * @enum {string}
          */
         ItemSort: "title" | "added";
@@ -4795,6 +4796,8 @@ export interface components {
             path?: string;
             /** @description Title parsed from the file or folder name. */
             parsedTitle: string;
+            /** @description Movies and shows only: what they sort and file letters by. It is the title shown (metadata.title, else parsedTitle) less one leading English article ("the", "a" or "an", in any case) followed by whitespace and more text, so "The Matrix" files under M and "A Quiet Place" under Q, and changes with it. Clients sort by it ignoring case, file one starting with anything but a letter A to Z under #, and show the title. */
+            sortTitle?: string;
             parsedYear?: number;
             /** @description Season 0 holds specials. */
             seasonNumber?: number;

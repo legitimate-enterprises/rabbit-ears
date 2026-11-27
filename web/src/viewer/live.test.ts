@@ -538,6 +538,36 @@ describe("pages", () => {
     expect(location.hash).toBe("#/movies?filter=Unwatched&sort=Title");
   });
 
+  it("sorts Movies by Title as the server's sortTitle says, showing the title", async () => {
+    const s = stream();
+    const movies = [
+      { ...movie, parsedTitle: "The Matrix", sortTitle: "Matrix" },
+      { ...movie, id: uid(11), parsedTitle: "a quiet place", sortTitle: "quiet place" },
+      { ...movie, id: uid(12), parsedTitle: "Die Hard", sortTitle: "Die Hard" },
+      {
+        ...movie,
+        id: uid(13),
+        parsedTitle: "Nope",
+        sortTitle: "Ant",
+        metadata: { title: "Zed", status: "matched" },
+      },
+    ];
+    await at("#/movies?sort=Title");
+    const r = root();
+    await boot(r, {
+      fetch: mockFetch({
+        ...home(s, () => []),
+        "GET /genres": page([]),
+        [`GET /profiles/${uid(1)}/playlists`]: page([]),
+        "GET /items": (_: unknown, url: URL) =>
+          page(url.searchParams.get("kind") === "movie" ? movies : []),
+      }),
+    });
+    const titles = () => [...r.querySelectorAll(".grid b")].map((b) => b.textContent);
+    await until(() => titles().length === 4);
+    expect(titles()).toEqual(["Zed", "Die Hard", "The Matrix", "a quiet place"]);
+  });
+
   it("keeps the Music albums genre and sort across a redraw", async () => {
     const s = stream();
     const album = (id: number, title: string, genre: string, addedAt: string) => ({

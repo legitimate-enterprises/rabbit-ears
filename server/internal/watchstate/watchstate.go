@@ -177,7 +177,8 @@ type ShowProgress struct {
 	NextEpisodeID *uid.ID
 }
 
-// showProgress pages the visible shows by title. Episodes are numbered in
+// showProgress pages the visible shows by sort title, which every show
+// has, so the page walks item_kind_sort. Episodes are numbered in
 // play order: seasons by number with specials (0 or none) last, then by
 // episode number. The next episode follows the clients' rule: of the
 // episodes watched or in progress, the latest played (the earliest in play
@@ -186,8 +187,8 @@ type ShowProgress struct {
 // Seasons and episodes are found from the page's shows by parent; +kind
 // keeps the planner off the kind index, which would walk every episode.
 var showProgress = `WITH page AS (
-	SELECT item.id, item.parsed_title FROM item WHERE item.kind = 'show' AND ` + item.VisibleWhere + `
-	ORDER BY item.parsed_title COLLATE NOCASE, item.id LIMIT ?4 OFFSET ?5
+	SELECT item.id, item.sort_title FROM item WHERE item.kind = 'show' AND item.sort_title IS NOT NULL AND ` + item.VisibleWhere + `
+	ORDER BY item.sort_title COLLATE NOCASE, item.id LIMIT ?4 OFFSET ?5
 ), seasons AS (
 	SELECT item.parent_id AS show_id, COUNT(*) AS n FROM item
 	WHERE +item.kind = 'season' AND item.parent_id IN (SELECT id FROM page) AND ` + item.VisibleWhere + `
@@ -206,7 +207,7 @@ var showProgress = `WITH page AS (
 		ROW_NUMBER() OVER (PARTITION BY show_id ORDER BY at IS NULL, at DESC, pos) AS k FROM eps WHERE watched OR going)
 	WHERE k = 1
 ), sums AS (
-	SELECT page.id AS show_id, page.parsed_title, COUNT(eps.id) AS episodes, COALESCE(SUM(NOT eps.watched), 0) AS unwatched,
+	SELECT page.id AS show_id, page.sort_title, COUNT(eps.id) AS episodes, COALESCE(SUM(NOT eps.watched), 0) AS unwatched,
 		COALESCE(MAX(eps.going), 0) AS going, MAX(eps.at) AS at,
 		CASE WHEN latest.going THEN latest.pos
 			ELSE MIN(CASE WHEN NOT eps.watched AND eps.pos > COALESCE(latest.pos, 0) THEN eps.pos END) END AS next_pos
@@ -216,10 +217,10 @@ var showProgress = `WITH page AS (
 SELECT sums.show_id, COALESCE(seasons.n, 0), sums.episodes, sums.unwatched, sums.going, sums.at, nx.id
 FROM sums LEFT JOIN seasons ON seasons.show_id = sums.show_id
 LEFT JOIN eps nx ON nx.show_id = sums.show_id AND nx.pos = sums.next_pos
-ORDER BY sums.parsed_title COLLATE NOCASE, sums.show_id`
+ORDER BY sums.sort_title COLLATE NOCASE, sums.show_id`
 
 // ShowProgress pages an account's progress through each show the audience
-// sees, by title, in a single query.
+// sees, by sort title, in a single query.
 func (r *Repo) ShowProgress(accountID uid.ID, a item.Audience, limit, offset int) ([]*ShowProgress, error) {
 	rows, err := r.d.Query(showProgress, append([]any{accountID, nil, nil, limit, offset}, a.Args()...)...)
 	return db.Collect(rows, err, func(s db.Scanner) (*ShowProgress, error) {

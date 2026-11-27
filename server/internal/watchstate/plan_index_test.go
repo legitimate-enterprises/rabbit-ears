@@ -30,7 +30,7 @@ func TestShowProgressUsesIndexes(t *testing.T) {
 			plan = append(plan, detail)
 		}
 		_ = rows.Close()
-		if n := strings.Count(strings.Join(plan, "\n"), "INDEX item_kind_title"); n != 1 {
+		if n := strings.Count(strings.Join(plan, "\n"), "INDEX item_kind_sort"); n != 1 {
 			t.Fatalf("only the page of shows walks the kind index; seasons and episodes come by parent:\n%s", strings.Join(plan, "\n"))
 		}
 		for _, step := range plan {

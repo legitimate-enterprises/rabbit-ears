@@ -48,11 +48,11 @@ type View struct {
 
 // Date and Title order a collection's movies, over a table named item: by
 // release date, a bare parsed year before the full dates of that year,
-// undated (NULL) last; then by title. Each reads item_shown by key; a LEFT
-// JOIN onto it builds the whole view.
+// undated (NULL) last; then by sort title. Date reads item_shown by key; a
+// LEFT JOIN onto it builds the whole view.
 const (
 	Date  = `COALESCE((SELECT md.release_date FROM item_shown md WHERE md.item_id = item.id), CAST(item.parsed_year AS TEXT))`
-	Title = `COALESCE((SELECT md.title FROM item_shown md WHERE md.item_id = item.id), item.parsed_title)`
+	Title = `item.sort_title`
 )
 
 // Order is the one order of a collection's movies, over collection_movie cm

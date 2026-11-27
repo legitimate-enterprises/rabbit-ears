@@ -480,3 +480,45 @@ func TestMigrateReplacesAnOlderBuildsTriggers(t *testing.T) {
 	}
 	moveStamps(t, d, uid.N(1))
 }
+
+// A database a release before sort titles synced has them filled by the
+// upgrade, which tells every client to snapshot; after it, a change of the
+// title a movie shows sends the movie's row with its new sort title.
+func TestSortTitlesReachReplicas(t *testing.T) {
+	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	if err := db.MigrateTo(d, 1); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range replica.V1.Triggers() {
+		mustExec(t, d, q)
+	}
+	mustExec(t, d, `UPDATE sync_clock SET release = '0.22.0'`)
+	mustExec(t, d, `INSERT INTO server_info (id, name, metadata_source, metadata_mode, created_at, modified_at) VALUES (1, 'S', 'local', 'preferred', 0, 0)`)
+	mustExec(t, d, fixture)
+	mustExec(t, d, elsewhere)
+	mustExec(t, d, `UPDATE item SET parsed_title = 'The G Movie' WHERE id = uid(1)`)
+	held, _ := clock(t, d)
+	if err := replica.Migrate(d, "0.23.0"); err != nil {
+		t.Fatal(err)
+	}
+	s := syncOf(t, d)
+	if p := changes(t, s, uid.N(201), &held, "", 100); p.Mode != replica.Snapshot {
+		t.Errorf("after the upgrade: %s", p.Mode)
+	}
+	r, _ := snapshotOf(t, s, uid.N(201))
+	if got := rowsOf(t, r, `SELECT sort_title FROM item WHERE id = uid(1)`); !slices.Equal(got, []string{"G Movie"}) {
+		t.Errorf("snapshot sort title %v", got)
+	}
+	v, _ := clock(t, d)
+	mustExec(t, d, `UPDATE item_metadata SET title = 'A Quiet Place' WHERE item_id = uid(1) AND source = 'local'`)
+	got, _ := pass(t, s, uid.N(201), v, 100, nil)
+	if !slices.ContainsFunc(got, func(g string) bool {
+		return g == "item:["+u(1)+"]=["+u(1)+" "+u(1)+" <nil> movie The G Movie <nil> <nil> <nil> <nil> <nil> <nil> Quiet Place 0 <nil> <nil>]"
+	}) {
+		t.Errorf("after a title change %v", got)
+	}
+}

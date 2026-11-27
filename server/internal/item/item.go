@@ -60,8 +60,10 @@ type Item struct {
 	TrackNumber   *int
 	// ArtistID is who performs a song when that is not its album artist.
 	ArtistID *uid.ID
-	// SortTitle is the title without a leading "The ", which music sorts
-	// and files letters by; empty sorts by ParsedTitle.
+	// SortTitle is what titles sort and file letters by. Music's is the
+	// title without a leading "The ", empty sorting by ParsedTitle; a movie's
+	// or show's is the title it shows less one leading article, which the
+	// database keeps (item_sort) and Create and Update read back.
 	SortTitle string
 	// KidsContent is, on a movie or show, an adult's override of whether
 	// it is kids' content (nil leaves it to the rating), and on a channel
@@ -301,6 +303,20 @@ func (r *Repo) Create(it *Item) error {
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, it.ID, it.LibraryID, it.ParentID, it.Kind, db.NullStr(it.Path), it.ParsedTitle,
 		it.ParsedYear, it.SeasonNumber, it.EpisodeNumber, it.DiscNumber, it.TrackNumber,
 		it.ArtistID, db.NullStr(it.SortTitle), it.KidsContent, it.Explicit, db.Ms(now), db.Ms(now), db.Ms(now))
+	if err != nil {
+		return db.Wrap(err)
+	}
+	return r.readSortTitle(it)
+}
+
+// readSortTitle reads back the sort title the database gave a movie or show.
+func (r *Repo) readSortTitle(it *Item) error {
+	if it.Kind != Movie && it.Kind != Show {
+		return nil
+	}
+	var s sql.NullString
+	err := r.d.QueryRow(`SELECT sort_title FROM item WHERE id = ?`, it.ID).Scan(&s)
+	it.SortTitle = s.String
 	return db.Wrap(err)
 }
 
@@ -309,13 +325,18 @@ func (r *Repo) Get(id uid.ID) (*Item, error) {
 	return scan(r.d.QueryRow(`SELECT `+cols+` FROM item WHERE id = ?`, id))
 }
 
-// Update writes the file-derived fields of it.
+// Update writes the file-derived fields of it; a movie's or show's sort
+// title is the database's.
 func (r *Repo) Update(it *Item) error {
 	it.ModifiedAt = time.Now().UTC().Truncate(time.Millisecond)
-	return db.ExecOne(r.d, `UPDATE item SET path=?, parsed_title=?, parsed_year=?, season_number=?, episode_number=?,
-		disc_number=?, track_number=?, artist_id=?, sort_title=?, explicit=?, modified_at=? WHERE id=?`,
+	if err := db.ExecOne(r.d, `UPDATE item SET path=?, parsed_title=?, parsed_year=?, season_number=?, episode_number=?,
+		disc_number=?, track_number=?, artist_id=?, sort_title=CASE WHEN kind IN ('movie','show') THEN sort_title ELSE ? END, explicit=?,
+		modified_at=? WHERE id=?`,
 		db.NullStr(it.Path), it.ParsedTitle, it.ParsedYear, it.SeasonNumber, it.EpisodeNumber,
-		it.DiscNumber, it.TrackNumber, it.ArtistID, db.NullStr(it.SortTitle), it.Explicit, db.Ms(it.ModifiedAt), it.ID)
+		it.DiscNumber, it.TrackNumber, it.ArtistID, db.NullStr(it.SortTitle), it.Explicit, db.Ms(it.ModifiedAt), it.ID); err != nil {
+		return err
+	}
+	return r.readSortTitle(it)
 }
 
 // SetKidsContent writes an item's KidsContent; nil clears it.
@@ -343,7 +364,9 @@ func (r *Repo) query(q string, args ...any) ([]*Item, error) {
 	return db.Collect(rows, err, scan)
 }
 
-// List pages items ordered by parsed title, then season and episode number.
+// List pages items ordered by title, a movie's or show's sort title and
+// any other kind's parsed title, ignoring case, then season and episode
+// number.
 func (r *Repo) List(f Filter) ([]*Item, error) {
 	if f.Limit <= 0 {
 		f.Limit = 100
@@ -353,7 +376,7 @@ func (r *Repo) List(f Filter) ([]*Item, error) {
 		by = `NOT (instr(lower(parsed_title), lower(?11)) = 1
 			OR instr(lower(COALESCE((SELECT m.title FROM item_shown m WHERE m.item_id = item.id), '')), lower(?11)) = 1), `
 	}
-	order := `parsed_title COLLATE NOCASE, season_number, episode_number, id`
+	order := `CASE WHEN kind IN ('movie','show') THEN sort_title ELSE parsed_title END COLLATE NOCASE, season_number, episode_number, id`
 	if f.Newest {
 		order = `added_at DESC, id DESC`
 	}
