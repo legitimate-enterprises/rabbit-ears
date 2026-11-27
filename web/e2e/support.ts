@@ -21,7 +21,7 @@ export const quiet = () => {
 type Headers = { Authorization: string };
 
 /** Makes a library's scan task due now, once, if it has never run. */
-async function scanSoon(request: APIRequestContext, headers: Headers, libraryId: string) {
+export async function scanSoon(request: APIRequestContext, headers: Headers, libraryId: string) {
   const tasks = (await (await request.get(`${api}/tasks`, { headers })).json()).items;
   const scan = tasks.find((t: { kind: string }) => t.kind === `scan:${libraryId}`);
   if (scan && !scan.lastRun)

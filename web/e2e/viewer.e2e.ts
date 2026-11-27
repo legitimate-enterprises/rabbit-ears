@@ -1,6 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Snapshot } from "../src/viewer/capabilities";
-import { api, leavePlayer, quiet, seed, signIn } from "./support";
+import { api, leavePlayer, quiet, scanSoon, seed, signIn } from "./support";
 
 test.describe.configure({ mode: "serial" });
 
@@ -74,23 +78,45 @@ test("a started movie's poster and details show how much of it is watched", asyn
 }) => {
   const headers = await seed(request);
   const me = await (await request.get(`${api}/me`, { headers })).json();
-  const movies = (await (await request.get(`${api}/items?kind=movie`, { headers })).json()).items;
-  const casper = movies.find((m: { parsedTitle: string }) => /^Casper/.test(m.parsedTitle));
-  const state = `${api}/profiles/${me.account.id}/watch-state/${casper.id}`;
-  // A quarter into the 2-minute fixture, the runtime its scan reads from the file.
-  await request.put(state, { headers, data: { positionMs: 30_000, watched: false } });
+  // The shared fixtures are all under a minute, which a scan gives no runtime; this movie runs 2.
+  const dir = mkdtempSync(join(tmpdir(), "rabbit-ears-watched-"));
+  execFileSync("ffmpeg", [
+    ...["-v", "error", "-f", "lavfi", "-i", "color=size=64x36:rate=1:duration=120"],
+    ...["-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"],
+    join(dir, "Long Walk (2003).mp4"),
+  ]);
+  const lib = await (
+    await request.post(`${api}/libraries`, { headers, data: { name: "Walks", kind: "movies" } })
+  ).json();
   try {
+    await request.post(`${api}/libraries/${lib.id}/folders`, { headers, data: { path: dir } });
+    let movie: { id: string } | undefined;
+    await expect(async () => {
+      await scanSoon(request, headers, lib.id);
+      const items = (await (await request.get(`${api}/items?kind=movie`, { headers })).json())
+        .items;
+      movie = items.find(
+        (i: { parsedTitle: string; metadata?: { runtimeMinutes?: number } }) =>
+          i.parsedTitle === "Long Walk" && i.metadata?.runtimeMinutes === 2,
+      );
+      expect(movie).toBeTruthy();
+    }).toPass({ timeout: 80_000, intervals: [2000] });
+    await request.put(`${api}/profiles/${me.account.id}/watch-state/${movie!.id}`, {
+      headers,
+      data: { positionMs: 30_000, watched: false },
+    });
     await signIn(page);
-    await openMovie(page, /Casper/);
+    await openMovie(page, /Long Walk/);
     await expect(page.getByRole("link", { name: "Resume" })).toBeVisible();
     await expect(
       page.locator(".detail").getByRole("img", { name: "25 percent watched" }),
     ).toBeVisible();
     await page.goBack();
-    const poster = page.locator("a.poster").and(page.getByRole("link", { name: /Casper/ }));
+    const poster = page.locator("a.poster").and(page.getByRole("link", { name: /Long Walk/ }));
     await expect(poster.getByRole("img", { name: "25 percent watched" })).toBeVisible();
   } finally {
-    await request.delete(state, { headers });
+    await request.delete(`${api}/libraries/${lib.id}`, { headers });
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 
