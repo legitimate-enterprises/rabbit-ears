@@ -1,6 +1,7 @@
 package scan
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -17,11 +18,11 @@ import (
 
 const (
 	scanKindPrefix = "scan:"    // followed by the library ID
-	MetadataKind   = "metadata" // kind of the Refresh metadata task
+	MetadataKind   = "metadata" // kind of the Refresh metadata task, made due by every scan
 	metadataName   = "Refresh metadata"
 	metadataEvery  = time.Hour
 	retryBatch     = 200
-	PreviewsKind   = "previews" // kind of the Seek previews task, made due by every scan
+	PreviewsKind   = "previews" // kind of the Seek previews task, chapter thumbnails then seek previews, made due by every scan
 	previewsName   = "Seek previews"
 	LocalKind      = "local" // kind of the Local metadata task, made due by every scan
 	localName      = "Local metadata"
@@ -184,41 +185,65 @@ func (r *Runner) makeDue(kind string) error {
 	return nil
 }
 
-// Tick runs every requested task, then every due task unless paused, one at
-// a time.
+// phase orders the tasks a tick runs: every library scan, with the quick
+// scheduled tasks, before any metadata, remote metadata before local, and
+// local before thumbnails and seek previews. A task gives way to one of an
+// earlier phase that is waiting.
+func phase(kind string) int {
+	switch kind {
+	case MetadataKind:
+		return 1
+	case LocalKind:
+		return 2
+	case PreviewsKind:
+		return 3
+	}
+	return 0
+}
+
+// Tick runs, one at a time, the first of the tasks waiting (see waiting),
+// read again after each run so a pause, a disable or a task falling due
+// mid-tick counts, until none is left or the first has run in this tick
+// already: it gave way, or a later run made it due again, and the next
+// tick, which making it due wakes, runs it.
 func (r *Runner) Tick(ctx context.Context) error {
-	due, err := r.Tasks.Requested()
-	if err != nil {
-		return err
-	}
-	if r.Paused == nil || !r.Paused() {
-		scheduled, err := r.Tasks.Due(r.S.Now().UTC())
-		if err != nil {
-			return err
-		}
-		for _, t := range scheduled {
-			if !slices.ContainsFunc(due, func(d *task.Task) bool { return d.ID == t.ID }) {
-				due = append(due, t)
-			}
-		}
-	}
-	for _, t := range due {
+	ran := map[uid.ID]bool{}
+	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		// An earlier task's run may have outlasted a pause or a disable.
-		t, err := r.Tasks.Get(t.ID)
-		if err != nil {
+		ts, err := r.waiting()
+		if err != nil || len(ts) == 0 || ran[ts[0].ID] {
 			return err
 		}
-		if t.RunRequestedAt == nil && (!t.Enabled || r.Paused != nil && r.Paused()) {
-			continue
-		}
-		if err := r.execute(ctx, t); err != nil {
+		ran[ts[0].ID] = true
+		if err := r.execute(ctx, ts[0]); err != nil {
 			return err
 		}
 	}
-	return nil
+}
+
+// waiting is every requested task and, unless paused, every due one, by
+// phase, then requested before due, then in the order they were requested
+// or fell due.
+func (r *Runner) waiting() ([]*task.Task, error) {
+	ts, err := r.Tasks.Requested()
+	if err != nil {
+		return nil, err
+	}
+	if r.Paused == nil || !r.Paused() {
+		due, err := r.Tasks.Due(r.S.Now().UTC())
+		if err != nil {
+			return nil, err
+		}
+		for _, t := range due {
+			if !slices.ContainsFunc(ts, func(d *task.Task) bool { return d.ID == t.ID }) {
+				ts = append(ts, t)
+			}
+		}
+	}
+	slices.SortStableFunc(ts, func(a, b *task.Task) int { return cmp.Compare(phase(a.Kind), phase(b.Kind)) })
+	return ts, nil
 }
 
 func (r *Runner) execute(ctx context.Context, t *task.Task) error {
@@ -266,25 +291,22 @@ func (r *Runner) nextRun(t *task.Task, now time.Time) *time.Time {
 
 func (r *Runner) work(ctx context.Context, t *task.Task, progress func(float64)) (string, error) {
 	switch {
-	case t.Kind == MetadataKind:
-		more, err := r.S.RetryDue(ctx, retryBatch)
-		if more {
-			err = r.makeDue(MetadataKind)
-		}
-		return "", err
 	case t.Kind == StationsKind && r.Stations != nil:
 		return r.Stations(ctx)
 	case t.Kind == PurgeKind && r.Purge != nil:
 		return r.Purge(ctx)
-	case t.Kind == PreviewsKind || t.Kind == LocalKind:
+	case t.Kind == MetadataKind || t.Kind == PreviewsKind || t.Kind == LocalKind:
 		makeAll := r.S.MakePreviews
-		if t.Kind == LocalKind {
+		switch t.Kind {
+		case MetadataKind:
+			makeAll = r.refreshMetadata
+		case LocalKind:
 			makeAll = r.S.MakeLocal
 		}
-		sum, more, err := makeAll(ctx, progress, r.othersWaiting(t.Kind))
+		sum, more, err := makeAll(ctx, progress, r.ahead(t.Kind))
 		if more || ctx.Err() != nil {
-			// Due again now, so it runs after the tasks it gave way to,
-			// which fell due earlier, or at the next start after a stop.
+			// Due again now, so it runs after the tasks it gave way to, or
+			// at the next start after a stop.
 			err = errors.Join(err, r.makeDue(t.Kind))
 		}
 		return sum, err
@@ -309,40 +331,46 @@ func (r *Runner) work(ctx context.Context, t *task.Task, progress func(float64))
 			return sum.String(), err
 		}
 		log.Info("Scan of " + lib.Name + " finished: " + sum.String())
-		return sum.String(), errors.Join(r.S.Libraries.MarkScanned(id, r.S.Now().UTC()), r.makeDue(PreviewsKind), r.makeDue(LocalKind))
+		return sum.String(), errors.Join(r.S.Libraries.MarkScanned(id, r.S.Now().UTC()),
+			r.makeDue(MetadataKind), r.makeDue(LocalKind), r.makeDue(PreviewsKind))
 	}
 	return "", fmt.Errorf("unknown task kind %q", t.Kind)
 }
 
-// othersWaiting reports whether a task of another kind than self is one
-// Tick would run now, so a long previews run gives way to it.
-func (r *Runner) othersWaiting(self string) func() bool {
+// refreshMetadata is a Refresh metadata run (see Scanner.RetryDue) and its
+// summary: "2 metadata lookups failed, more to do", or "" with neither.
+func (r *Runner) refreshMetadata(ctx context.Context, _ func(float64), yield func() bool) (string, bool, error) {
+	failed, more, err := r.S.RetryDue(ctx, retryBatch, yield)
+	var parts []string
+	if failed > 0 {
+		parts = append(parts, plural(failed, "metadata lookup")+" failed")
+	}
+	if more {
+		parts = append(parts, "more to do")
+	}
+	return strings.Join(parts, ", "), more, err
+}
+
+// ahead reports whether a task of an earlier phase than self's is one Tick
+// would run now, so a long run of self gives way to it.
+func (r *Runner) ahead(self string) func() bool {
 	return func() bool {
-		ts, err := r.Tasks.Requested()
-		if err != nil {
-			return false
-		}
-		if r.Paused == nil || !r.Paused() {
-			due, err := r.Tasks.Due(r.S.Now().UTC())
-			if err != nil {
-				return false
-			}
-			ts = append(ts, due...)
-		}
-		return slices.ContainsFunc(ts, func(t *task.Task) bool { return t.Kind != self })
+		ts, err := r.waiting()
+		return err == nil && len(ts) > 0 && phase(ts[0].Kind) < phase(self)
 	}
 }
 
 // Run is the scheduler loop. It fails runs a crash left running, making an
-// interrupted Seek previews or Local metadata run due again since nothing
-// else would until the next scan, then syncs and ticks until ctx ends.
+// interrupted Refresh metadata, Local metadata or Seek previews run due
+// again, so it resumes at once rather than at its next scan or hour, then
+// syncs and ticks until ctx ends.
 func (r *Runner) Run(ctx context.Context) {
 	ids, err := r.Tasks.FailInterrupted(r.S.Now().UTC())
 	if err != nil {
 		logstore.Log("task").Error("Could not fail interrupted runs", "err", err)
 	}
 	for _, id := range ids {
-		if t, err := r.Tasks.Get(id); err == nil && (t.Kind == PreviewsKind || t.Kind == LocalKind) {
+		if t, err := r.Tasks.Get(id); err == nil && phase(t.Kind) > 0 {
 			if err := r.makeDue(t.Kind); err != nil {
 				logstore.Log("task").Error("Could not resume "+t.Name, "err", err)
 			}

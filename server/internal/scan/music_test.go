@@ -139,6 +139,10 @@ func TestScanMusic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, _, err := e.s.lookUp(context.Background(), e.lib, nil); err != nil {
+		t.Fatal(err)
+	}
+	e.local()
 	if got := sum.String(); got != "3 artists, 2 albums, 4 songs added" {
 		t.Errorf("summary %q", got)
 	}
@@ -170,8 +174,9 @@ func TestScanMusic(t *testing.T) {
 		t.Errorf("m4a song %+v", s)
 	}
 
-	// The FLAC's embedded cover and the loose album's folder cover become
-	// album art; the matched album keeps its local art over the archive's.
+	// The FLAC's embedded cover, which the Local metadata task reads, and
+	// the loose album's folder cover become album art; the matched album
+	// keeps its local art over the archive's.
 	for _, al := range albums {
 		m, err := e.items.Metadata(al.ID)
 		if err != nil || m.Provider != item.MusicBrainz || filepath.Dir(m.PosterPath) != filepath.Join(e.s.ThumbDir, "music") {
@@ -198,6 +203,9 @@ func TestScanMusic(t *testing.T) {
 
 	probes, calls := *e.probes, mb.calls
 	sum, err = e.s.Scan(context.Background(), e.lib, nil)
+	if _, _, err := e.s.lookUp(context.Background(), e.lib, nil); err != nil {
+		t.Fatal(err)
+	}
 	if err != nil || *e.probes != probes || mb.calls != calls || sum.String() != "No changes; 4 songs checked" {
 		t.Fatalf("rescan probed %d, looked up %d: %q %v", *e.probes-probes, mb.calls-calls, sum, err)
 	}
@@ -290,6 +298,7 @@ func TestAlbumArtFollowsAReplacedSong(t *testing.T) {
 	e, _ := musicEnv(t)
 	_, err := e.s.Scan(context.Background(), e.lib, nil)
 	must(t, err)
+	e.local()
 	album := e.list(item.Album)[0]
 	old, err := e.items.LocalRow(album.ID)
 	must(t, err)
@@ -308,6 +317,7 @@ func TestAlbumArtFollowsAReplacedSong(t *testing.T) {
 	must(t, os.WriteFile(filepath.Join(dir, "04 Encore.flac"), b, 0o600)) //nolint:gosec // test temp copy of fixtures
 	_, err = e.s.Scan(context.Background(), e.lib, nil)
 	must(t, err)
+	e.local()
 	if now, err := e.items.LocalRow(album.ID); err != nil || now.PosterPath != old.PosterPath {
 		t.Fatalf("a new song took the album's art: %+v %v", now, err)
 	}
@@ -317,6 +327,7 @@ func TestAlbumArtFollowsAReplacedSong(t *testing.T) {
 	must(t, os.Chtimes(opening, later, later))
 	_, err = e.s.Scan(context.Background(), e.lib, nil)
 	must(t, err)
+	e.local()
 	now, err := e.items.LocalRow(album.ID)
 	must(t, err)
 	if now.PosterPath == old.PosterPath {
@@ -334,10 +345,12 @@ func TestAlbumArtFollowsAReplacedSong(t *testing.T) {
 func TestScanMusicOutage(t *testing.T) {
 	e, mb := musicEnv(t)
 	mb.down = true
-	sum, err := e.s.Scan(context.Background(), e.lib, nil)
-	if err != nil || sum.LookupFailed != 2 || mb.calls != 1 {
-		t.Fatalf("one failed call defers the rest: %v %d calls %q", err, mb.calls, sum)
+	_, err := e.s.Scan(context.Background(), e.lib, nil)
+	must(t, err)
+	if failed, _, err := e.s.lookUp(context.Background(), e.lib, nil); err != nil || failed != 2 || mb.calls != 1 {
+		t.Fatalf("one failed call defers the rest: %v %d calls, %d failed", err, mb.calls, failed)
 	}
+	e.local()
 	albums := e.list(item.Album)
 	m, _ := e.items.Metadata(albums[0].ID)
 	if m.RetryAt == nil || !m.RetryAt.Equal(e.clock.Add(RetryDelay)) || m.PosterPath == "" {
@@ -345,7 +358,7 @@ func TestScanMusicOutage(t *testing.T) {
 	}
 	mb.down = false
 	*e.clock = e.clock.Add(2 * RetryDelay)
-	if _, err := e.s.RetryDue(context.Background(), 10); err != nil {
+	if _, _, err := e.s.RetryDue(context.Background(), 10, nil); err != nil {
 		t.Fatal(err)
 	}
 	if m, _ = e.items.Metadata(albums[0].ID); m.Status != item.Matched {

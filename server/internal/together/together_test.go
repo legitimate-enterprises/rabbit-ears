@@ -20,7 +20,7 @@ type person struct{ account, device uid.ID }
 
 func TestWatchTogether(t *testing.T) {
 	d := dbtest.Open(t)
-	owner := &account.Account{Kind: account.Adult, Email: "h@example.test", Name: "Heidi"}
+	owner := &account.Account{Kind: account.Adult, Email: "h@example.test", Name: "Helga"}
 	if err := account.New(d).Create(owner, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -28,7 +28,7 @@ func TestWatchTogether(t *testing.T) {
 	if err := household.New(d).Create(h, nil); err != nil {
 		t.Fatal(err)
 	}
-	other := &account.Account{Kind: account.Adult, Email: "c@example.test", Name: "Claire", HouseholdID: &h.ID}
+	other := &account.Account{Kind: account.Adult, Email: "j@example.test", Name: "Joan", HouseholdID: &h.ID}
 	if err := account.New(d).Create(other, nil); err != nil {
 		t.Fatal(err)
 	}

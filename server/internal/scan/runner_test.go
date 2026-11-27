@@ -405,40 +405,31 @@ func TestSeekPreviewsWaitForAFileThatIsGone(t *testing.T) {
 	}
 }
 
-// A long previews run gives way between files to a task that falls due, and
-// is made due again to carry on where it stopped.
+// A long previews run gives way between files to a task of an earlier
+// phase that falls due, and is made due again to carry on where it stopped.
 func TestSeekPreviewsYieldToADueTask(t *testing.T) {
 	e := newEnv(t, library.Movies, "")
 	fixtureCopy(t, "h264-high41.mp4", filepath.Join(e.root, "A (2001)", "a.mp4"))
 	fixtureCopy(t, "h264-high41.mp4", filepath.Join(e.root, "B (2002)", "b.mp4"))
+	e.mustScan()
 	r, tasks := newRunner(t, e)
-	_ = r.Sync()
-	if err := r.Tick(context.Background()); err != nil { // the scan makes previews due
-		t.Fatal(err)
-	}
+	must(t, r.Sync())
 	pt, _ := tasks.ByName("Seek previews")
 	st, _ := tasks.ByName("Scan L")
-	if pt.NextRunAt == nil {
-		t.Fatal("previews not due after the scan")
-	}
-	// The scan falls due at the same instant, after previews in run order.
-	st.NextRunAt = pt.NextRunAt
-	must(t, tasks.Update(st))
-	if err := r.Tick(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	must(t, r.Trigger(e.lib.ID))
+	must(t, r.execute(context.Background(), pt))
 	run, _ := tasks.LastRun(pt.ID)
 	if run.Status != task.Succeeded || run.Summary != "1 file, more to do" {
 		t.Fatalf("%+v", run)
 	}
-	if sr, _ := tasks.LastRun(st.ID); sr.StartedAt.Before(run.StartedAt) {
-		t.Fatal("the scan did not run after previews gave way")
-	}
 	if pt, _ = tasks.ByName("Seek previews"); pt.NextRunAt == nil {
 		t.Fatal("previews not made due again")
 	}
-	if err := r.Tick(context.Background()); err != nil {
-		t.Fatal(err)
+	must(t, r.Tick(context.Background()))
+	sr, _ := tasks.LastRun(st.ID)
+	again, _ := tasks.LastRun(pt.ID)
+	if sr.ID.Compare(run.ID) < 0 || again.ID.Compare(sr.ID) < 0 || again.Summary != "1 file" {
+		t.Fatalf("the scan did not run before previews carried on: %+v %+v", sr, again)
 	}
 	if left, _ := e.files.NeedingPreviews(); len(left) != 0 {
 		t.Fatalf("%d files left", len(left))

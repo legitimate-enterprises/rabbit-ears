@@ -492,6 +492,30 @@ func (r *Repo) SetChapterThumbnail(id uid.ID, path string) error {
 	return db.ExecOne(r.d, `UPDATE chapter SET thumbnail_path = ?, modified_at = ? WHERE id = ?`, db.NullStr(db.DataRel(path)), db.Ms(now()), id)
 }
 
+// A chapter row changes only when its thumbnail is made or fails, and every
+// probe of its file makes its rows again, so a row still as inserted is a
+// thumbnail never tried.
+const untriedChapter = `c.thumbnail_path IS NULL AND c.modified_at = c.created_at`
+
+// ThumbnailTried reports whether c's thumbnail was made or failed since its
+// file was last probed.
+func (c *Chapter) ThumbnailTried() bool {
+	return c.ThumbnailPath != "" || !c.ModifiedAt.Equal(c.CreatedAt)
+}
+
+// ChapterThumbnailFailed records that a chapter's thumbnail was tried and
+// not made, so it is not tried again until its file is probed again.
+func (r *Repo) ChapterThumbnailFailed(id uid.ID) error {
+	return db.ExecOne(r.d, `UPDATE chapter SET modified_at = MAX(?, created_at + 1) WHERE id = ?`, db.Ms(now()), id)
+}
+
+// NeedingChapterThumbnails lists probed files not marked missing that have
+// a chapter whose thumbnail was never tried.
+func (r *Repo) NeedingChapterThumbnails() ([]*File, error) {
+	return r.files(`SELECT ` + fcols + ` FROM media_file f WHERE f.probed_at IS NOT NULL AND f.missing_at IS NULL
+		AND EXISTS (SELECT 1 FROM chapter c WHERE c.media_file_id = f.id AND ` + untriedChapter + `) ORDER BY f.id`)
+}
+
 // Lossless reports an ffprobe audio codec that is lossless.
 func Lossless(codec string) bool {
 	return codec == "flac" || codec == "alac" || codec == "wavpack" || strings.HasPrefix(codec, "pcm_")

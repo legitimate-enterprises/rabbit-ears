@@ -217,7 +217,7 @@ const me = (active: number) => ({
   account: acct(1, "Bea"),
   activeProfileId: uid(active),
   household: { id: uid(1), name: "Bea", adultId: uid(1), createdAt: ts },
-  profiles: [acct(1, "Bea"), acct(2, "Jax", "kid")],
+  profiles: [acct(1, "Bea"), acct(2, "Jason", "kid")],
 });
 const page = (items: unknown[]) => ({ items });
 const at = async (hash: string) => {
@@ -360,7 +360,7 @@ describe("pages", () => {
           ...routes,
           "GET /me": () => ({
             ...me(1),
-            profiles: [{ ...acct(1, "Bea"), hideKidsContent: flag }, acct(2, "Jax", "kid")],
+            profiles: [{ ...acct(1, "Bea"), hideKidsContent: flag }, acct(2, "Jason", "kid")],
           }),
         }),
       });
@@ -407,7 +407,7 @@ describe("pages", () => {
     await new Promise((r) => setTimeout(r, 50));
     await until(() => r.querySelector("main")!.textContent!.includes("Recently added"));
     expect(s.asked.filter((a) => a === "")).toHaveLength(1);
-    expect(r.querySelector(".profile")!.textContent).toContain("Jax");
+    expect(r.querySelector(".profile")!.textContent).toContain("Jason");
   });
 
   it("leaves a page alone for an event it shows nothing of, and under an open dialog until it closes", async () => {

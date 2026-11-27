@@ -94,14 +94,14 @@ func dataDir(dbFile string) string {
 }
 
 // startScanning runs the scheduler and file watcher until ctx ends, and
-// reports each finished loop on wg. While client has no TMDB key, scans
-// skip TMDB, and while the metadata settings use no remote data they call
-// no provider. The scheduler also runs stations, the hourly Schedule
+// reports each finished loop on wg. While client has no TMDB key, metadata
+// runs skip TMDB, and while the metadata settings use no remote data they
+// call no provider. The scheduler also runs stations, the hourly Schedule
 // stations task, and the daily purge of sync history, and tells events of
 // each scan that changed its library.
 func startScanning(ctx context.Context, wg *sync.WaitGroup, d *sql.DB, client *tmdb.Client, data string, stations func(context.Context) (string, error), events *live.Hub) error {
 	if !client.Enabled() {
-		logstore.Log("server").Info("No TMDB key is set; library scans will not fetch metadata until one is saved in Settings")
+		logstore.Log("server").Info("No TMDB key is set; no metadata will be fetched from TMDB until one is saved in Settings")
 	}
 	libs, info := library.New(d), serverinfo.New(d)
 	sc := scan.New(scan.Config{Libraries: libs, Items: item.New(d), Files: mediafile.New(d), Editions: edition.New(d), Genres: genre.New(d),

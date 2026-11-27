@@ -304,7 +304,7 @@ func TestMatchedDuplicateMoviesFold(t *testing.T) {
 		t.Fatalf("movie %s (older %s) files %d refs %q, want %q", m.ID, older, len(files), e.refs(), want)
 	}
 	e.mustScan()
-	if _, err := e.s.RetryDue(context.Background(), 100); err != nil {
+	if _, _, err := e.s.RetryDue(context.Background(), 100, nil); err != nil {
 		t.Fatal(err)
 	}
 	if m := e.onlyMovie(); m.ID != older || e.refs() != want {
@@ -321,7 +321,7 @@ func TestRetriedMatchFolds(t *testing.T) {
 	e.mustScan()
 	*e.clock = e.clock.Add(2 * RetryDelay)
 	e.s.Provider = oneFilm{}
-	if _, err := e.s.RetryDue(context.Background(), 100); err != nil {
+	if _, _, err := e.s.RetryDue(context.Background(), 100, nil); err != nil {
 		t.Fatal(err)
 	}
 	if files, _ := e.files.FilesForItem(e.onlyMovie().ID); len(files) != 2 {
@@ -357,7 +357,7 @@ func TestOnlyOneLibrarysMoviesOfOneIDFold(t *testing.T) {
 	_, err = e.s.Scan(context.Background(), other, nil)
 	must(t, err)
 	e.mustScan()
-	if _, err := e.s.RetryDue(context.Background(), 100); err != nil {
+	if _, _, err := e.s.RetryDue(context.Background(), 100, nil); err != nil {
 		t.Fatal(err)
 	}
 	n, err := e.items.Count(item.Filter{LibraryID: &other.ID, Kind: item.Movie})

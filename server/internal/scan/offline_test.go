@@ -89,18 +89,17 @@ func TestLocalOnlyCallsNoProvider(t *testing.T) {
 	}
 	ctx := context.Background()
 	for _, l := range libs {
-		sum, err := e.s.Scan(ctx, l, nil)
-		if err != nil || sum.LookupFailed != 0 {
-			t.Fatalf("scan %s: %q %v", l.Kind, sum, err)
+		if _, err := e.s.Scan(ctx, l, nil); err != nil {
+			t.Fatalf("scan %s: %v", l.Kind, err)
 		}
-		if _, err := e.s.MatchLibrary(ctx, l); err != nil {
+		if _, _, err := e.s.MatchLibrary(ctx, l, nil); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := e.s.MatchMusic(ctx, l); err != nil {
+		if _, _, err := e.s.MatchMusic(ctx, l, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := e.s.RetryDue(ctx, 100); err != nil {
+	if _, _, err := e.s.RetryDue(ctx, 100, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := e.s.MakeLocal(ctx, nil, nil); err != nil {
@@ -111,7 +110,7 @@ func TestLocalOnlyCallsNoProvider(t *testing.T) {
 	}
 
 	must(t, e.s.Settings.SetSources(serverinfo.Sources{Source: serverinfo.Local, Mode: serverinfo.Preferred}))
-	if _, err := e.s.RetryDue(ctx, 100); err != nil {
+	if _, _, err := e.s.RetryDue(ctx, 100, nil); err != nil {
 		t.Fatal(err)
 	}
 	if n := net.calls.Load(); n < 4 {

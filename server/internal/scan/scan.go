@@ -271,14 +271,16 @@ func walk(root, kind string, exts map[string]bool) ([]candidate, error) {
 }
 
 // Scan brings one library in line with its folders: new and changed files
-// are probed, files it does not see are marked missing or, when gone and
-// spare, deleted (see markMissing), and unmatched items get metadata. It
-// never deletes a title for not being on disk; a volume that is not
-// mounted looks the same. progress, if set, is called with 0 to 1 as files
-// are processed. The Summary is never nil and covers what was done even
-// when an error ends the scan.
+// are probed, and files it does not see are marked missing or, when gone
+// and spare, deleted (see markMissing). It calls no provider and makes no
+// image: looking titles up, art and thumbnails are the Runner's later
+// tasks, which find their work in what Scan stored. It never deletes a
+// title for not being on disk; a volume that is not mounted looks the
+// same. progress, if set, is called with 0 to 1 as files are processed.
+// The Summary is never nil and covers what was done even when an error
+// ends the scan.
 func (s *Scanner) Scan(ctx context.Context, lib *library.Library, progress func(float64)) (*Summary, error) {
-	leaf, exts, sync, match := item.Movie, videoExt, s.syncFile, s.matcher(lib)
+	leaf, exts, sync := item.Movie, videoExt, s.syncFile
 	switch lib.Kind {
 	case library.TV:
 		leaf = item.Episode
@@ -327,10 +329,10 @@ func (s *Scanner) Scan(ctx context.Context, lib *library.Library, progress func(
 	if err := s.reviewLoose(lib, sum); err != nil {
 		return sum, err
 	}
-	failed, err := match(ctx, lib)
-	sum.LookupFailed = failed
-	if err != nil {
-		return sum, err
+	if lib.Kind == library.YouTube {
+		if _, _, err := s.describeChannels(ctx, lib, false, nil); err != nil {
+			return sum, err
+		}
 	}
 	if err := s.foldMovies(lib.ID, sum); err != nil {
 		return sum, err
@@ -338,13 +340,15 @@ func (s *Scanner) Scan(ctx context.Context, lib *library.Library, progress func(
 	return sum, errors.Join(walkErrs...)
 }
 
-// matcher is what looks up a library's items after its scan.
-func (s *Scanner) matcher(lib *library.Library) func(context.Context, *library.Library) (int, error) {
+// matcher is what looks up a library's items in a metadata run.
+func (s *Scanner) matcher(lib *library.Library) func(context.Context, *library.Library, func() bool) (int, bool, error) {
 	switch lib.Kind {
 	case library.Music:
 		return s.MatchMusic
 	case library.YouTube:
-		return s.describeChannels
+		return func(ctx context.Context, lib *library.Library, yield func() bool) (int, bool, error) {
+			return s.describeChannels(ctx, lib, true, yield)
+		}
 	}
 	return s.MatchLibrary
 }
@@ -504,9 +508,8 @@ func (s *Scanner) place(lib *library.Library, f *mediafile.File, itemIDs []uid.I
 	return nil
 }
 
-// probeFile records a file's container, tracks and chapters, and makes its
-// chapter thumbnails. A failure is recorded on the file unless the scan
-// itself was stopped.
+// probeFile records a file's container, tracks and chapters. A failure is
+// recorded on the file unless the scan itself was stopped.
 func (s *Scanner) probeFile(ctx context.Context, f *mediafile.File) error {
 	res, err := s.probe(ctx, f.Path)
 	now := s.Now().UTC()
@@ -531,35 +534,44 @@ func (s *Scanner) probeFile(ctx context.Context, f *mediafile.File) error {
 	if err := s.Files.ReplaceTracks(f.ID, res.Tracks); err != nil {
 		return err
 	}
-	if err := s.Files.ReplaceChapters(f.ID, res.Chapters); err != nil {
-		return err
-	}
-	s.chapterThumbs(ctx, f)
-	return nil
+	return s.Files.ReplaceChapters(f.ID, res.Chapters)
 }
 
-func (s *Scanner) chapterThumbs(ctx context.Context, f *mediafile.File) {
-	if s.ThumbDir == "" {
-		return
-	}
+// chapterThumbs makes the thumbnail of each of f's chapters not yet tried,
+// and returns how many it made. A failure is recorded on its chapter unless
+// the run itself was stopped.
+func (s *Scanner) chapterThumbs(ctx context.Context, f *mediafile.File) (int, error) {
 	chs, err := s.Files.Chapters(f.ID)
 	if err != nil {
-		logstore.Log("scan").Warn("Chapters unreadable", "path", f.Path, "err", err)
-		return
+		return 0, err
 	}
+	made := 0
 	for _, ch := range chs {
+		if ch.ThumbnailTried() {
+			continue
+		}
 		out := filepath.Join(s.ThumbDir, f.ID.String(), strconv.Itoa(ch.Position)+".jpg")
 		tctx, cancel := context.WithTimeout(ctx, runLimit)
 		err := s.Thumb(tctx, f.Path, ch.Position, ch.StartMs, ch.EndMs, out)
 		cancel()
-		if err != nil {
+		switch {
+		case ctx.Err() != nil:
+			return made, ctx.Err()
+		case err != nil:
 			logstore.Log("scan").Warn("Chapter thumbnail failed", "path", f.Path, "chapter", ch.Position, "err", err)
-			continue
+			err = s.Files.ChapterThumbnailFailed(ch.ID)
+		default:
+			made++
+			err = s.Files.SetChapterThumbnail(ch.ID, out)
 		}
-		if err := s.Files.SetChapterThumbnail(ch.ID, out); err != nil {
-			logstore.Log("scan").Warn("Chapter thumbnail not stored", "err", err)
+		// The file's title or library was deleted while its thumbnails were made.
+		if errors.Is(err, db.ErrNotFound) {
+			return made, os.RemoveAll(filepath.Dir(out))
+		} else if err != nil {
+			return made, err
 		}
 	}
+	return made, nil
 }
 
 // resolve finds or creates the items a file belongs to; none means the
@@ -941,23 +953,54 @@ func (s *Scanner) gone(fileID uid.ID) bool {
 	return errors.Is(err, db.ErrNotFound)
 }
 
-// MakePreviews makes seek preview frames for every file that has none.
-// After each file it stops if yield reports another task waiting, and then
-// reports more: the files left are what NeedingPreviews returns next time.
-// A file that fails is recorded and left out until it changes; one that is
-// not on disk is passed over.
+// MakePreviews makes the chapter thumbnails not yet tried of every file,
+// then seek preview frames for every file that has none. After each file it
+// stops if yield reports another task waiting, and then reports more: the
+// files left are what NeedingChapterThumbnails and NeedingPreviews return
+// next time. A file whose previews fail is recorded and left out until it
+// changes, and a chapter whose thumbnail fails until its file is probed
+// again; a file that is not on disk is passed over.
 func (s *Scanner) MakePreviews(ctx context.Context, progress func(float64), yield func() bool) (string, bool, error) {
+	var chaptered []*mediafile.File
+	if s.ThumbDir != "" {
+		var err error
+		if chaptered, err = s.Files.NeedingChapterThumbnails(); err != nil {
+			return "", false, err
+		}
+	}
 	files, err := s.Files.NeedingPreviews()
 	if err != nil {
 		return "", false, err
 	}
-	done, failed, more := 0, 0, false
-	for i, f := range files {
+	steps, step := len(chaptered)+len(files), 0
+	// The first file always gets its turn, so a run that gives way gets on.
+	gaveWay := func() bool {
+		step++
+		return step > 1 && yield != nil && yield()
+	}
+	report := func() {
+		if progress != nil {
+			progress(float64(step) / float64(steps))
+		}
+	}
+	thumbed, done, failed, more := 0, 0, 0, false
+	for _, f := range chaptered {
+		if more = gaveWay(); more {
+			return previewsSummary(thumbed, done, failed, more), more, nil
+		}
+		if fileExists(f.Path) {
+			n, err := s.chapterThumbs(ctx, f)
+			if thumbed += n; err != nil {
+				return "", false, err
+			}
+		}
+		report()
+	}
+	for _, f := range files {
 		if err := ctx.Err(); err != nil {
 			return "", false, err
 		}
-		if i > 0 && yield != nil && yield() {
-			more = true
+		if more = gaveWay(); more {
 			break
 		}
 		if !fileExists(f.Path) {
@@ -982,13 +1025,17 @@ func (s *Scanner) MakePreviews(ctx context.Context, progress func(float64), yiel
 			logstore.Log("scan").Warn("Seek previews failed", "path", f.Path, "err", err)
 		}
 		done++
-		if progress != nil {
-			progress(float64(i+1) / float64(len(files)))
-		}
+		report()
 	}
-	sum := fmt.Sprintf("%d files", done)
-	if done == 1 {
-		sum = "1 file"
+	return previewsSummary(thumbed, done, failed, more), more, nil
+}
+
+// previewsSummary is "2 chapter thumbnails, 3 files, 1 failed, more to do",
+// the thumbnails only when there are some.
+func previewsSummary(thumbed, done, failed int, more bool) string {
+	sum := plural(done, "file")
+	if thumbed > 0 {
+		sum = plural(thumbed, "chapter thumbnail") + ", " + sum
 	}
 	if failed > 0 {
 		sum += fmt.Sprintf(", %d failed", failed)
@@ -996,5 +1043,5 @@ func (s *Scanner) MakePreviews(ctx context.Context, progress func(float64), yiel
 	if more {
 		sum += ", more to do"
 	}
-	return sum, more, nil
+	return sum
 }

@@ -357,6 +357,9 @@ func (s *Scanner) checkIdentities(ctx context.Context, r *run, libraryID uid.ID)
 			}
 			switch {
 			case st.stamp != was:
+				if r.gaveWay() {
+					return nil
+				}
 				err = s.fetchAs(ctx, r, it, nil, true)
 			case reviewed[it.ID]:
 				err = s.agreed(it.ID)

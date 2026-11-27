@@ -307,9 +307,9 @@ func TestStationEvents(t *testing.T) {
 func TestPlaylistEventsReachTheOwnerAndThoseSharedWith(t *testing.T) {
 	e := newEnv(t)
 	e.quiet()
-	claire := e.householdAdult(e.plain, "Claire", "claire@example.test")
+	joan := e.householdAdult(e.plain, "Joan", "joan@example.test")
 	film := e.movie(e.library("movies"), "Heat")
-	mine, hers := e.cursor(e.plain.token), e.cursor(claire.Token)
+	mine, hers := e.cursor(e.plain.token), e.cursor(joan.Token)
 	base := "/profiles/" + itoa(e.plain.account.ID) + "/playlists"
 	playlist := func(got []api.Event, id uid.ID) bool {
 		return len(got) > 0 && is(got[0], api.EventKindPlaylist, "") && *got[0].PlaylistId == id
@@ -330,16 +330,16 @@ func TestPlaylistEventsReachTheOwnerAndThoseSharedWith(t *testing.T) {
 	if got := e.heard(e.plain.token, &mine); len(got) != 0 {
 		t.Fatalf("a refused change: %+v", got)
 	}
-	if got := e.heard(claire.Token, &hers); len(got) != 0 {
+	if got := e.heard(joan.Token, &hers); len(got) != 0 {
 		t.Fatalf("an unshared playlist reached another adult: %+v", got)
 	}
 
-	e.expect(201, "POST", one+"/shares", e.plain.token, map[string]any{"profileId": claire.Me.Account.Id, "access": "read"}, nil)
-	if got := e.heard(claire.Token, &hers); !playlist(got, pl.Id) {
+	e.expect(201, "POST", one+"/shares", e.plain.token, map[string]any{"profileId": joan.Me.Account.Id, "access": "read"}, nil)
+	if got := e.heard(joan.Token, &hers); !playlist(got, pl.Id) {
 		t.Fatalf("shared: %+v", got)
 	}
-	e.expect(204, "DELETE", one+"/shares/"+itoa(claire.Me.Account.Id), e.plain.token, nil, nil)
-	if got := e.heard(claire.Token, &hers); !playlist(got, pl.Id) {
+	e.expect(204, "DELETE", one+"/shares/"+itoa(joan.Me.Account.Id), e.plain.token, nil, nil)
+	if got := e.heard(joan.Token, &hers); !playlist(got, pl.Id) {
 		t.Fatalf("unshared: %+v", got)
 	}
 	e.heard(e.plain.token, &mine)
@@ -348,7 +348,7 @@ func TestPlaylistEventsReachTheOwnerAndThoseSharedWith(t *testing.T) {
 		t.Fatalf("deleted: %+v", got)
 	}
 	// With it may go stations that played it, which anyone may have seen.
-	if got := e.heard(claire.Token, &hers); len(got) != 1 || !is(got[0], api.EventKindStation, "") || got[0].StationId != nil {
+	if got := e.heard(joan.Token, &hers); len(got) != 1 || !is(got[0], api.EventKindStation, "") || got[0].StationId != nil {
 		t.Fatalf("no longer hers to hear of: %+v", got)
 	}
 }
@@ -357,24 +357,24 @@ func TestWatchTogetherEvents(t *testing.T) {
 	p := newPair(t)
 	e := p.e
 	e.quiet()
-	hers, mine := e.cursor(p.claire), e.cursor(p.heidi)
-	w := p.open(p.heidi, p.movie)
-	got := e.heard(p.claire, &hers)
+	hers, mine := e.cursor(p.joan), e.cursor(p.helga)
+	w := p.open(p.helga, p.movie)
+	got := e.heard(p.joan, &hers)
 	if len(got) != 1 || !is(got[0], api.EventKindWatchTogether, live.Opened) || *got[0].WatchTogetherId != w.Id || *got[0].ItemId != p.movie ||
 		got[0].SessionId != nil {
 		t.Fatalf("the invitation: %+v", got)
 	}
-	e.heard(p.heidi, &mine)
-	e.expect(200, "POST", togetherPath(w)+"/join", p.claire, nil, nil)
-	if got = e.heard(p.heidi, &mine); len(got) != 1 || !is(got[0], api.EventKindWatchTogether, live.Joined) {
+	e.heard(p.helga, &mine)
+	e.expect(200, "POST", togetherPath(w)+"/join", p.joan, nil, nil)
+	if got = e.heard(p.helga, &mine); len(got) != 1 || !is(got[0], api.EventKindWatchTogether, live.Joined) {
 		t.Fatalf("joined: %+v", got)
 	}
-	p.state(200, p.claire, w, true, 0)
-	if got = e.heard(p.heidi, &mine); len(got) != 0 {
+	p.state(200, p.joan, w, true, 0)
+	if got = e.heard(p.helga, &mine); len(got) != 0 {
 		t.Fatalf("play is the held poll's to tell: %+v", got)
 	}
-	e.expect(204, "DELETE", togetherPath(w), p.claire, nil, nil)
-	if got = e.heard(p.heidi, &mine); len(got) != 1 || !is(got[0], api.EventKindWatchTogether, live.Ended) {
+	e.expect(204, "DELETE", togetherPath(w), p.joan, nil, nil)
+	if got = e.heard(p.helga, &mine); len(got) != 1 || !is(got[0], api.EventKindWatchTogether, live.Ended) {
 		t.Fatalf("ended: %+v", got)
 	}
 }

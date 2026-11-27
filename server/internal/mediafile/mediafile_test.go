@@ -218,6 +218,51 @@ func TestChapters(t *testing.T) {
 	}
 }
 
+// A file needs chapter thumbnails while a chapter's was neither made nor
+// failed since the file's chapters were last stored, whether or not the
+// file is probed again.
+func TestNeedingChapterThumbnails(t *testing.T) {
+	r, _, it := setup(t)
+	probed := time.Now().UTC()
+	f := &mediafile.File{ItemID: &it, Path: "/m/a.mkv", ProbedAt: &probed}
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	must(r.CreateFile(f))
+	must(r.UpdateFile(f))
+	need := func() int {
+		t.Helper()
+		fs, err := r.NeedingChapterThumbnails()
+		must(err)
+		return len(fs)
+	}
+	if need() != 0 {
+		t.Fatal("a file without chapters")
+	}
+	cs := []*mediafile.Chapter{{Position: 0, EndMs: 1000}, {Position: 1, StartMs: 1000, EndMs: 2000}}
+	must(r.ReplaceChapters(f.ID, cs))
+	must(r.SetChapterThumbnail(cs[0].ID, "/cache/c0.jpg"))
+	if need() != 1 {
+		t.Fatal("one chapter untried")
+	}
+	must(r.ChapterThumbnailFailed(cs[1].ID))
+	got, _ := r.Chapters(f.ID)
+	if need() != 0 || !got[0].ThumbnailTried() || !got[1].ThumbnailTried() || got[1].ThumbnailPath != "" {
+		t.Fatalf("both tried: %+v", got)
+	}
+	must(r.ReplaceChapters(f.ID, []*mediafile.Chapter{{Position: 0, EndMs: 1000}}))
+	if got, _ := r.Chapters(f.ID); need() != 1 || got[0].ThumbnailTried() {
+		t.Fatalf("chapters stored again are untried: %+v", got)
+	}
+	must(r.SetMissing(f, &probed))
+	if need() != 0 {
+		t.Fatal("a missing file")
+	}
+}
+
 // made gives a file seek preview frames and a chapter thumbnail on disk
 // under the data folder root, as the scan does, and returns the preview and
 // thumbnail folders.

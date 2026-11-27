@@ -11,22 +11,22 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/watchstate"
 )
 
-// pair is two adults of one household on their own devices, Heidi first
-// (the household owner) and Claire, with a movie to watch together.
+// pair is two adults of one household on their own devices, Helga first
+// (the household owner) and Joan, with a movie to watch together.
 type pair struct {
-	e             *env
-	heidi, claire string
-	lib, movie    uid.ID
-	move          func(time.Duration)
+	e           *env
+	helga, joan string
+	lib, movie  uid.ID
+	move        func(time.Duration)
 }
 
 func newPair(t *testing.T) pair {
 	e := newEnv(t)
 	now := time.Now().UTC().Truncate(time.Second)
 	e.svc.Together.Now = func() time.Time { return now }
-	claire := e.householdAdult(e.plain, "Claire", "claire@example.test")
+	joan := e.householdAdult(e.plain, "Joan", "joan@example.test")
 	lib := e.library("movies")
-	return pair{e, e.plain.token, claire.Token, lib, e.movie(lib, "Heat"), func(d time.Duration) { now = now.Add(d) }}
+	return pair{e, e.plain.token, joan.Token, lib, e.movie(lib, "Heat"), func(d time.Duration) { now = now.Add(d) }}
 }
 
 func (p pair) open(token string, item uid.ID) api.WatchTogether {
@@ -66,75 +66,75 @@ func togetherPath(w api.WatchTogether) string { return "/watch-together/" + itoa
 func TestWatchTogetherTwoClients(t *testing.T) {
 	p := newPair(t)
 	e := p.e
-	w := p.open(p.heidi, p.movie)
+	w := p.open(p.helga, p.movie)
 	if w.Status != api.Waiting || w.ItemId != p.movie || len(w.Members) != 1 || w.Members[0].Role != api.Host ||
 		w.Members[0].AccountId != e.plain.account.ID || w.Members[0].DeviceName != "Laptop" || w.Members[0].Platform != api.Web ||
 		!w.Members[0].Present || w.JoinMsLeft != 300_000 || w.Playing || w.PositionMs != 0 || w.Version != 1 ||
 		!w.JoinBy.Equal(w.OpenedAt.Add(5*time.Minute)) || w.EndedAt != nil {
 		t.Fatalf("opened %+v", w)
 	}
-	e.expect(409, "POST", togetherPath(w)+"/join", p.heidi, nil, nil)
-	p.state(409, p.heidi, w, true, 0)
+	e.expect(409, "POST", togetherPath(w)+"/join", p.helga, nil, nil)
+	p.state(409, p.helga, w, true, 0)
 
 	p.move(48 * time.Second)
-	got := p.list(p.claire, p.movie)
+	got := p.list(p.joan, p.movie)
 	if len(got) != 1 || got[0].Id != w.Id || got[0].JoinMsLeft != 252_000 || got[0].Members[0].Name != e.plain.account.Name {
-		t.Fatalf("Join Heidi · 4:12: %+v", got)
+		t.Fatalf("Join Helga · 4:12: %+v", got)
 	}
-	if other := p.list(p.claire, e.movie(p.lib, "Ran")); len(other) != 0 {
+	if other := p.list(p.joan, e.movie(p.lib, "Ran")); len(other) != 0 {
 		t.Fatalf("another title lists none: %+v", other)
 	}
-	if g := p.poll(p.claire, w); len(g.Members) != 1 || g.Version != 1 {
+	if g := p.poll(p.joan, w); len(g.Members) != 1 || g.Version != 1 {
 		t.Fatalf("a household adult reads it before joining: %+v", g)
 	}
 
 	var joined api.WatchTogether
-	e.expect(200, "POST", togetherPath(w)+"/join", p.claire, nil, &joined)
-	if joined.Status != api.Joined || len(joined.Members) != 2 || joined.Members[1].Role != api.Guest || joined.Members[1].Name != "Claire" ||
+	e.expect(200, "POST", togetherPath(w)+"/join", p.joan, nil, &joined)
+	if joined.Status != api.Joined || len(joined.Members) != 2 || joined.Members[1].Role != api.Guest || joined.Members[1].Name != "Joan" ||
 		joined.Version != 2 || joined.JoinMsLeft != 0 {
 		t.Fatalf("joined %+v", joined)
 	}
-	e.expect(409, "POST", togetherPath(w)+"/join", p.claire, nil, nil)
+	e.expect(409, "POST", togetherPath(w)+"/join", p.joan, nil, nil)
 
-	if s := p.state(200, p.claire, w, true, 0); !s.Playing || s.Version != 3 || s.PausedById != nil ||
+	if s := p.state(200, p.joan, w, true, 0); !s.Playing || s.Version != 3 || s.PausedById != nil ||
 		s.EffectiveAtMs != s.ServerTimeMs+1000 || s.EffectivePositionMs != 0 {
 		t.Fatalf("play %+v", s)
 	}
 	p.move(11 * time.Second)
-	if s := p.poll(p.heidi, w); !s.Playing || s.PositionMs != 10_000 || !s.ServerTime.After(w.ServerTime) {
+	if s := p.poll(p.helga, w); !s.Playing || s.PositionMs != 10_000 || !s.ServerTime.After(w.ServerTime) {
 		t.Fatalf("the shared position advances while playing: %+v", s)
 	}
-	s := p.state(200, p.heidi, w, false, 10_700)
+	s := p.state(200, p.helga, w, false, 10_700)
 	if s.Playing || s.PositionMs != 10_700 || s.Version != 4 || s.PausedById == nil || *s.PausedById != e.plain.account.ID ||
 		s.PausedByName == nil || *s.PausedByName != e.plain.account.Name {
-		t.Fatalf("Heidi paused: %+v", s)
+		t.Fatalf("Helga paused: %+v", s)
 	}
 	p.move(5 * time.Second)
-	if s := p.poll(p.claire, w); s.PositionMs != 10_700 || s.Playing {
+	if s := p.poll(p.joan, w); s.PositionMs != 10_700 || s.Playing {
 		t.Fatalf("paused holds still: %+v", s)
 	}
-	if s := p.state(200, p.claire, w, false, 60_000); s.PositionMs != 60_000 || s.Version != 5 || *s.PausedById != e.plain.account.ID {
+	if s := p.state(200, p.joan, w, false, 60_000); s.PositionMs != 60_000 || s.Version != 5 || *s.PausedById != e.plain.account.ID {
 		t.Fatalf("a seek while paused keeps who paused: %+v", s)
 	}
-	if s := p.state(200, p.claire, w, true, 60_000); !s.Playing || s.Version != 6 || s.PausedById != nil || s.PausedByName != nil {
+	if s := p.state(200, p.joan, w, true, 60_000); !s.Playing || s.Version != 6 || s.PausedById != nil || s.PausedByName != nil {
 		t.Fatalf("Play resumes for both: %+v", s)
 	}
 
 	p.move(31 * time.Second)
-	s = p.poll(p.heidi, w)
+	s = p.poll(p.helga, w)
 	if s.PositionMs != 90_000 || !s.Members[0].Present || s.Members[1].Present {
-		t.Fatalf("Claire unseen for 31 s is not present: %+v", s)
+		t.Fatalf("Joan unseen for 31 s is not present: %+v", s)
 	}
 
-	e.expect(204, "DELETE", togetherPath(w), p.heidi, nil, nil)
-	s = p.poll(p.claire, w)
+	e.expect(204, "DELETE", togetherPath(w), p.helga, nil, nil)
+	s = p.poll(p.joan, w)
 	if s.Status != api.Ended || s.EndedAt == nil || s.Version != 7 || s.PositionMs != 90_000 {
 		t.Fatalf("Leave ends it for both: %+v", s)
 	}
-	p.state(409, p.claire, w, false, 90_000)
-	e.expect(409, "POST", togetherPath(w)+"/join", p.claire, nil, nil)
-	e.expect(204, "DELETE", togetherPath(w), p.claire, nil, nil)
-	if l := p.list(p.claire, p.movie); len(l) != 0 {
+	p.state(409, p.joan, w, false, 90_000)
+	e.expect(409, "POST", togetherPath(w)+"/join", p.joan, nil, nil)
+	e.expect(204, "DELETE", togetherPath(w), p.joan, nil, nil)
+	if l := p.list(p.joan, p.movie); len(l) != 0 {
 		t.Fatalf("ended ones are not listed: %+v", l)
 	}
 }
@@ -144,7 +144,7 @@ func TestWatchTogetherTwoClients(t *testing.T) {
 func TestWatchTogetherPushesEachChange(t *testing.T) {
 	p := newPair(t)
 	e := p.e
-	w := p.open(p.heidi, p.movie)
+	w := p.open(p.helga, p.movie)
 	e.svc.Together.Hold = 5 * time.Second
 	wait := func(token string, after int) chan api.WatchTogether {
 		out := make(chan api.WatchTogether, 1)
@@ -155,17 +155,17 @@ func TestWatchTogetherPushesEachChange(t *testing.T) {
 		}()
 		return out
 	}
-	host := wait(p.heidi, w.Version)
+	host := wait(p.helga, w.Version)
 	time.Sleep(50 * time.Millisecond)
-	e.expect(200, "POST", togetherPath(w)+"/join", p.claire, nil, nil)
+	e.expect(200, "POST", togetherPath(w)+"/join", p.joan, nil, nil)
 	if s := <-host; s.Status != api.Joined || s.Version != 2 {
 		t.Fatalf("the host hears the join: %+v", s)
 	}
 
-	host, guest := wait(p.heidi, 2), wait(p.claire, 2)
+	host, guest := wait(p.helga, 2), wait(p.joan, 2)
 	time.Sleep(50 * time.Millisecond)
 	began := time.Now()
-	played := p.state(200, p.heidi, w, true, 0)
+	played := p.state(200, p.helga, w, true, 0)
 	for _, ch := range []chan api.WatchTogether{host, guest} {
 		s := <-ch
 		if s.Version != 3 || !s.Playing || s.EffectiveAtMs != played.EffectiveAtMs || s.EffectivePositionMs != 0 ||
@@ -178,7 +178,7 @@ func TestWatchTogetherPushesEachChange(t *testing.T) {
 	}
 
 	e.svc.Together.Hold = 50 * time.Millisecond
-	if s := <-wait(p.claire, 3); s.Version != 3 || !s.Members[1].Present {
+	if s := <-wait(p.joan, 3); s.Version != 3 || !s.Members[1].Present {
 		t.Fatalf("an unchanged state answers when the hold runs out: %+v", s)
 	}
 }
@@ -187,39 +187,39 @@ func TestWatchTogetherWindowAndQuiet(t *testing.T) {
 	p := newPair(t)
 	e := p.e
 
-	w := p.open(p.heidi, p.movie)
+	w := p.open(p.helga, p.movie)
 	for range 5 {
 		p.move(50 * time.Second)
-		p.poll(p.heidi, w)
+		p.poll(p.helga, w)
 	}
 	p.move(50 * time.Second)
-	if s := p.poll(p.heidi, w); s.Status != api.Ended || !s.EndedAt.Equal(s.JoinBy) || s.JoinMsLeft != 0 {
+	if s := p.poll(p.helga, w); s.Status != api.Ended || !s.EndedAt.Equal(s.JoinBy) || s.JoinMsLeft != 0 {
 		t.Fatalf("the window passed unjoined: %+v", s)
 	}
-	e.expect(409, "POST", togetherPath(w)+"/join", p.claire, nil, nil)
+	e.expect(409, "POST", togetherPath(w)+"/join", p.joan, nil, nil)
 
-	w = p.open(p.heidi, p.movie)
-	e.expect(200, "POST", togetherPath(w)+"/join", p.claire, nil, nil)
+	w = p.open(p.helga, p.movie)
+	e.expect(200, "POST", togetherPath(w)+"/join", p.joan, nil, nil)
 	for range 10 {
 		p.move(30 * time.Second)
-		if s := p.poll(p.heidi, w); s.Status != api.Joined {
+		if s := p.poll(p.helga, w); s.Status != api.Joined {
 			t.Fatalf("one side polling keeps it: %+v", s)
 		}
 	}
 	p.move(time.Minute)
-	if s := p.poll(p.claire, w); s.Status != api.Ended {
+	if s := p.poll(p.joan, w); s.Status != api.Ended {
 		t.Fatalf("no poll for 60 s ends it: %+v", s)
 	}
 
-	w = p.open(p.heidi, p.movie)
+	w = p.open(p.helga, p.movie)
 	p.move(30 * time.Second)
-	next := p.open(p.heidi, p.movie)
-	if s := p.poll(p.heidi, w); s.Status != api.Ended {
+	next := p.open(p.helga, p.movie)
+	if s := p.poll(p.helga, w); s.Status != api.Ended {
 		t.Fatalf("opening another ends the previous: %+v", s)
 	}
-	mine := p.open(p.claire, e.movie(p.lib, "Ran"))
-	e.expect(200, "POST", togetherPath(next)+"/join", p.claire, nil, nil)
-	if s := p.poll(p.claire, mine); s.Status != api.Ended {
+	mine := p.open(p.joan, e.movie(p.lib, "Ran"))
+	e.expect(200, "POST", togetherPath(next)+"/join", p.joan, nil, nil)
+	if s := p.poll(p.joan, mine); s.Status != api.Ended {
 		t.Fatalf("joining ends the one the guest hosted: %+v", s)
 	}
 }
@@ -231,21 +231,21 @@ func TestWatchTogetherWhoMayTakePart(t *testing.T) {
 	tb := e.youtubeLibrary()
 	show, ep := e.show(e.library("tv"), "Sitcom", "TV-PG")
 
-	e.expect(400, "POST", "/watch-together", p.heidi, map[string]any{"itemId": show}, nil)
-	e.expect(400, "POST", "/watch-together", p.heidi, map[string]any{"itemId": tb.channel}, nil)
-	e.expect(404, "POST", "/watch-together", p.heidi, map[string]any{"itemId": uid.N(999_999)}, nil)
-	p.open(p.heidi, ep)
-	video := p.open(p.heidi, tb.newer)
+	e.expect(400, "POST", "/watch-together", p.helga, map[string]any{"itemId": show}, nil)
+	e.expect(400, "POST", "/watch-together", p.helga, map[string]any{"itemId": tb.channel}, nil)
+	e.expect(404, "POST", "/watch-together", p.helga, map[string]any{"itemId": uid.N(999_999)}, nil)
+	p.open(p.helga, ep)
+	video := p.open(p.helga, tb.newer)
 
-	w := p.open(p.heidi, p.movie)
+	w := p.open(p.helga, p.movie)
 	if l := p.list(bea, p.movie); len(l) != 1 {
 		t.Fatalf("a third adult sees it waiting: %+v", l)
 	}
-	e.expect(200, "POST", togetherPath(w)+"/join", p.claire, nil, nil)
+	e.expect(200, "POST", togetherPath(w)+"/join", p.joan, nil, nil)
 	if l := p.list(bea, p.movie); len(l) != 0 {
 		t.Fatalf("a third adult does not see a joined one: %+v", l)
 	}
-	if l := p.list(p.claire); len(l) != 1 || l[0].Id != w.Id {
+	if l := p.list(p.joan); len(l) != 1 || l[0].Id != w.Id {
 		t.Fatalf("a member sees theirs: %+v", l)
 	}
 	e.expect(409, "POST", togetherPath(w)+"/join", bea, nil, nil)
@@ -254,7 +254,7 @@ func TestWatchTogetherWhoMayTakePart(t *testing.T) {
 	if s := p.poll(bea, w); s.Version != 2 {
 		t.Fatalf("an outsider's poll changes nothing: %+v", s)
 	}
-	if s := p.poll(p.heidi, video); s.Status != api.Ended {
+	if s := p.poll(p.helga, video); s.Status != api.Ended {
 		t.Fatalf("one open per adult: %+v", s)
 	}
 
@@ -268,7 +268,7 @@ func TestWatchTogetherWhoMayTakePart(t *testing.T) {
 		t.Fatalf("another household lists %+v", l)
 	}
 
-	e.expect(404, "GET", "/watch-together/"+uid.N(999_999).String(), p.heidi, nil, nil)
+	e.expect(404, "GET", "/watch-together/"+uid.N(999_999).String(), p.helga, nil, nil)
 }
 
 // A Watch together reaches beyond the household those who see its opener:
@@ -281,7 +281,7 @@ func TestWatchTogetherReachesWhoSeesItsOpener(t *testing.T) {
 	tv, _ := e.secondDevice(e.admin, "TV", "roku")
 	e.expect(201, "POST", "/adult-links", admin, map[string]any{"accountId": e.plain.account.ID, "otherAccountId": e.admin.account.ID}, nil)
 	c := e.cursor(admin)
-	w := p.open(p.heidi, p.movie)
+	w := p.open(p.helga, p.movie)
 	if evs := e.heard(admin, &c); !slices.ContainsFunc(evs, func(ev api.Event) bool { return is(ev, api.EventKindWatchTogether, "opened") }) {
 		t.Fatalf("a linked adult does not hear of it: %+v", evs)
 	}
@@ -307,7 +307,7 @@ func TestWatchTogetherReachesWhoSeesItsOpener(t *testing.T) {
 	k := e.kid(e.plain, "Mia")
 	e.putIn(k.Id, e.admin.household)
 	e.rate(p.movie, "G")
-	w = p.open(p.heidi, p.movie)
+	w = p.open(p.helga, p.movie)
 	if l := p.list(e.kidDevice(e.admin, k.Id)); len(l) != 1 || l[0].Id != w.Id {
 		t.Fatalf("a shared kid lists %+v", l)
 	}
@@ -319,13 +319,13 @@ func TestWatchTogetherReachesWhoSeesItsOpener(t *testing.T) {
 func TestWatchTogetherWithKids(t *testing.T) {
 	e := newEnv(t)
 	c := e.catalog()
-	p := pair{e: e, heidi: e.plain.token, claire: e.householdAdult(e.plain, "Claire", "claire@example.test").Token}
+	p := pair{e: e, helga: e.plain.token, joan: e.householdAdult(e.plain, "Joan", "joan@example.test").Token}
 	tb := e.youtubeLibrary()
 	rated := e.kid(e.plain, "Rae")
 	var listed api.Account
-	e.expect(201, "POST", "/profiles", p.heidi, map[string]any{"name": "Lee", "birthday": "2018-05-01", "filterMode": "allow_list"}, &listed)
+	e.expect(201, "POST", "/profiles", p.helga, map[string]any{"name": "Lee", "birthday": "2018-05-01", "filterMode": "allow_list"}, &listed)
 	for _, id := range []uid.ID{c.r, c.pg} {
-		e.expect(204, "PUT", "/profiles/"+itoa(listed.Id)+"/allowed-items/"+itoa(id), p.heidi, nil, nil)
+		e.expect(204, "PUT", "/profiles/"+itoa(listed.Id)+"/allowed-items/"+itoa(id), p.helga, nil, nil)
 	}
 	rae, lee := e.kidDevice(e.plain, rated.Id), e.kidDevice(e.plain, listed.Id)
 	join := func(want int, token string, w api.WatchTogether) api.WatchTogether {
@@ -351,7 +351,7 @@ func TestWatchTogetherWithKids(t *testing.T) {
 		join(404, token, w)
 		p.state(404, token, w, true, 0)
 		e.expect(404, "DELETE", togetherPath(w), token, nil, nil)
-		if s := p.poll(p.claire, w); s.Status != api.Waiting || s.Version != w.Version || len(s.Members) != 1 {
+		if s := p.poll(p.joan, w); s.Status != api.Waiting || s.Version != w.Version || len(s.Members) != 1 {
 			t.Fatalf("it stands as it was: %+v", s)
 		}
 	}
@@ -361,10 +361,10 @@ func TestWatchTogetherWithKids(t *testing.T) {
 	if w.Members[0].AccountId != rated.Id || w.Members[0].Name != "Rae" || w.Members[0].DeviceName != "Tablet" {
 		t.Fatalf("the kid hosts: %+v", w)
 	}
-	if l := p.list(p.heidi, c.pg); len(l) != 1 || l[0].Id != w.Id {
+	if l := p.list(p.helga, c.pg); len(l) != 1 || l[0].Id != w.Id {
 		t.Fatalf("an adult sees a kid's waiting: %+v", l)
 	}
-	join(200, p.heidi, w)
+	join(200, p.helga, w)
 	p.state(200, rae, w, true, 0)
 	if s := p.state(200, rae, w, false, 5_000); s.PausedById == nil || *s.PausedById != rated.Id || *s.PausedByName != "Rae" {
 		t.Fatalf("the kid paused: %+v", s)
@@ -376,7 +376,7 @@ func TestWatchTogetherWithKids(t *testing.T) {
 	p.open(rae, c.kidEp)
 
 	// A kid joins one an adult opened on a title the kid may see.
-	w = p.open(p.heidi, c.g)
+	w = p.open(p.helga, c.g)
 	if l := p.list(rae); len(l) != 2 || l[0].Id != w.Id || l[0].Members[0].Name != e.plain.account.Name {
 		t.Fatalf("a kid sees it waiting, above their own: %+v", l)
 	}
@@ -390,49 +390,49 @@ func TestWatchTogetherWithKids(t *testing.T) {
 
 	// An adult's title above a kid's ceilings is not there for that kid,
 	// and is for the kid whose allow list holds it.
-	w = p.open(p.claire, c.r)
+	w = p.open(p.joan, c.r)
 	hidden(rae, w)
 	if l := p.list(lee, c.r); len(l) != 1 || l[0].Id != w.Id {
 		t.Fatalf("on the allow list: %+v", l)
 	}
 	join(200, lee, w)
-	p.state(403, rae, p.open(p.claire, c.pg), true, 0)
+	p.state(403, rae, p.open(p.joan, c.pg), true, 0)
 
 	// An allow list is only what is on it, whatever the rating.
 	refused(lee, c.g)
-	hidden(lee, p.open(p.claire, c.g))
-	hidden(lee, p.open(p.claire, c.kidEp))
+	hidden(lee, p.open(p.joan, c.g))
+	hidden(lee, p.open(p.joan, c.kidEp))
 	w = p.open(lee, c.pg)
 	if s := join(200, rae, w); s.Members[0].Name != "Lee" || s.Members[1].Name != "Rae" {
 		t.Fatalf("two kids: %+v", s)
 	}
 
 	// A video follows its channel: on the allow list, or marked for kids.
-	e.expect(204, "PUT", "/profiles/"+itoa(listed.Id)+"/allowed-items/"+itoa(tb.channel), p.heidi, nil, nil)
-	w = p.open(p.claire, tb.newer)
+	e.expect(204, "PUT", "/profiles/"+itoa(listed.Id)+"/allowed-items/"+itoa(tb.channel), p.helga, nil, nil)
+	w = p.open(p.joan, tb.newer)
 	hidden(rae, w)
 	join(200, lee, w)
-	e.expect(200, "PUT", "/youtube/channels/"+itoa(tb.channel)+"/for-kids", p.heidi, map[string]any{"forKids": true}, nil)
-	e.expect(204, "DELETE", "/profiles/"+itoa(listed.Id)+"/allowed-items/"+itoa(tb.channel), p.heidi, nil, nil)
+	e.expect(200, "PUT", "/youtube/channels/"+itoa(tb.channel)+"/for-kids", p.helga, map[string]any{"forKids": true}, nil)
+	e.expect(204, "DELETE", "/profiles/"+itoa(listed.Id)+"/allowed-items/"+itoa(tb.channel), p.helga, nil, nil)
 	w = p.open(rae, tb.older)
 	hidden(lee, w)
 	refused(lee, tb.older)
-	join(200, p.claire, w)
+	join(200, p.joan, w)
 
 	// A member who may no longer see the title has left.
 	w = p.open(rae, c.pg)
-	join(200, p.heidi, w)
+	join(200, p.helga, w)
 	e.rate(c.pg, "R")
 	e.expect(404, "GET", togetherPath(w), rae, nil, nil)
-	if s := p.poll(p.heidi, w); s.Status != api.Ended {
+	if s := p.poll(p.helga, w); s.Status != api.Ended {
 		t.Fatalf("it ended for the adult left: %+v", s)
 	}
 
 	// A deleted kid has left.
 	w = p.open(lee, c.pg)
-	join(200, p.heidi, w)
-	e.expect(204, "DELETE", "/profiles/"+itoa(listed.Id), p.heidi, nil, nil)
-	if s := p.poll(p.heidi, w); s.Status != api.Ended {
+	join(200, p.helga, w)
+	e.expect(204, "DELETE", "/profiles/"+itoa(listed.Id), p.helga, nil, nil)
+	if s := p.poll(p.helga, w); s.Status != api.Ended {
 		t.Fatalf("a deleted kid leaves it: %+v", s)
 	}
 }
@@ -457,14 +457,14 @@ func TestWatchTogetherRaces(t *testing.T) {
 	}
 
 	// Two adults press Join at once: one gets in.
-	w := p.open(p.heidi, p.movie)
+	w := p.open(p.helga, p.movie)
 	joins := race(
-		func() int { c, _ := e.do("POST", togetherPath(w)+"/join", p.claire, nil, nil); return c },
+		func() int { c, _ := e.do("POST", togetherPath(w)+"/join", p.joan, nil, nil); return c },
 		func() int { c, _ := e.do("POST", togetherPath(w)+"/join", bea, nil, nil); return c })
 	if joins[0]+joins[1] != 200+409 || joins[0] != 200 && joins[0] != 409 {
 		t.Fatalf("joins %v", joins)
 	}
-	guest := p.claire
+	guest := p.joan
 	if joins[1] == 200 {
 		guest = bea
 	}
@@ -472,17 +472,17 @@ func TestWatchTogetherRaces(t *testing.T) {
 	p.move(20 * time.Second)
 
 	// Both press pause a moment apart: one pause, one version step.
-	before := p.poll(p.heidi, w).Version
+	before := p.poll(p.helga, w).Version
 	pauses := race(
 		func() int {
-			c, _ := e.do("PUT", togetherPath(w)+"/state", p.heidi, stateBody(false, 20_100), nil)
+			c, _ := e.do("PUT", togetherPath(w)+"/state", p.helga, stateBody(false, 20_100), nil)
 			return c
 		},
 		func() int {
 			c, _ := e.do("PUT", togetherPath(w)+"/state", guest, stateBody(false, 19_900), nil)
 			return c
 		})
-	s := p.poll(p.heidi, w)
+	s := p.poll(p.helga, w)
 	if pauses[0] != 200 || pauses[1] != 200 || s.Playing || s.Version != before+1 || s.PausedById == nil ||
 		(s.PositionMs != 20_100 && s.PositionMs != 19_900) {
 		t.Fatalf("both paused: %v %+v", pauses, s)
@@ -495,7 +495,7 @@ func TestWatchTogetherRaces(t *testing.T) {
 			c, _ := e.do("PUT", togetherPath(w)+"/state", guest, stateBody(false, 600_000), nil)
 			return c
 		},
-		func() int { c, _ := e.do("DELETE", togetherPath(w), p.heidi, nil, nil); return c })
+		func() int { c, _ := e.do("DELETE", togetherPath(w), p.helga, nil, nil); return c })
 	s = p.poll(guest, w)
 	if outcome[1] != 204 || s.Status != api.Ended {
 		t.Fatalf("leave mid-seek: %v %+v", outcome, s)
@@ -529,37 +529,37 @@ func TestWatchTogetherBesidePlayback(t *testing.T) {
 	dan := e.householdAdult(e.plain, "Dan", "dan@example.test")
 	file(m)
 	file(other)
-	w := p.open(p.claire, m)
-	e.expect(200, "POST", togetherPath(w)+"/join", p.heidi, nil, nil)
-	p.state(200, p.heidi, w, true, 0)
+	w := p.open(p.joan, m)
+	e.expect(200, "POST", togetherPath(w)+"/join", p.helga, nil, nil)
+	p.state(200, p.helga, w, true, 0)
 	e.start(m, snapshot())
-	if s := p.poll(p.claire, w); s.Status != api.Joined {
+	if s := p.poll(p.joan, w); s.Status != api.Joined {
 		t.Fatalf("playing the title keeps it: %+v", s)
 	}
 	e.start(other, snapshot())
-	if s := p.poll(p.claire, w); s.Status != api.Ended {
+	if s := p.poll(p.joan, w); s.Status != api.Ended {
 		t.Fatalf("playing another title leaves it: %+v", s)
 	}
 
-	w = p.open(p.claire, m)
-	e.expect(200, "POST", togetherPath(w)+"/join", p.heidi, nil, nil)
-	e.expect(204, "POST", "/auth/sign-out", p.heidi, nil, nil)
-	if s := p.poll(p.claire, w); s.Status != api.Ended {
+	w = p.open(p.joan, m)
+	e.expect(200, "POST", togetherPath(w)+"/join", p.helga, nil, nil)
+	e.expect(204, "POST", "/auth/sign-out", p.helga, nil, nil)
+	if s := p.poll(p.joan, w); s.Status != api.Ended {
 		t.Fatalf("signing out leaves it: %+v", s)
 	}
 
 	// Revoking an adult's account revokes their devices, which leave.
-	w = p.open(p.claire, m)
+	w = p.open(p.joan, m)
 	e.expect(200, "POST", togetherPath(w)+"/join", bea.Token, nil, nil)
 	e.expect(200, "PUT", "/accounts/"+itoa(bea.Me.Account.Id), e.admin.token, map[string]any{"kind": "adult", "name": "Bea",
 		"email": "bea@example.test", "revoked": true}, nil)
-	if s := p.poll(p.claire, w); s.Status != api.Ended {
+	if s := p.poll(p.joan, w); s.Status != api.Ended {
 		t.Fatalf("a revoked account leaves it: %+v", s)
 	}
-	w = p.open(p.claire, m)
+	w = p.open(p.joan, m)
 	e.expect(200, "POST", togetherPath(w)+"/join", dan.Token, nil, nil)
 	e.expect(204, "DELETE", "/accounts/"+itoa(dan.Me.Account.Id), e.admin.token, nil, nil)
-	if s := p.poll(p.claire, w); s.Status != api.Ended {
+	if s := p.poll(p.joan, w); s.Status != api.Ended {
 		t.Fatalf("a deleted account leaves it: %+v", s)
 	}
 }
@@ -575,20 +575,20 @@ func TestWatchTogetherOutlastsASong(t *testing.T) {
 	e.file(song, 180000)
 	profile := "/profiles/" + itoa(e.plain.account.ID)
 	var songs api.Playlist
-	e.expect(201, "POST", profile+"/playlists", p.heidi, map[string]any{"name": "Songs", "kind": "music"}, &songs)
-	e.expect(201, "POST", profile+"/playlists/"+itoa(songs.Id)+"/entries", p.heidi, map[string]any{"itemId": song}, nil)
+	e.expect(201, "POST", profile+"/playlists", p.helga, map[string]any{"name": "Songs", "kind": "music"}, &songs)
+	e.expect(201, "POST", profile+"/playlists/"+itoa(songs.Id)+"/entries", p.helga, map[string]any{"itemId": song}, nil)
 	var st api.Station
-	e.expect(201, "POST", "/stations", p.heidi, map[string]any{"name": "Radio", "playlistId": songs.Id}, &st)
-	w := p.open(p.heidi, p.movie)
+	e.expect(201, "POST", "/stations", p.helga, map[string]any{"name": "Radio", "playlistId": songs.Id}, &st)
+	w := p.open(p.helga, p.movie)
 	e.start(song, snapshot())
-	if s := p.poll(p.heidi, w); s.Status == api.Ended {
+	if s := p.poll(p.helga, w); s.Status == api.Ended {
 		t.Fatalf("a song starting leaves no Watch together: %+v", s)
 	}
-	e.expect(201, "POST", "/stations/"+itoa(st.Id)+"/playback", p.heidi, map[string]any{"snapshot": snapshot()}, nil)
-	if s := p.poll(p.heidi, w); s.Status == api.Ended {
+	e.expect(201, "POST", "/stations/"+itoa(st.Id)+"/playback", p.helga, map[string]any{"snapshot": snapshot()}, nil)
+	if s := p.poll(p.helga, w); s.Status == api.Ended {
 		t.Fatalf("a music station's song leaves no Watch together: %+v", s)
 	}
-	e.expect(200, "POST", togetherPath(w)+"/join", p.claire, nil, nil)
+	e.expect(200, "POST", togetherPath(w)+"/join", p.joan, nil, nil)
 }
 
 // A watched title with a resume position opens where its host would resume it.
@@ -596,7 +596,7 @@ func TestWatchTogetherOpensAtAWatchedTitlesPosition(t *testing.T) {
 	p := newPair(t)
 	must(t, p.e.svc.WatchStates.Repo().Save(&watchstate.State{AccountID: p.e.plain.account.ID, ItemID: p.movie, PositionMs: 42_000,
 		Watched: true, ChangedAt: time.Now().UTC()}))
-	if w := p.open(p.heidi, p.movie); w.PositionMs != 42_000 {
+	if w := p.open(p.helga, p.movie); w.PositionMs != 42_000 {
 		t.Fatalf("opened at %d", w.PositionMs)
 	}
 }
@@ -606,26 +606,26 @@ func TestWatchTogetherOpensAtAWatchedTitlesPosition(t *testing.T) {
 // says nothing still gets the second, and a report out of range is refused.
 func TestWatchTogetherLeadFollowsReportedNeeds(t *testing.T) {
 	p := newPair(t)
-	w := p.open(p.heidi, p.movie)
-	p.e.expect(200, "POST", togetherPath(w)+"/join", p.claire, nil, nil)
+	w := p.open(p.helga, p.movie)
+	p.e.expect(200, "POST", togetherPath(w)+"/join", p.joan, nil, nil)
 	lead := func(s api.WatchTogether) int64 { return s.EffectiveAtMs - s.ServerTimeMs }
 	put := func(playing bool) (s api.WatchTogether) {
-		p.e.expect(200, "PUT", togetherPath(w)+"/state?rttMs=20", p.heidi, map[string]any{"playing": playing, "positionMs": 0}, &s)
+		p.e.expect(200, "PUT", togetherPath(w)+"/state?rttMs=20", p.helga, map[string]any{"playing": playing, "positionMs": 0}, &s)
 		return s
 	}
 	var got api.WatchTogether
 
-	p.e.expect(200, "GET", togetherPath(w)+"?rttMs=30", p.claire, nil, &got)
+	p.e.expect(200, "GET", togetherPath(w)+"?rttMs=30", p.joan, nil, &got)
 	if s := put(true); lead(s) != 300 {
 		t.Fatalf("close members need the least: %d", lead(s))
 	}
-	p.e.expect(200, "GET", togetherPath(w)+"?rttMs=400&floorMs=900", p.claire, nil, &got)
+	p.e.expect(200, "GET", togetherPath(w)+"?rttMs=400&floorMs=900", p.joan, nil, &got)
 	if s := put(false); lead(s) != 900 {
 		t.Fatalf("a platform floor holds: %d", lead(s))
 	}
-	p.e.expect(200, "GET", togetherPath(w), p.claire, nil, &got)
+	p.e.expect(200, "GET", togetherPath(w), p.joan, nil, &got)
 	if s := put(true); lead(s) != 1000 {
 		t.Fatalf("a poll that reports nothing needs the second: %d", lead(s))
 	}
-	p.e.expect(400, "GET", togetherPath(w)+"?rttMs=-1", p.claire, nil, nil)
+	p.e.expect(400, "GET", togetherPath(w)+"?rttMs=-1", p.joan, nil, nil)
 }

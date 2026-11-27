@@ -74,12 +74,12 @@ const acct = (id: number, name: string, kind = "adult", extra = {}) => ({
 const health = { status: "ok", version: "1.0.0", setupRequired: false };
 const me = (active: number, kids = true, others: unknown[] = []) => ({
   device: { id: uid(1) },
-  account: acct(1, "Heidi"),
+  account: acct(1, "Helga"),
   activeProfileId: uid(active),
-  household: { id: uid(1), name: "Heidi", adultId: uid(1), createdAt: ts },
+  household: { id: uid(1), name: "Helga", adultId: uid(1), createdAt: ts },
   profiles: [
-    acct(1, "Heidi", "adult", { hasPin: true }),
-    ...(kids ? [acct(2, "Jax", "kid")] : []),
+    acct(1, "Helga", "adult", { hasPin: true }),
+    ...(kids ? [acct(2, "Jason", "kid")] : []),
     ...others,
   ],
 });
@@ -165,10 +165,10 @@ describe("sign in and join", () => {
     const r = root();
     const fetch = mockFetch({
       "GET /health": health,
-      "GET /join/ABCD-2345": { name: "Ada", invitedBy: "Heidi", expiresAt: ts },
+      "GET /join/ABCD-2345": { name: "Ada", invitedBy: "Helga", expiresAt: ts },
     });
     await boot(r, { fetch });
-    expect(r.querySelector("h1")!.textContent).toBe("Heidi invited you to Rabbit Ears");
+    expect(r.querySelector("h1")!.textContent).toBe("Helga invited you to Rabbit Ears");
     const [name, pw, again] = r.querySelectorAll<HTMLInputElement>("input");
     expect(name.value).toBe("Ada");
     again.value = "x";
@@ -209,7 +209,7 @@ describe("sign in and join", () => {
 
   describe("which household", () => {
     const households = [
-      { id: uid(1), name: "Heidi's household" },
+      { id: uid(1), name: "Helga's household" },
       { id: uid(5), name: "Mark's household" },
     ];
     const moved = () => new Response(null, { status: 204 });
@@ -234,7 +234,7 @@ describe("sign in and join", () => {
       r.querySelector<HTMLInputElement>("input[type=password]")!.value = "pw";
       r.querySelector("form")!.requestSubmit();
       const [own, other] = await ask(r);
-      expect(texts(r, "label b")).toEqual(["Heidi's householdYours", "Mark's householdVisiting"]);
+      expect(texts(r, "label b")).toEqual(["Helga's householdYours", "Mark's householdVisiting"]);
       expect(own.checked).toBe(true);
       expect(r.textContent).toContain("Asked once, after signing in. Sign out to change it.");
       expect(location.hash).not.toBe("#/who");
@@ -268,7 +268,7 @@ describe("sign in and join", () => {
       await boot(r, {
         fetch: mockFetch({
           "GET /health": health,
-          "GET /join/ABCD-2345": { name: "Ada", invitedBy: "Heidi", expiresAt: ts },
+          "GET /join/ABCD-2345": { name: "Ada", invitedBy: "Helga", expiresAt: ts },
           "POST /join/ABCD-2345": { token: "tok", me: me(1), households },
           "PUT /me/household": () => json({ code: "not_found", message: "no such household" }, 404),
         }),
@@ -445,8 +445,8 @@ describe("who's watching", () => {
     });
     await until(() => r.querySelector(".profiles"));
     expect([...r.querySelectorAll(".who")].map((a) => a.lastChild!.textContent)).toEqual([
-      "Heidi",
-      "Jax",
+      "Helga",
+      "Jason",
       "Add kid",
       "Add adult",
     ]);
@@ -527,12 +527,12 @@ describe("who's watching", () => {
     });
     await until(() => r.querySelector(".profiles"));
     expect([...r.querySelectorAll(".who")].map((a) => a.lastChild!.textContent)).toEqual([
-      "Heidi",
-      "Jax",
+      "Helga",
+      "Jason",
       "Bea",
       "Add kid",
     ]);
-    expect(r.textContent).toContain("Heidi's household");
+    expect(r.textContent).toContain("Helga's household");
   });
 
   it("adds an adult to the household and shows the code to hand them", async () => {
@@ -585,7 +585,7 @@ describe("who's watching", () => {
       }),
     });
     await until(() => r.querySelector("#kb"));
-    r.querySelector<HTMLInputElement>("#kn")!.value = "Claire";
+    r.querySelector<HTMLInputElement>("#kn")!.value = "Joan";
     const b = r.querySelector<HTMLInputElement>("#kb")!;
     b.value = "2017-08-19";
     b.dispatchEvent(new Event("change"));
@@ -601,8 +601,8 @@ describe("who's watching", () => {
       fetch: mockFetch({
         "GET /health": health,
         "GET /me": me(1),
-        "POST /profiles": acct(9, "Claire", "kid"),
-        [`PUT /profiles/${uid(9)}`]: acct(9, "Claire", "kid"),
+        "POST /profiles": acct(9, "Joan", "kid"),
+        [`PUT /profiles/${uid(9)}`]: acct(9, "Joan", "kid"),
         [`PUT /profiles/${uid(9)}/pin`]: () =>
           pins++
             ? new Response(null, { status: 204 })
@@ -610,7 +610,7 @@ describe("who's watching", () => {
       }),
     });
     await until(() => r.querySelector("#kb"));
-    r.querySelector<HTMLInputElement>("#kn")!.value = "Claire";
+    r.querySelector<HTMLInputElement>("#kn")!.value = "Joan";
     r.querySelector<HTMLInputElement>("#kb")!.value = "2017-08-19";
     const need = r.querySelector<HTMLInputElement>("[aria-label='Require a PIN']")!;
     need.checked = true;
@@ -639,7 +639,7 @@ describe("who's watching", () => {
       fetch: mockFetch({ "GET /health": health, "GET /me": me(1) }),
     });
     await until(() => r.querySelector("#kb"));
-    r.querySelector<HTMLInputElement>("#kn")!.value = "Claire";
+    r.querySelector<HTMLInputElement>("#kn")!.value = "Joan";
     r.querySelector<HTMLInputElement>("#kb")!.value = "2017-08-19";
     const need = r.querySelector<HTMLInputElement>("[aria-label='Require a PIN']")!;
     const tick = (on: boolean) => {
@@ -700,7 +700,7 @@ describe("device lock", () => {
       "POST /me/lock",
     ]);
     [...r.querySelectorAll<HTMLElement>(".who")]
-      .find((a) => a.lastChild!.textContent === "Jax")!
+      .find((a) => a.lastChild!.textContent === "Jason")!
       .click();
     await until(() => location.hash === "#/household");
   });
@@ -734,8 +734,8 @@ describe("device lock", () => {
       });
     const admin = (active: number) => ({
       ...me(active),
-      account: acct(1, "Heidi", "adult", { isAdmin: true }),
-      profiles: [acct(1, "Heidi"), acct(2, "Jax", "kid")],
+      account: acct(1, "Helga", "adult", { isAdmin: true }),
+      profiles: [acct(1, "Helga"), acct(2, "Jason", "kid")],
     });
     const tell = (what: string) => {
       const tab = new BroadcastChannel("rabbit-ears.profile");
@@ -748,10 +748,10 @@ describe("device lock", () => {
       let active = 1;
       const r = root();
       await boot(r, { fetch: shell(() => admin(active)) });
-      await until(() => r.querySelector("header .profile")?.textContent === "HHeidi");
+      await until(() => r.querySelector("header .profile")?.textContent === "HHelga");
       active = 2;
       tell("switched");
-      await until(() => r.querySelector("header .profile")?.textContent === "JJax");
+      await until(() => r.querySelector("header .profile")?.textContent === "JJason");
       r.querySelector<HTMLElement>("header .profile")!.click();
       expect(texts(r, "header [role=menu] [role=menuitem]")).toEqual([
         "Switch profile",
@@ -782,7 +782,7 @@ describe("device lock", () => {
         await until(() => r.querySelector(".profiles"));
         await until(() => heard.length === 1);
         [...r.querySelectorAll<HTMLElement>(".who")]
-          .find((a) => a.lastChild!.textContent === "Jax")!
+          .find((a) => a.lastChild!.textContent === "Jason")!
           .click();
         await until(() => heard.length === 2);
         await until(() => location.hash === "#/movies");
@@ -828,7 +828,7 @@ describe("device lock", () => {
       await until(() => r.querySelector(".profiles"));
       expect(calls.filter((c) => c.key === "POST /me/lock")).toHaveLength(1);
       [...r.querySelectorAll<HTMLElement>(".who")]
-        .find((a) => a.lastChild!.textContent === "Jax")!
+        .find((a) => a.lastChild!.textContent === "Jason")!
         .click();
       await until(() => location.hash === "#/movies" && r.querySelector("header .profile"));
       expect(calls.filter((c) => c.key === "POST /me/lock")).toHaveLength(1);
@@ -840,7 +840,7 @@ describe("device lock", () => {
       const r = root();
       await boot(r, { fetch: shell(me(1)) });
       await until(() => document.querySelector(".pinbox"));
-      expect(document.querySelector(".pinbox h2")!.textContent).toBe("Enter Heidi's PIN");
+      expect(document.querySelector(".pinbox h2")!.textContent).toBe("Enter Helga's PIN");
       expect(calls.map((c) => c.key)).toContain("POST /me/lock");
       expect(r.querySelector(".profiles")).not.toBeNull();
     });
@@ -927,7 +927,7 @@ describe("device lock", () => {
     await boot(r, {
       fetch: mockFetch({
         "GET /health": health,
-        "GET /me": { ...me(1), profiles: [acct(1, "Heidi"), acct(2, "Jax", "kid")] },
+        "GET /me": { ...me(1), profiles: [acct(1, "Helga"), acct(2, "Jason", "kid")] },
         [`POST /profiles/${uid(1)}/unlock`]: unlocked,
       }),
     });
@@ -1183,8 +1183,8 @@ describe("grids", () => {
       "GET /me": {
         ...me(1),
         profiles: [
-          acct(1, "Heidi", "adult", { hasPin: true, hideKidsContent: hide }),
-          acct(2, "Jax", "kid"),
+          acct(1, "Helga", "adult", { hasPin: true, hideKidsContent: hide }),
+          acct(2, "Jason", "kid"),
         ],
       },
       "GET /items": (_: unknown, u: URL) => {
@@ -1844,8 +1844,8 @@ describe("player", () => {
       vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
       try {
         const off = me(1);
-        const heidi = off.profiles[0] as object;
-        off.profiles[0] = { ...heidi, autoplay: false };
+        const helga = off.profiles[0] as object;
+        off.profiles[0] = { ...helga, autoplay: false };
         const r = await ended(
           {
             [`GET /profiles/${uid(1)}/up-next/${uid(21)}`]: {
@@ -1854,7 +1854,7 @@ describe("player", () => {
               title: "T22",
             },
             [`PUT /profiles/${uid(1)}/preferences`]: (b: unknown) => ({
-              ...heidi,
+              ...helga,
               ...(b as object),
             }),
           },
@@ -2346,7 +2346,7 @@ describe("link a TV", () => {
     await until(() => button(r, "Link this TV"));
     expect(r.textContent).toContain("Living room Roku");
     expect(r.textContent).toContain("Asked to sign in a moment ago");
-    expect(r.textContent).toContain("The TV will show Heidi's household. PINs still apply.");
+    expect(r.textContent).toContain("The TV will show Helga's household. PINs still apply.");
     expect(r.querySelector<HTMLInputElement>("input")!.value).toBe("7KQ4-MNP2");
     button(r, "Link this TV").click();
     await until(() => r.querySelector("h1")?.textContent === "TV linked");
@@ -2785,10 +2785,10 @@ describe("household", () => {
   beforeEach(() => setToken("tok"));
   const later = "2026-01-08T00:00:00Z";
   const members = [
-    acct(1, "Heidi", "adult", { hasPin: true }),
+    acct(1, "Helga", "adult", { hasPin: true }),
     acct(3, "Bea"),
     acct(4, "Cy", "adult", { pending: true, inviteExpiresAt: later }),
-    acct(2, "Jax", "kid", { movieCeiling: "PG", tvCeiling: "TV-PG", birthday: "2017-08-19" }),
+    acct(2, "Jason", "kid", { movieCeiling: "PG", tvCeiling: "TV-PG", birthday: "2017-08-19" }),
   ];
   const code = {
     id: uid(9),
@@ -2809,7 +2809,7 @@ describe("household", () => {
 
   it("offers Add kid and Add adult on Who's watching to an adult, none to a kid, and no Manage household", async () => {
     await at("#/who");
-    const noPin = { ...me(1), profiles: [acct(1, "Heidi"), acct(2, "Jax", "kid")] };
+    const noPin = { ...me(1), profiles: [acct(1, "Helga"), acct(2, "Jason", "kid")] };
     const links = async (m: unknown) => {
       document.body.replaceChildren();
       const r = root();
@@ -2903,10 +2903,10 @@ describe("household", () => {
     });
     await until(() => r.querySelector(".members li"));
     expect(rows(r)).toEqual({
-      Heidi: ["Change PIN", "Remove PIN", "Share with another household…"],
+      Helga: ["Change PIN", "Remove PIN", "Share with another household…"],
       Bea: ["Share with another household…", "Remove"],
       Cy: ["Resend code", "Remove"],
-      Jax: ["Edit", "Share with another household…", "Change to adult", "Remove"],
+      Jason: ["Edit", "Share with another household…", "Change to adult", "Remove"],
     });
     expect(texts(r, ".members li .sub")).toEqual([
       "Owner · PIN",
@@ -2934,9 +2934,9 @@ describe("household", () => {
     await until(() => r.querySelector(".members li"));
     const share = "Share with another household…";
     expect(rows(r)).toEqual({
-      Heidi: [share],
+      Helga: [share],
       Bea: ["Set PIN", share],
-      Jax: ["Edit", share, "Remove"],
+      Jason: ["Edit", share, "Remove"],
     });
     button(r, "Set PIN").click();
     const pinDlg = document.querySelector("[role=dialog]")!;
@@ -2949,7 +2949,7 @@ describe("household", () => {
     await until(() => r.querySelector(".members li"));
     button(r, "Remove").click();
     const dlg = document.querySelector("[role=dialog]")!;
-    expect(dlg.textContent).toContain("Remove Jax?");
+    expect(dlg.textContent).toContain("Remove Jason?");
     button(dlg, "Remove").click();
     await until(() => calls.filter((c) => c.key === "GET /me").length === 2);
     expect(calls.some((c) => c.key === `DELETE /profiles/${uid(2)}`)).toBe(true);
@@ -2970,11 +2970,11 @@ describe("household", () => {
     await until(() => r.querySelector(".members li"));
     button(r.querySelectorAll(".members li")[3], "Change to adult").click();
     const dlg = document.querySelector("[role=dialog]")!;
-    dlg.querySelector<HTMLInputElement>("input[type=email]")!.value = "jax@example.test";
+    dlg.querySelector<HTMLInputElement>("input[type=email]")!.value = "jason@example.test";
     dlg.querySelector("form")!.requestSubmit();
     await until(() => r.textContent!.includes("7KQ4-MNP2"));
     expect(calls.find((c) => c.key === `POST /profiles/${uid(2)}/make-adult`)!.body).toEqual({
-      email: "jax@example.test",
+      email: "jason@example.test",
       expiresInDays: 7,
     });
   });
@@ -2982,7 +2982,7 @@ describe("household", () => {
   it("edits a kid: name, PIN cleared, and titles added to and removed from the allow list", async () => {
     await at(`#/kid/${uid(2)}`);
     const r = root();
-    const kid = acct(2, "Jax", "kid", {
+    const kid = acct(2, "Jason", "kid", {
       hasPin: true,
       birthday: "2017-08-19",
       movieCeiling: "PG",
@@ -3013,7 +3013,7 @@ describe("household", () => {
       }),
     });
     await until(() => r.querySelector("form"));
-    expect(r.querySelector("h1")!.textContent).toBe("Edit Jax");
+    expect(r.querySelector("h1")!.textContent).toBe("Edit Jason");
     expect(r.querySelector<HTMLInputElement>("#kb")!.value).toBe("2017-08-19");
     expect(r.querySelector<HTMLSelectElement>("#mc")!.value).toBe("PG");
     const pin = r.querySelector<HTMLInputElement>("[role=switch]")!;
@@ -3041,12 +3041,12 @@ describe("household", () => {
       calls.some((c) => c.key === `DELETE /profiles/${uid(2)}/allowed-items/${uid(30)}`),
     );
 
-    r.querySelector<HTMLInputElement>("#kn")!.value = "Jaxon";
+    r.querySelector<HTMLInputElement>("#kn")!.value = "Jason";
     pin.click();
     r.querySelector("form")!.requestSubmit();
     await until(() => calls.some((c) => c.key === `DELETE /profiles/${uid(2)}/pin`));
     expect(calls.find((c) => c.key === `PUT /profiles/${uid(2)}`)!.body).toEqual({
-      name: "Jaxon",
+      name: "Jason",
       birthday: "2017-08-19",
       filterMode: "allow_list",
       color: "#6B3A2E",
@@ -3057,7 +3057,7 @@ describe("household", () => {
   it("keeps the allow list on screen through an add and a remove, without asking for any title again", async () => {
     await at(`#/kid/${uid(2)}`);
     const r = root();
-    const kid = acct(2, "Jax", "kid", { birthday: "2017-08-19", filterMode: "allow_list" });
+    const kid = acct(2, "Jason", "kid", { birthday: "2017-08-19", filterMode: "allow_list" });
     await boot(r, {
       fetch: mockFetch({
         "GET /health": health,
@@ -3113,11 +3113,11 @@ describe("household", () => {
       fromProfileId: uid(8),
       fromName: "Mark",
       toProfileId: uid(1),
-      toName: "Heidi",
+      toName: "Helga",
       createdAt: ts,
       ...extra,
     });
-    const shared = acct(2, "Jax", "kid", {
+    const shared = acct(2, "Jason", "kid", {
       movieCeiling: "PG",
       tvCeiling: "TV-PG",
       households: 2,
@@ -3143,14 +3143,14 @@ describe("household", () => {
       const r = await open({
         "GET /household/offers": {
           incoming: [offer(10), offer(11, { profileName: "Ty", profileKind: "adult" })],
-          outgoing: [offer(12, { profileId: uid(2), profileName: "Jax", toName: "Mark" })],
+          outgoing: [offer(12, { profileId: uid(2), profileName: "Jason", toName: "Mark" })],
         },
         [`POST /household/offers/${uid(10)}/accept`]: () => new Response(null, { status: 204 }),
         [`DELETE /household/offers/${uid(11)}`]: () => new Response(null, { status: 204 }),
         [`DELETE /household/offers/${uid(12)}`]: () => new Response(null, { status: 204 }),
       });
       expect(texts(r, "h2")).toEqual(["Offers", "Profiles"]);
-      const [mia, ty, jax] = r.querySelectorAll(".members")[0].querySelectorAll("li");
+      const [mia, ty, jason] = r.querySelectorAll(".members")[0].querySelectorAll("li");
       expect(mia.querySelector(".sub")!.textContent).toBe(
         "Kid · Mark offers to share Mia with your household",
       );
@@ -3158,11 +3158,11 @@ describe("household", () => {
       expect(ty.querySelector(".sub")!.textContent).toBe(
         "Adult · Mark offers to share Ty with your household",
       );
-      expect(jax.querySelector(".sub")!.textContent).toBe("Kid · Offered to Mark, waiting");
-      expect(texts(jax, "button")).toEqual(["Withdraw"]);
+      expect(jason.querySelector(".sub")!.textContent).toBe("Kid · Offered to Mark, waiting");
+      expect(texts(jason, "button")).toEqual(["Withdraw"]);
       button(mia, "Accept").click();
       button(ty, "Decline").click();
-      button(jax, "Withdraw").click();
+      button(jason, "Withdraw").click();
       for (const k of [
         `POST /household/offers/${uid(10)}/accept`,
         `DELETE /household/offers/${uid(11)}`,
@@ -3188,8 +3188,8 @@ describe("household", () => {
       ]);
       expect(r.querySelectorAll(".members li .sub svg")).toHaveLength(2);
       expect(rows(r)).toEqual({
-        Heidi: ["Change PIN", "Remove PIN", "Share with another household…"],
-        Jax: [
+        Helga: ["Change PIN", "Remove PIN", "Share with another household…"],
+        Jason: [
           "Edit",
           "Share with another household…",
           "Change to adult",
@@ -3202,9 +3202,9 @@ describe("household", () => {
       );
       button(r.querySelectorAll(".members li")[1], "Remove from this household…").click();
       const dlg = document.querySelector("[role=dialog]")!;
-      expect(dlg.querySelector("h1")!.textContent).toBe("Remove Jax from this household?");
+      expect(dlg.querySelector("h1")!.textContent).toBe("Remove Jason from this household?");
       expect(dlg.textContent).toContain(
-        "Jax stays in their other household. Nothing of theirs is deleted.",
+        "Jason stays in their other household. Nothing of theirs is deleted.",
       );
       button(dlg, "Remove").click();
       await until(() => calls.some((c) => c.key === `DELETE /profiles/${uid(2)}`));
@@ -3212,7 +3212,7 @@ describe("household", () => {
 
     it("keeps today's removal wording and no caption for a profile in this household only", async () => {
       const r = await open({ "GET /profiles": page([members[0], members[3]]) });
-      expect(rows(r).Jax).toContain("Remove");
+      expect(rows(r).Jason).toContain("Remove");
       expect(r.textContent).not.toContain("A shared profile");
     });
 
@@ -3224,9 +3224,9 @@ describe("household", () => {
       button(r.querySelectorAll(".members li")[1], "Share with another household…").click();
       await until(() => document.querySelector("[role=dialog]"));
       const dlg = document.querySelector("[role=dialog]")!;
-      expect(dlg.querySelector("h1")!.textContent).toBe("Share Jax");
+      expect(dlg.querySelector("h1")!.textContent).toBe("Share Jason");
       expect(dlg.textContent).toContain(
-        "Offer Jax to an adult in another household. Once they accept, Jax appears in Who's watching there with the same watch history, playlists and limits, and the adults there can change Jax's settings as you can.",
+        "Offer Jason to an adult in another household. Once they accept, Jason appears in Who's watching there with the same watch history, playlists and limits, and the adults there can change Jason's settings as you can.",
       );
       expect(dlg.textContent).toContain(
         "Only adults the server's admin has connected you with appear here.",
@@ -3266,7 +3266,7 @@ describe("household", () => {
         { [`DELETE /profiles/${uid(6)}`]: () => new Response(null, { status: 204 }) },
         visiting,
       );
-      expect(rows(r)).toEqual({ Heidi: [], Jax: [], Jo: [] });
+      expect(rows(r)).toEqual({ Helga: [], Jason: [], Jo: [] });
       expect(texts(r, ".end a, .end button")).toEqual(["Done", "Leave this household…"]);
       expect(calls.some((c) => c.key === "GET /household/offers")).toBe(false);
       button(r, "Leave this household…").click();
@@ -3874,12 +3874,12 @@ describe("profile menu and preferences", () => {
     await at("#/");
     const admin = {
       ...me(1),
-      account: acct(1, "Heidi", "adult", { isAdmin: true }),
-      profiles: [acct(1, "Heidi", "adult", { color: "#2E6B5B" }), acct(2, "Jax", "kid")],
+      account: acct(1, "Helga", "adult", { isAdmin: true }),
+      profiles: [acct(1, "Helga", "adult", { color: "#2E6B5B" }), acct(2, "Jason", "kid")],
     };
     const r = await menuOf(admin);
     const b = r.querySelector<HTMLElement>("header .profile")!;
-    expect(b.textContent).toBe("HHeidi");
+    expect(b.textContent).toBe("HHelga");
     expect(b.querySelector<HTMLElement>(".avatar")!.style.background).toBe("rgb(46, 107, 91)");
     expect(b.getAttribute("aria-expanded")).toBe("true");
     expect(texts(r, "header [role=menu] [role=menuitem]")).toEqual([
@@ -3906,7 +3906,7 @@ describe("profile menu and preferences", () => {
     await at("#/");
     const r = await menuOf({
       ...me(1),
-      profiles: [acct(1, "Heidi", "adult", { avatarUrl: `/api/v2/profiles/${uid(1)}/avatar` })],
+      profiles: [acct(1, "Helga", "adult", { avatarUrl: `/api/v2/profiles/${uid(1)}/avatar` })],
     });
     expect(r.querySelector(".profile .avatar")!.getAttribute("data-art")).toBe(`profile/${uid(1)}`);
     await until(() => calls.some((c) => c.key === `GET /profiles/${uid(1)}/avatar`));
@@ -3915,12 +3915,12 @@ describe("profile menu and preferences", () => {
   it("saves the color, Hide kids' content and Autoplay on Preferences", async () => {
     await at("#/preferences");
     const r = root();
-    const heidi = acct(1, "Heidi", "adult", { color: "#3C4170", hideKidsContent: false });
+    const helga = acct(1, "Helga", "adult", { color: "#3C4170", hideKidsContent: false });
     await boot(r, {
       fetch: shell(
-        { ...me(1), profiles: [heidi] },
+        { ...me(1), profiles: [helga] },
         {
-          [`PUT /profiles/${uid(1)}/preferences`]: (b: unknown) => ({ ...heidi, ...(b as object) }),
+          [`PUT /profiles/${uid(1)}/preferences`]: (b: unknown) => ({ ...helga, ...(b as object) }),
         },
       ),
     });
@@ -3955,7 +3955,7 @@ describe("profile menu and preferences", () => {
     let wrong = true;
     await boot(r, {
       fetch: shell(me(1), {
-        "GET /me/deletion": { outcome: "household", kidNames: ["Jax"] },
+        "GET /me/deletion": { outcome: "household", kidNames: ["Jason"] },
         "POST /me/deletion": () =>
           wrong
             ? json({ code: "forbidden", message: "the current password is wrong" }, 403)
@@ -3968,7 +3968,7 @@ describe("profile menu and preferences", () => {
     await until(() => document.querySelector("[role=dialog]"));
     const d = document.querySelector<HTMLElement>("[role=dialog]")!;
     expect(d.textContent).toContain("It cannot be undone.");
-    expect(d.textContent).toContain("the household goes too, with Jax and everything of theirs.");
+    expect(d.textContent).toContain("the household goes too, with Jason and everything of theirs.");
     d.querySelector<HTMLInputElement>("input[type=password]")!.value = "pw";
     d.querySelector("form")!.requestSubmit();
     await until(() => d.textContent!.includes("The password is wrong."));

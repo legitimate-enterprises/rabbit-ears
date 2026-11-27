@@ -229,8 +229,7 @@ func (s *Scanner) syncSong(ctx context.Context, lib *library.Library, c candidat
 			return err
 		}
 	}
-	s.albumArt(ctx, album, c.path, res.Cover, replaced)
-	return nil
+	return s.albumArt(album, c.path, res.Cover, replaced)
 }
 
 // resolveSong finds or creates the song's album artist, album, performer
@@ -386,49 +385,33 @@ func (s *Scanner) addGenres(itemID uid.ID, names []string) error {
 var folderCovers = []string{"cover.jpg", "folder.jpg", "front.jpg", "cover.png", "folder.png", "front.png"}
 
 // albumArt gives an album without artwork, or one whose song was replaced,
-// the folder cover beside this song, else the song's embedded picture,
-// copied under ThumbDir/music by content hash so a new image gets a new
-// name. Failures are logged; art never fails a scan.
-func (s *Scanner) albumArt(ctx context.Context, album *item.Item, songPath string, embedded, replaced bool) {
+// the folder cover beside this song, copied under ThumbDir/music by content
+// hash so a new image gets a new name. Without one, a song with an embedded
+// picture leaves the album without a local row, for the Local metadata
+// task to give it the picture (see albumCover). A failure to store a cover
+// is logged; art never fails a scan.
+func (s *Scanner) albumArt(album *item.Item, songPath string, embedded, replaced bool) error {
 	if s.ThumbDir == "" {
-		return
+		return nil
 	}
 	m, err := s.Items.LocalRow(album.ID)
-	if err == nil && m.PosterPath != "" && !replaced {
-		if _, err := os.Stat(m.PosterPath); err == nil {
-			return
-		}
-	}
-	if m == nil {
+	had := err == nil
+	switch {
+	case errors.Is(err, db.ErrNotFound):
 		m = &item.Metadata{ItemID: album.ID}
+	case err != nil:
+		return err
+	case m.PosterPath != "" && !replaced && fileExists(m.PosterPath):
+		return nil
 	}
-	src := ""
-	if entries, err := os.ReadDir(filepath.Dir(songPath)); err == nil {
-		for _, want := range folderCovers {
-			for _, e := range entries {
-				if src == "" && strings.EqualFold(e.Name(), want) {
-					src = filepath.Join(filepath.Dir(songPath), e.Name())
-				}
-			}
-		}
-	}
-	dir := filepath.Join(s.ThumbDir, "music")
-	tmp := filepath.Join(dir, ".cover-"+album.ID.String()+".jpg")
-	defer func() { _ = os.Remove(tmp) }()
-	if src == "" && embedded {
-		cctx, cancel := context.WithTimeout(ctx, runLimit)
-		err := s.Cover(cctx, songPath, tmp)
-		cancel()
-		if err != nil {
-			logstore.Log("scan").Warn("Embedded cover unreadable", "path", songPath, "err", err)
-			return
-		}
-		src = tmp
-	}
+	src := folderCover(filepath.Dir(songPath))
 	if src == "" {
-		return
+		if embedded && had {
+			return s.Items.DeleteLocal([]uid.ID{album.ID})
+		}
+		return nil
 	}
-	dest, err := storeByHash(src, dir)
+	dest, err := storeByHash(src, filepath.Join(s.ThumbDir, "music"))
 	if err == nil {
 		m.PosterPath = dest
 		err = s.Items.SetLocal(m)
@@ -436,6 +419,23 @@ func (s *Scanner) albumArt(ctx context.Context, album *item.Item, songPath strin
 	if err != nil {
 		logstore.Log("scan").Warn("Album art not stored", "album_id", album.ID, "err", err)
 	}
+	return nil
+}
+
+// folderCover is the cover image in dir, "" with none.
+func folderCover(dir string) string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	for _, want := range folderCovers {
+		for _, e := range entries {
+			if strings.EqualFold(e.Name(), want) {
+				return filepath.Join(dir, e.Name())
+			}
+		}
+	}
+	return ""
 }
 
 // storeByHash copies src into dir named by its content hash.

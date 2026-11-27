@@ -107,13 +107,14 @@ func localTags(tags map[string]string, kind string) (*item.Metadata, []string) {
 	return m, genres
 }
 
-// MakeLocal reads the local metadata of each movie, show, season and
-// episode that has none: a movie's or episode's from its own file, a
-// season's from its first episode and a show's from its first episode
-// outside the specials. After each title it stops if yield reports
-// another task waiting, and then reports more. A title with no file on
-// disk is passed over until one is back; one whose reading fails keeps
-// what was read, so it is not read again until its file changes.
+// MakeLocal reads the local metadata of each movie, show, season, episode
+// and album that has none: a movie's or episode's from its own file, a
+// season's from its first episode, a show's from its first episode outside
+// the specials and an album's art from its songs (see albumCover). After
+// each title it stops if yield reports another task waiting, and then
+// reports more. A title with no file on disk is passed over until one is
+// back; one whose reading fails keeps what was read, so it is not read
+// again until its file changes.
 func (s *Scanner) MakeLocal(ctx context.Context, progress func(float64), yield func() bool) (string, bool, error) {
 	its, err := s.Items.WithoutLocal(1 << 20)
 	if err != nil {
@@ -159,6 +160,15 @@ func (s *Scanner) MakeLocal(ctx context.Context, progress func(float64), yield f
 // localFile is the file on disk a title's local metadata is read from,
 // nil with none.
 func (s *Scanner) localFile(it *item.Item) (*mediafile.File, error) {
+	if it.Kind == item.Album {
+		songs, err := s.Items.List(item.Filter{ParentID: &it.ID, Kind: item.Song, Limit: 1 << 20})
+		for _, sg := range songs {
+			if f, err := s.availableFile(sg.ID); err != nil || f != nil {
+				return f, err
+			}
+		}
+		return nil, err
+	}
 	if it.Kind != item.Show && it.Kind != item.Season {
 		return s.availableFile(it.ID)
 	}
@@ -202,9 +212,12 @@ func (s *Scanner) availableFile(itemID uid.ID) (*mediafile.File, error) {
 }
 
 // describeLocal stores a title's local row from f: a movie's or episode's
-// tags and runtime, a show's rating, and art. Only a database error is
-// returned.
+// tags and runtime, a show's rating, and art; an album's is albumCover's.
+// Only a database error is returned.
 func (s *Scanner) describeLocal(ctx context.Context, it *item.Item, f *mediafile.File) error {
+	if it.Kind == item.Album {
+		return s.albumCover(ctx, it)
+	}
 	now := s.Now().UTC()
 	m := &item.Metadata{ItemID: it.ID, FetchedAt: &now}
 	var genres []string
@@ -291,4 +304,44 @@ func (s *Scanner) localArt(ctx context.Context, it *item.Item, f *mediafile.File
 		cover = keep(nil, poster)
 	}
 	m.PosterPath, m.BackdropPath = cover, frame
+}
+
+// albumCover stores an album's local row with, as its art, the embedded
+// picture of the first of its songs on disk that has one, copied under
+// ThumbDir/music by content hash so a new image gets a new name. Only a
+// database error is returned; an album left without art keeps its row,
+// so it is not read again until a scan finds a picture for it.
+func (s *Scanner) albumCover(ctx context.Context, album *item.Item) error {
+	now := s.Now().UTC()
+	m := &item.Metadata{ItemID: album.ID, FetchedAt: &now}
+	songs, err := s.Items.List(item.Filter{ParentID: &album.ID, Kind: item.Song, Limit: 1 << 20})
+	if err != nil {
+		return err
+	}
+	dir := filepath.Join(s.ThumbDir, "music")
+	for _, sg := range songs {
+		f, err := s.availableFile(sg.ID)
+		if err != nil {
+			return err
+		}
+		if f == nil || s.ThumbDir == "" {
+			continue
+		}
+		if res, err := s.probe(ctx, f.Path); err != nil || !res.Cover {
+			continue
+		}
+		tmp := filepath.Join(dir, ".cover-"+album.ID.String()+".jpg")
+		cctx, cancel := context.WithTimeout(ctx, runLimit)
+		err = s.Cover(cctx, f.Path, tmp)
+		cancel()
+		if err == nil {
+			m.PosterPath, err = storeByHash(tmp, dir)
+		}
+		_ = os.Remove(tmp)
+		if err != nil {
+			logstore.Log("scan").Warn("Embedded cover unreadable", "path", f.Path, "err", err)
+		}
+		break
+	}
+	return s.Items.SetLocal(m)
 }

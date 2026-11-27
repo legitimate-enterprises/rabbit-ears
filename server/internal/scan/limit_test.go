@@ -37,20 +37,32 @@ func TestAProbeThatNeverReturnsFailsOnlyItsFile(t *testing.T) {
 	}
 }
 
-// A chapter thumbnail that never returns leaves its chapter without one.
+// A chapter thumbnail that never returns leaves its chapter without one,
+// and is not tried again until the file is probed again.
 func TestAThumbnailThatNeverReturnsIsSkipped(t *testing.T) {
 	shortLimits(t)
 	e := newEnv(t, library.Movies, "")
 	e.s.Probe = func(context.Context, string) (*probe.Result, error) {
 		return &probe.Result{Container: "mkv", Chapters: []*mediafile.Chapter{{Position: 0, EndMs: 1000}}}, nil
 	}
+	tries := 0
 	e.s.Thumb = func(ctx context.Context, _ string, _ int, _, _ int64, _ string) error {
+		tries++
 		<-ctx.Done()
 		return ctx.Err()
 	}
 	touch(t, filepath.Join(e.root, "A (2001)", "m.mkv"))
 	if got := scanSummary(t, e); got != "1 movie added" {
 		t.Errorf("got %q", got)
+	}
+	for range 2 {
+		if sum, _, err := e.s.MakePreviews(context.Background(), nil, nil); err != nil || sum != "0 files" {
+			t.Fatalf("%q %v", sum, err)
+		}
+	}
+	fs, _ := e.files.FilesInLibrary(e.lib.ID)
+	if chs, _ := e.files.Chapters(fs[0].ID); tries != 1 || chs[0].ThumbnailPath != "" {
+		t.Fatalf("tried %d times: %+v", tries, chs[0])
 	}
 }
 

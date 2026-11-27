@@ -33,10 +33,10 @@ const base = (watch: unknown[] = []) => ({
   "GET /health": { status: "ok", version: "1.0.0", setupRequired: false },
   "GET /me": {
     device: { id: uid(1) },
-    account: acct(1, "Heidi"),
+    account: acct(1, "Helga"),
     activeProfileId: uid(1),
-    household: { id: uid(1), name: "Heidi", adultId: uid(1), createdAt: ts },
-    profiles: [acct(1, "Heidi"), acct(5, "Bea")],
+    household: { id: uid(1), name: "Helga", adultId: uid(1), createdAt: ts },
+    profiles: [acct(1, "Helga"), acct(5, "Bea")],
   },
   [`GET /profiles/${uid(1)}/watch-state`]: page(watch),
   [`GET /profiles/${uid(1)}/show-progress`]: page([]),
@@ -276,7 +276,7 @@ describe("movie details with editions", () => {
   it("hides the choice while opening or inside a Watch together", async () => {
     const host = {
       accountId: uid(1),
-      name: "Heidi",
+      name: "Helga",
       role: "host",
       deviceName: "Web",
       platform: "web",
@@ -640,7 +640,7 @@ describe("player", () => {
       status: "joined",
       members: [
         { accountId: uid(5), name: "Bea", role: "host", present: true, joinedAt: ts },
-        { accountId: uid(1), name: "Heidi", role: "guest", present: true, joinedAt: ts },
+        { accountId: uid(1), name: "Helga", role: "guest", present: true, joinedAt: ts },
       ],
       joinBy: ts,
       joinMsLeft: 0,

@@ -99,7 +99,7 @@ func (e *collectionEnv) due(t *testing.T, id uid.ID, tmdbID int64) {
 
 func (e *collectionEnv) refresh(t *testing.T) {
 	t.Helper()
-	if _, err := e.s.RetryDue(context.Background(), 100); err != nil {
+	if _, _, err := e.s.RetryDue(context.Background(), 100, nil); err != nil {
 		t.Fatal(err)
 	}
 }

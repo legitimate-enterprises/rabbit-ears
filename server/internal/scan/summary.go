@@ -15,7 +15,6 @@ type Summary struct {
 	Checked                 int            // media files seen on disk
 	Missing                 int            // the library's files not seen on disk
 	ProbeFailed             int
-	LookupFailed            int
 	leaf                    string   // the kind a file stands for: movie, episode, song or video
 	created                 []uid.ID // movies and songs made in this scan
 	// moved are the paths this scan found a known file moved to; loose
@@ -71,7 +70,7 @@ func kinds(m map[string]int) string {
 }
 
 // String is the line stored on the task run: the changes by kind, or "No
-// changes; N checked", then any missing files and probe and lookup failures.
+// changes; N checked", then any missing files and probe failures.
 func (s *Summary) String() string {
 	var parts []string
 	for _, c := range []struct {
@@ -91,9 +90,6 @@ func (s *Summary) String() string {
 	}
 	if s.ProbeFailed > 0 {
 		out += "; " + plural(s.ProbeFailed, "file") + " failed to probe"
-	}
-	if s.LookupFailed > 0 {
-		out += "; " + plural(s.LookupFailed, "metadata lookup") + " failed"
 	}
 	return out
 }

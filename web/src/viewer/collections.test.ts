@@ -30,10 +30,10 @@ const acct = (id: number, name: string, kind = "adult") => ({
 });
 const me = (active: number) => ({
   device: { id: uid(1) },
-  account: acct(1, "Heidi"),
+  account: acct(1, "Helga"),
   activeProfileId: uid(active),
-  household: { id: uid(1), name: "Heidi", adultId: uid(1), createdAt: ts },
-  profiles: [acct(1, "Heidi"), acct(2, "Jax", "kid")],
+  household: { id: uid(1), name: "Helga", adultId: uid(1), createdAt: ts },
+  profiles: [acct(1, "Helga"), acct(2, "Jason", "kid")],
 });
 const page = (items: unknown[]) => ({ items });
 const base = (active = 1) => ({

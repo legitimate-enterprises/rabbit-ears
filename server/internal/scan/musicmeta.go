@@ -19,31 +19,35 @@ import (
 // MatchMusic looks up the library's albums that no provider was asked about
 // yet, and looks again at those whose folders and tags no longer say what
 // their remote row was made from or last checked against, returning how
-// many lookups failed. Like MatchLibrary it never fails on a provider error.
-func (s *Scanner) MatchMusic(ctx context.Context, lib *library.Library) (int, error) {
+// many lookups failed and whether it gave way (see run). Like MatchLibrary
+// it never fails on a provider error.
+func (s *Scanner) MatchMusic(ctx context.Context, lib *library.Library, yield func() bool) (int, bool, error) {
 	if s.Music == nil || !s.remote() {
-		return 0, nil
+		return 0, false, nil
 	}
 	albums, err := s.Items.NeverLookedUp(lib.ID, batchLimit)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
-	r := &run{}
+	r := &run{yield: yield}
 	for _, al := range albums {
+		if r.gaveWay() {
+			return r.failed, true, nil
+		}
 		if err := s.fetchAlbum(ctx, r, al, nil, false); err != nil {
-			return r.failed, err
+			return r.failed, false, err
 		}
 	}
 	stamps, err := s.Items.IdentityStamps(lib.ID)
 	if err != nil {
-		return r.failed, err
+		return r.failed, false, err
 	}
 	reviewed, err := s.reviewed(lib.ID)
 	if err != nil {
-		return r.failed, err
+		return r.failed, false, err
 	}
 	if albums, err = s.Items.List(item.Filter{LibraryID: &lib.ID, Kind: item.Album, Limit: 1000000}); err != nil {
-		return r.failed, err
+		return r.failed, false, err
 	}
 	for _, al := range albums {
 		was, ok := stamps[al.ID]
@@ -52,19 +56,22 @@ func (s *Scanner) MatchMusic(ctx context.Context, lib *library.Library) (int, er
 		}
 		st, err := s.statedAlbum(al)
 		if err != nil {
-			return r.failed, err
+			return r.failed, false, err
 		}
 		switch {
 		case st.stamp != was:
+			if r.gaveWay() {
+				return r.failed, true, nil
+			}
 			err = s.fetchAlbum(ctx, r, al, nil, true)
 		case reviewed[al.ID]:
 			err = s.agreed(al.ID)
 		}
 		if err != nil {
-			return r.failed, err
+			return r.failed, false, err
 		}
 	}
-	return r.failed, nil
+	return r.failed, false, nil
 }
 
 // fetchAlbum looks one album up and stores the outcome over prev, its

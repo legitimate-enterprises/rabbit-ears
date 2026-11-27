@@ -6409,10 +6409,10 @@ export interface components {
         WatchTogetherRole: "host" | "guest";
         WatchTogetherMember: {
             accountId: components["schemas"]["Id"];
-            /** @description As Heidi in In sync with Heidi. */
+            /** @description As Helga in In sync with Helga. */
             name: string;
             role: components["schemas"]["WatchTogetherRole"];
-            /** @description The member's device, as Heidi is on her Apple TV. */
+            /** @description The member's device, as Helga is on her Apple TV. */
             deviceName: string;
             platform: components["schemas"]["Platform"];
             /** @description Polled within the last 30 seconds. */
@@ -6444,7 +6444,7 @@ export interface components {
              * @description The shared position at serverTime.
              */
             positionMs: number;
-            /** @description Who paused last, while paused, as Heidi paused. */
+            /** @description Who paused last, while paused, as Helga paused. */
             pausedById?: components["schemas"]["Id"];
             pausedByName?: string;
             /** @description Rises on every join, play, pause, seek and end. */

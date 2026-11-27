@@ -20,7 +20,8 @@ import (
 )
 
 // scannedMusic scans a copy of the music fixtures into a new Music library
-// the way the nightly task does, without a metadata provider.
+// the way the nightly task and the Local metadata task after it do, without
+// a metadata provider.
 func (e *env) scannedMusic() uid.ID {
 	e.t.Helper()
 	src := fixturePath(e.t, "music")
@@ -33,6 +34,8 @@ func (e *env) scannedMusic() uid.ID {
 	sc := scan.New(scan.Config{Libraries: e.svc.Libraries.Repo(), Items: e.svc.Items.Repo(), Files: e.svc.MediaFiles.Repo(),
 		Editions: e.svc.Editions.Repo(), Genres: e.svc.Genres.Repo(), People: e.svc.People.Repo(), ThumbDir: e.t.TempDir()})
 	_, err = sc.Scan(context.Background(), l, nil)
+	must(e.t, err)
+	_, _, err = sc.MakeLocal(context.Background(), nil, nil)
 	must(e.t, err)
 	return lib
 }
@@ -348,13 +351,13 @@ func TestRecentlyPlayedAndPopular(t *testing.T) {
 // playlists included, is theirs alone.
 func TestRecentlyPlayedKeepsPlaylistsPrivate(t *testing.T) {
 	e := newEnv(t)
-	claire := e.householdAdult(e.plain, "Claire", "claire@example.test")
-	mix := &playlist.Playlist{AccountID: claire.Me.Account.Id, Name: "Claire's mix", Kind: playlist.Music}
+	joan := e.householdAdult(e.plain, "Joan", "joan@example.test")
+	mix := &playlist.Playlist{AccountID: joan.Me.Account.Id, Name: "Joan's mix", Kind: playlist.Music}
 	must(t, e.svc.Playlists.Repo().Create(mix, nil))
 	must(t, e.svc.Playlists.Repo().MarkPlayed(mix.ID, time.Now().UTC()))
-	p := "/profiles/" + itoa(claire.Me.Account.Id) + "/music/recently-played"
+	p := "/profiles/" + itoa(joan.Me.Account.Id) + "/music/recently-played"
 	var recent api.MusicRecentPage
-	e.expect(200, "GET", p, claire.Token, nil, &recent)
+	e.expect(200, "GET", p, joan.Token, nil, &recent)
 	if len(recent.Items) != 1 || recent.Items[0].Playlist == nil {
 		t.Fatalf("her own %+v", recent)
 	}

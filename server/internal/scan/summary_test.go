@@ -77,13 +77,21 @@ func TestScanSummaryTVAndFailures(t *testing.T) {
 	}
 }
 
-func TestScanSummaryCountsFailedLookups(t *testing.T) {
+// The lookups that fail are the Refresh metadata run's to report, not the
+// scan's.
+func TestRefreshMetadataSummaryCountsFailedLookups(t *testing.T) {
 	e := newEnv(t, library.Movies, "k")
 	e.s.Probe = func(context.Context, string) (*probe.Result, error) { return &probe.Result{Container: "mkv"}, nil }
 	e.tmdbUp.Store(false)
 	touch(t, filepath.Join(e.root, "A (2001)", "m.mkv"))
 	touch(t, filepath.Join(e.root, "B (2002)", "m.mkv"))
-	if got := scanSummary(t, e); got != "2 movies added; 2 metadata lookups failed" {
-		t.Errorf("got %q", got)
+	r, tasks := newRunner(t, e)
+	must(t, r.Sync())
+	must(t, r.Tick(context.Background()))
+	for name, want := range map[string]string{"Scan L": "2 movies added", "Refresh metadata": "2 metadata lookups failed"} {
+		tk, _ := tasks.ByName(name)
+		if run, err := tasks.LastRun(tk.ID); err != nil || run.Summary != want {
+			t.Errorf("%s: %+v %v", name, run, err)
+		}
 	}
 }

@@ -67,9 +67,10 @@ func TestChannelAvatarForAPlaylistFolder(t *testing.T) {
 		return nil
 	}
 
-	sum, err := e.s.Scan(context.Background(), e.lib, nil)
-	if err != nil || sum.LookupFailed != 1 {
-		t.Fatalf("scan during an outage %q %v", sum, err)
+	_, err := e.s.Scan(context.Background(), e.lib, nil)
+	must(t, err)
+	if failed, _, err := e.s.lookUp(context.Background(), e.lib, nil); err != nil || failed != 1 {
+		t.Fatalf("lookup during an outage: %d failed, %v", failed, err)
 	}
 	m := art("Clockwork Corner")
 	if m.PosterPath != filepath.Join(clock, "poster.jpg") || m.RetryAt == nil || !m.RetryAt.Equal(e.clock.Add(RetryDelay)) {
@@ -81,7 +82,7 @@ func TestChannelAvatarForAPlaylistFolder(t *testing.T) {
 
 	down.Store(false)
 	*e.clock = e.clock.Add(RetryDelay)
-	if _, err := e.s.RetryDue(context.Background(), 10); err != nil {
+	if _, _, err := e.s.RetryDue(context.Background(), 10, nil); err != nil {
 		t.Fatal(err)
 	}
 	m = art("Clockwork Corner")
@@ -100,7 +101,7 @@ func TestChannelAvatarForAPlaylistFolder(t *testing.T) {
 
 	down.Store(true)
 	*e.clock = *m.RetryAt
-	if _, err := e.s.RetryDue(context.Background(), 10); err != nil {
+	if _, _, err := e.s.RetryDue(context.Background(), 10, nil); err != nil {
 		t.Fatal(err)
 	}
 	if m := art("Clockwork Corner"); m.PosterPath != avatar || !m.RetryAt.Equal(e.clock.Add(RetryDelay)) {

@@ -962,7 +962,7 @@ describe("users", () => {
     const acct = {
       ...adult,
       id: uid(2),
-      name: "Heidi",
+      name: "Helga",
       email: "h@example.com",
       isAdmin: false,
       householdId: undefined,
@@ -981,14 +981,14 @@ describe("users", () => {
     });
     await settle();
     click(byText("button", "Add adult"));
-    type("Name", "Heidi");
+    type("Name", "Helga");
     type("Email", "h@example.com");
     document
       .querySelector(".dialog form")!
       .dispatchEvent(new Event("submit", { cancelable: true }));
     await settle();
     expect(document.querySelector("[role=dialog] h1")?.textContent).toBe(
-      "Heidi's account is ready",
+      "Helga's account is ready",
     );
     expect(
       document.querySelector<HTMLInputElement>("input[aria-label='Join link']")!.value,
@@ -1004,7 +1004,7 @@ describe("users", () => {
     ...adult,
     id: uid(2),
     kind: "kid",
-    name: "Aaron",
+    name: "Mary",
     email: undefined,
     isAdmin: false,
     birthday: "2020-06-02",
@@ -1031,13 +1031,13 @@ describe("users", () => {
     sheet.querySelector("form")!.dispatchEvent(new Event("submit", { cancelable: true }));
 
   it("Edit on a kid saves name, birthday and ceilings through the accounts API", async () => {
-    const sheet = await edit("Aaron", {
+    const sheet = await edit("Mary", {
       [`PUT /accounts/${uid(2)}`]: (b: unknown) => ({ ...kid, ...(b as object) }),
       "GET /ratings/suggestion": { age: 9, movieCeiling: "PG", tvCeiling: "TV-PG" },
     });
     expect(sheet.getAttribute("role")).toBe("dialog");
     expect([...sheet.querySelectorAll("label")].map((l) => l.textContent)).not.toContain("Email");
-    type("Name", "Aaron B");
+    type("Name", "Mary B");
     choose(sheet, "Birthday", "2017-08-19");
     await settle();
     expect((calls.find((c) => c.key === "GET /ratings/suggestion") ?? {}).key).toBeTruthy();
@@ -1046,7 +1046,7 @@ describe("users", () => {
     await settle();
     expect(calls.find((c) => c.key === `PUT /accounts/${uid(2)}`)?.body).toEqual({
       kind: "kid",
-      name: "Aaron B",
+      name: "Mary B",
       birthday: "2017-08-19",
       isAdmin: false,
       filterMode: "ratings",
@@ -1097,10 +1097,10 @@ describe("users", () => {
 
   it("Remove in the Edit sheet asks in the page, then deletes the account", async () => {
     const confirm = vi.spyOn(window, "confirm");
-    const sheet = await edit("Aaron", { [`DELETE /accounts/${uid(2)}`]: noContent });
+    const sheet = await edit("Mary", { [`DELETE /accounts/${uid(2)}`]: noContent });
     click(byText("button", "Remove"));
     expect(calls.find((c) => c.key === `DELETE /accounts/${uid(2)}`)).toBeUndefined();
-    expect(sheet.textContent).toContain("Remove Aaron and their watch history?");
+    expect(sheet.textContent).toContain("Remove Mary and their watch history?");
     click([...sheet.querySelectorAll("button")].filter((b) => b.textContent === "Remove").at(-1));
     await settle();
     expect(calls.find((c) => c.key === `DELETE /accounts/${uid(2)}`)).toBeTruthy();
@@ -1249,7 +1249,7 @@ describe("users", () => {
       { id: uid(1), name: "Ada", adultId: uid(1), createdAt: "" },
       { id: uid(2), name: "Mark", adultId: uid(3), createdAt: "" },
     ]);
-    const claire = { ...kid, name: "Claire", householdIds: [uid(1), uid(2)] };
+    const joan = { ...kid, name: "Joan", householdIds: [uid(1), uid(2)] };
     const mark = {
       ...adult,
       id: uid(3),
@@ -1267,7 +1267,7 @@ describe("users", () => {
         fetch: signedIn({
           ...users,
           "GET /households": hhs,
-          "GET /accounts": page([ada, claire, mark]),
+          "GET /accounts": page([ada, joan, mark]),
           "GET /adult-links": page([link]),
           ...extra,
         }),
@@ -1284,18 +1284,14 @@ describe("users", () => {
       await open();
       const ours = card("Household of Ada");
       expect([...ours.querySelectorAll("th")].map((t) => t.textContent)).toContain("Also in");
-      expect(cells(row(ours, "Claire")).slice(0, 3)).toEqual([
-        "CClaire",
-        "Kid",
-        "Mark's household",
-      ]);
+      expect(cells(row(ours, "Joan")).slice(0, 3)).toEqual(["JJoan", "Kid", "Mark's household"]);
       expect(cells(row(ours, "Mark")).slice(0, 3)).toEqual([
         "MMark",
         "AdultVisiting",
         "Mark's household",
       ]);
       expect(cells(row(ours, "Ada")).slice(0, 3)).toEqual(["AAda", "OwnerAdmin", "-"]);
-      expect(buttons(row(ours, "Claire"))).toEqual(["Edit", "Remove from household"]);
+      expect(buttons(row(ours, "Joan"))).toEqual(["Edit", "Remove from household"]);
       expect(buttons(row(ours, "Mark"))).toEqual(["Remove from household"]);
       expect(buttons(row(ours, "Ada"))).toEqual(["Edit"]);
       const theirs = card("Household of Mark");
@@ -1305,11 +1301,11 @@ describe("users", () => {
 
     it("Remove from household asks, then takes the profile out of that household only", async () => {
       await open({ [`DELETE /households/${uid(1)}/members/${uid(2)}`]: noContent });
-      const r = row(card("Household of Ada"), "Claire");
+      const r = row(card("Household of Ada"), "Joan");
       click(
         [...r.querySelectorAll("button")].find((b) => b.textContent === "Remove from household"),
       );
-      expect(r.textContent).toContain("Remove Claire from Ada's household?");
+      expect(r.textContent).toContain("Remove Joan from Ada's household?");
       click([...r.querySelectorAll("button")].at(-1));
       await settle();
       expect(calls.some((c) => c.key === `DELETE /households/${uid(1)}/members/${uid(2)}`)).toBe(
@@ -1321,7 +1317,7 @@ describe("users", () => {
     it("Add existing profile puts a joined profile not yet there into the household", async () => {
       const pending = { ...adult, id: uid(4), name: "Dee", pending: true, householdId: undefined };
       await open({
-        "GET /accounts": page([ada, claire, mark, pending]),
+        "GET /accounts": page([ada, joan, mark, pending]),
         "GET /join-codes": page([]),
         [`PUT /households/${uid(2)}/members/${uid(1)}`]: noContent,
       });

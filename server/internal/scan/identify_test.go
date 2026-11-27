@@ -409,7 +409,7 @@ func TestMatchMadeBeforeIdentityIsReviewedNotReplaced(t *testing.T) {
 	rematched, err := e.items.MatchByHand(&item.Metadata{ItemID: uk.ID, Status: item.Matched, ProviderID: &right}, *e.clock)
 	must(t, err)
 	must(t, e.s.Reviews.Settle(uk.ID, "", review.OfIdentity...))
-	if _, err := e.s.RetryDue(context.Background(), 10); err != nil || !rematched {
+	if _, _, err := e.s.RetryDue(context.Background(), 10, nil); err != nil || !rematched {
 		t.Fatalf("rematched %v: %v", rematched, err)
 	}
 	m, err := e.items.Remote(uk.ID)
@@ -544,7 +544,7 @@ func TestRetryFindsAStoreTitledAlbumAndEndsItsReview(t *testing.T) {
 
 	mb.blind = false
 	*e.clock = e.clock.Add(9 * 24 * time.Hour)
-	if _, err := e.s.RetryDue(context.Background(), 100); err != nil {
+	if _, _, err := e.s.RetryDue(context.Background(), 100, nil); err != nil {
 		t.Fatal(err)
 	}
 	m, err := e.items.Remote(single.ID)

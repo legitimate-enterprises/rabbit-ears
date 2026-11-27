@@ -37,10 +37,10 @@ test("first run, add a library, scan it, add an adult and see the join code", as
 
   await page.getByRole("link", { name: "Users & profiles" }).click();
   await page.getByRole("button", { name: "Add adult" }).click();
-  await page.getByLabel("Name", { exact: true }).fill("Heidi");
-  await page.getByLabel("Email").fill("heidi@example.com");
+  await page.getByLabel("Name", { exact: true }).fill("Helga");
+  await page.getByLabel("Email").fill("helga@example.com");
   await page.getByRole("button", { name: "Create account" }).click();
-  await expect(page.getByRole("dialog", { name: "Heidi's account is ready" })).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Helga's account is ready" })).toBeVisible();
   await expect(page.locator(".code")).toHaveText(/^[A-Z0-9]{4}-[A-Z0-9]{4}$/);
   await expect(page.getByLabel("Join link")).toHaveValue(/\/join\/[A-Z0-9]{4}-[A-Z0-9]{4}$/);
 

@@ -36,14 +36,14 @@ func newJoinedPair(t *testing.T, start time.Time) joinedPair {
 			t.Fatal(err)
 		}
 	}
-	heidi := &account.Account{Kind: account.Adult, Email: "h@example.test", Name: "Heidi"}
-	must(account.New(d).Create(heidi, nil))
-	h := &household.Household{Name: "Home", AdultID: heidi.ID}
+	helga := &account.Account{Kind: account.Adult, Email: "h@example.test", Name: "Helga"}
+	must(account.New(d).Create(helga, nil))
+	h := &household.Household{Name: "Home", AdultID: helga.ID}
 	must(household.New(d).Create(h, nil))
-	claire := &account.Account{Kind: account.Adult, Email: "c@example.test", Name: "Claire", HouseholdID: &h.ID}
-	must(account.New(d).Create(claire, nil))
+	joan := &account.Account{Kind: account.Adult, Email: "j@example.test", Name: "Joan", HouseholdID: &h.ID}
+	must(account.New(d).Create(joan, nil))
 	var members []together.Member
-	for i, a := range []*account.Account{heidi, claire} {
+	for i, a := range []*account.Account{helga, joan} {
 		dev := &device.Device{TokenHash: "t" + a.Email, Name: []string{"TV", "Mac"}[i], Platform: "tvos", AccountID: a.ID, HouseholdID: h.ID}
 		must(device.New(d).Create(dev))
 		members = append(members, together.Member{AccountID: a.ID, DeviceID: dev.ID})

@@ -688,9 +688,9 @@ func (r *Repo) WithoutMetadata(libraryID uid.ID, limit int) ([]*Item, error) {
 		WHERE i.library_id = ? AND i.kind IN (?, ?) AND m.item_id IS NULL ORDER BY i.id LIMIT ?`, libraryID, Movie, Show, limit)
 }
 
-// WithoutLocal lists up to limit movies, shows, seasons and episodes that
-// have no local row yet, oldest first.
+// WithoutLocal lists up to limit movies, shows, seasons, episodes and
+// albums that have no local row yet, oldest first.
 func (r *Repo) WithoutLocal(limit int) ([]*Item, error) {
 	return r.query(`SELECT `+prefixed("i")+` FROM item i LEFT JOIN item_metadata m ON m.item_id = i.id AND m.source = 'local'
-		WHERE i.kind IN (?, ?, ?, ?) AND m.item_id IS NULL ORDER BY i.id LIMIT ?`, Movie, Show, Season, Episode, limit)
+		WHERE i.kind IN (?, ?, ?, ?, ?) AND m.item_id IS NULL ORDER BY i.id LIMIT ?`, Movie, Show, Season, Episode, Album, limit)
 }

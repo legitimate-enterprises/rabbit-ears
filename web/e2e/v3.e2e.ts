@@ -285,14 +285,14 @@ test("two adults watch a movie together: join, play, pause and leave apply to bo
   request,
 }) => {
   const headers = await seed(request);
-  const heidi = { name: "Heidi", email: "heidi.e2e@example.com" };
-  await seedAdult(request, headers, heidi);
+  const helga = { name: "Helga", email: "helga.e2e@example.com" };
+  await seedAdult(request, headers, helga);
   const other = await browser.newContext();
   await other.addInitScript(quiet);
   const guest = await other.newPage();
   try {
     await signIn(page);
-    await signIn(guest, { email: heidi.email, profile: "Heidi" });
+    await signIn(guest, { email: helga.email, profile: "Helga" });
 
     const open = async (p: Page) => {
       await tab(p, "Movies").click();
@@ -309,12 +309,12 @@ test("two adults watch a movie together: join, play, pause and leave apply to bo
     await open(guest);
     await guest.getByRole("button", { name: /^Join Ada · \d:\d\d$/ }).click();
     await expect(guest.getByText("In sync with Ada")).toBeVisible();
-    await expect(page.getByText("In sync with Heidi")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("In sync with Helga")).toBeVisible({ timeout: 10_000 });
 
     // Play together on the host's details plays for both: each player opens
     // and starts at the one instant the server set.
     await page.getByRole("link", { name: /Play together/ }).click();
-    await expect(page.getByText("In sync with Heidi")).toBeVisible();
+    await expect(page.getByText("In sync with Helga")).toBeVisible();
     await expect(guest).toHaveURL(/#\/play\//, { timeout: 10_000 });
     const time = (p: Page) => p.evaluate(() => document.querySelector("video")?.currentTime ?? 0);
     const paused = (p: Page) => p.evaluate(() => document.querySelector("video")?.paused ?? true);

@@ -29,13 +29,13 @@ const acct = (id: number, name: string, kind = "adult") => ({
   createdAt: ts,
   modifiedAt: ts,
 });
-// The active adult is Bea (1); Heidi (5) is the other adult and Jax (2) a kid.
+// The active adult is Bea (1); Helga (5) is the other adult and Jason (2) a kid.
 const me = (active: number) => ({
   device: { id: uid(1) },
   account: acct(1, "Bea"),
   activeProfileId: uid(active),
   household: { id: uid(1), name: "Bea", adultId: uid(1), createdAt: ts },
-  profiles: [acct(1, "Bea"), acct(5, "Heidi"), acct(2, "Jax", "kid")],
+  profiles: [acct(1, "Bea"), acct(5, "Helga"), acct(2, "Jason", "kid")],
 });
 const page = (items: unknown[]) => ({ items });
 const member = (accountId: number, name: string, role: "host" | "guest") => ({
@@ -47,13 +47,13 @@ const member = (accountId: number, name: string, role: "host" | "guest") => ({
   present: true,
   joinedAt: ts,
 });
-const HEIDI = member(5, "Heidi", "host");
+const HELGA = member(5, "Helga", "host");
 const BEA = member(1, "Bea", "guest");
 const wt = (extra: Partial<Together> = {}): Together => ({
   id: uid(3),
   itemId: uid(10),
   status: "joined",
-  members: [HEIDI, BEA],
+  members: [HELGA, BEA],
   joinBy: ts,
   joinMsLeft: 252_000,
   playing: false,
@@ -68,7 +68,7 @@ const wt = (extra: Partial<Together> = {}): Together => ({
   ...extra,
 });
 const waiting = (extra: Partial<Together> = {}) =>
-  wt({ status: "waiting", members: [HEIDI], ...extra });
+  wt({ status: "waiting", members: [HELGA], ...extra });
 
 class FakePort implements Port {
   isPaused = true;
@@ -301,7 +301,7 @@ describe("Sync", () => {
 
 describe("otherName", () => {
   it("names the other adult, or the profile's own other device when it is both members", () => {
-    expect(otherName(wt(), uid(1))).toBe("Heidi");
+    expect(otherName(wt(), uid(1))).toBe("Helga");
     const here = { ...member(1, "Bea", "host"), deviceName: "Laptop", thisDevice: true };
     const there = { ...member(1, "Bea", "guest"), deviceName: "Living Room", thisDevice: false };
     expect(otherName(wt({ members: [here, there] }), uid(1))).toBe("Living Room");
@@ -381,16 +381,16 @@ describe("details", () => {
       ),
     });
     await until(() => r.querySelector(".btn.join"));
-    expect(r.querySelector(".btn.join")!.textContent).toBe("Join Heidi · 4:12");
+    expect(r.querySelector(".btn.join")!.textContent).toBe("Join Helga · 4:12");
     expect(r.querySelector(".tgnote")!.textContent).toBe(
-      "Heidi wants to watch this together. Join in the next 4:12 to play in sync.",
+      "Helga wants to watch this together. Join in the next 4:12 to play in sync.",
     );
     r.querySelector<HTMLElement>(".btn.join")!.click();
     await until(() => r.querySelector(".pill.sync"));
-    expect(r.querySelector(".pill.sync")!.textContent).toBe("In sync with HeidiLeave");
+    expect(r.querySelector(".pill.sync")!.textContent).toBe("In sync with HelgaLeave");
     expect(r.querySelector(".btn.p")!.textContent).toBe("Play together");
     expect(r.querySelector(".tgnote")!.textContent).toBe(
-      "Pause and play on either device apply to both. Heidi is on Apple TV.",
+      "Pause and play on either device apply to both. Helga is on Apple TV.",
     );
     r.querySelector<HTMLElement>(".pill .leave")!.click();
     await until(() => calls.some((c) => c.key === `DELETE /watch-together/${uid(3)}`));
@@ -484,7 +484,7 @@ describe("details", () => {
       fetch: mockFetch(routes({ "GET /watch-together": page([waiting({ joinMsLeft: 252_000 })]) })),
     });
     await until(() => r.querySelector(".btn.join"));
-    await until(() => r.querySelector(".btn.join")!.textContent === "Join Heidi · 4:10", 3500);
+    await until(() => r.querySelector(".btn.join")!.textContent === "Join Helga · 4:10", 3500);
   });
 
   it("still shows the page when the server cannot do it", async () => {
@@ -551,7 +551,7 @@ describe("details", () => {
     const invited = root();
     await boot(invited, { fetch: mockFetch(tv(2, [waiting({ itemId: uid(22) })])) });
     await until(() => invited.querySelector(".btn.join"));
-    expect(invited.querySelector(".btn.join")!.textContent).toBe("Join Heidi · 4:12");
+    expect(invited.querySelector(".btn.join")!.textContent).toBe("Join Helga · 4:12");
   });
 });
 
@@ -610,7 +610,7 @@ describe("player", () => {
     const shared = wt({
       positionMs: 72_000,
       pausedById: uid(5),
-      pausedByName: "Heidi",
+      pausedByName: "Helga",
       version: 3,
     });
     await boot(r, {
@@ -626,8 +626,8 @@ describe("player", () => {
     expect(calls.find((c) => c.key === "POST /playback/sessions")!.body).toMatchObject({
       positionMs: 72_000,
     });
-    expect(r.querySelector(".pill.sync")!.textContent).toBe("In sync with HeidiLeave");
-    expect(r.querySelector(".pnote")!.textContent).toBe("Heidi paused");
+    expect(r.querySelector(".pill.sync")!.textContent).toBe("In sync with HelgaLeave");
+    expect(r.querySelector(".pnote")!.textContent).toBe("Helga paused");
     expect((r.querySelector(".pnote") as HTMLElement).hidden).toBe(false);
     r.querySelector<HTMLElement>(".pill .leave")!.click();
     await until(() => calls.some((c) => c.key === `DELETE /watch-together/${uid(3)}`));
@@ -649,14 +649,14 @@ describe("player", () => {
     await until(() => r.querySelector(".pill.sync:not([hidden])"));
     expect((r.querySelector(".pnote") as HTMLElement).hidden).toBe(true);
     shared = wt({ status: "ended", version: 4 });
-    await until(() => r.querySelector(".pnote")?.textContent === "Heidi left");
+    await until(() => r.querySelector(".pnote")?.textContent === "Helga left");
     expect((r.querySelector(".pill.sync") as HTMLElement).hidden).toBe(true);
   });
 
   it("follows the one a kid is in", async () => {
     await at(`#/play/${uid(10)}`);
     const r = root();
-    const shared = wt({ members: [HEIDI, member(2, "Jax", "guest")], positionMs: 72_000 });
+    const shared = wt({ members: [HELGA, member(2, "Jason", "guest")], positionMs: 72_000 });
     await boot(r, {
       fetch: mockFetch(
         routes({
@@ -667,7 +667,7 @@ describe("player", () => {
       ),
     });
     await until(() => r.querySelector(".pill.sync:not([hidden])"));
-    expect(r.querySelector(".pill.sync")!.textContent).toBe("In sync with HeidiLeave");
+    expect(r.querySelector(".pill.sync")!.textContent).toBe("In sync with HelgaLeave");
   });
 
   it("plays alone when no Watch together is open", async () => {

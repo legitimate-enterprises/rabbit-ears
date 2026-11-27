@@ -21,6 +21,7 @@ func TestGoneFileOfATitleWithAnotherIsDeleted(t *testing.T) {
 	fixtureCopy(t, "h264-high41.mp4", kept)
 	fixtureCopy(t, "chapters.mkv", gone)
 	e.mustScan()
+	e.thumbnails()
 	ep := e.list(item.Episode)
 	if fs, _ := e.files.FilesForItem(ep[0].ID); len(ep) != 1 || len(fs) != 2 {
 		t.Fatalf("episodes %+v, files %+v", ep, fs)

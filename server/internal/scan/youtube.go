@@ -239,13 +239,13 @@ func (s *Scanner) syncVideo(ctx context.Context, lib *library.Library, c candida
 	} else if err != nil {
 		return err
 	}
-	return s.describeVideo(ctx, f, c.mod, side, stamp)
+	return s.describeVideo(f, c.mod, side, stamp)
 }
 
 // describeVideo records what a video's sidecars say about it: title and
 // description from the .nfo, else the .info.json; its id, publish time,
 // thumbnail, and .info.json chapters when the file has none.
-func (s *Scanner) describeVideo(ctx context.Context, f *mediafile.File, modified time.Time, side sidecars, stamp int64) error {
+func (s *Scanner) describeVideo(f *mediafile.File, modified time.Time, side sidecars, stamp int64) error {
 	n, in := readNFO(side.nfo), readInfo(side.info)
 	it, err := s.Items.Get(*f.ItemID)
 	if err != nil {
@@ -275,7 +275,6 @@ func (s *Scanner) describeVideo(ctx context.Context, f *mediafile.File, modified
 			if err := s.Files.ReplaceChapters(f.ID, chaptersFrom(in.Chapters, in.Sponsor)); err != nil {
 				return err
 			}
-			s.chapterThumbs(ctx, f)
 		}
 	}
 	return s.YouTube.SetSource(it.ID, published(in, n, modified), stamp)
@@ -283,15 +282,16 @@ func (s *Scanner) describeVideo(ctx context.Context, f *mediafile.File, modified
 
 // describeChannels records each channel folder's tvshow.nfo and poster.jpg
 // as its local data; a channel whose folder is not on disk keeps what it
-// has. While the metadata settings use remote data, a folder without a
-// square poster also gets its uploader's YouTube avatar as its remote data,
-// returning how many of those lookups failed; a failure never fails it.
-func (s *Scanner) describeChannels(ctx context.Context, lib *library.Library) (int, error) {
+// has. With avatars, while the metadata settings use remote data, a folder
+// without a square poster also gets its uploader's YouTube avatar as its
+// remote data, returning how many of those lookups failed and whether it
+// gave way (see run); a failure never fails it.
+func (s *Scanner) describeChannels(ctx context.Context, lib *library.Library, avatars bool, yield func() bool) (int, bool, error) {
 	chs, err := s.Items.List(item.Filter{LibraryID: &lib.ID, Kind: item.Channel, Limit: 1 << 20})
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
-	r := &run{}
+	r := &run{yield: yield}
 	for _, ch := range chs {
 		if !fileExists(ch.Path) {
 			continue
@@ -303,24 +303,27 @@ func (s *Scanner) describeChannels(ctx context.Context, lib *library.Library) (i
 			l.PosterPath = poster
 		}
 		if err := s.putIfChanged(l, s.Items.LocalRow, s.Items.SetLocal); err != nil {
-			return r.failed, err
+			return r.failed, false, err
 		}
-		if square(poster) || s.Avatars == nil || !s.remote() {
+		if !avatars || square(poster) || s.Avatars == nil || !s.remote() {
 			continue
+		}
+		if r.gaveWay() {
+			return r.failed, true, nil
 		}
 		old, err := s.Items.Remote(ch.ID)
 		if err != nil && !errors.Is(err, db.ErrNotFound) {
-			return r.failed, err
+			return r.failed, false, err
 		}
 		m := &item.Metadata{ItemID: ch.ID, Provider: youtube.Provider, Status: item.Matched}
 		if err := s.channelAvatar(ctx, r, ch, m, old); err != nil {
-			return r.failed, err
+			return r.failed, false, err
 		}
 		if err := s.putIfChanged(m, s.Items.Remote, s.Items.SetMetadata); err != nil {
-			return r.failed, err
+			return r.failed, false, err
 		}
 	}
-	return r.failed, nil
+	return r.failed, false, nil
 }
 
 // putIfChanged writes m with put, stamped now, unless get finds the row

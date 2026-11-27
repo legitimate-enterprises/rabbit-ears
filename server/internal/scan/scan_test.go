@@ -147,14 +147,34 @@ func newEnv(t *testing.T, kind, key string) *env {
 	return e
 }
 
+// scan runs the library's scan, then looks up what it found, as the
+// Refresh metadata task the scan makes due does.
 func (e *env) scan() error {
 	_, err := e.s.Scan(context.Background(), e.lib, nil)
-	return err
+	_, _, looked := e.s.lookUp(context.Background(), e.lib, nil)
+	return errors.Join(err, looked)
 }
 
 func (e *env) mustScan() {
 	e.t.Helper()
 	if err := e.scan(); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+// local runs the Local metadata task's work, which a scan makes due.
+func (e *env) local() {
+	e.t.Helper()
+	if _, _, err := e.s.MakeLocal(context.Background(), nil, nil); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+// thumbnails runs the Seek previews task's work, chapter thumbnails then
+// seek previews, which a scan makes due.
+func (e *env) thumbnails() {
+	e.t.Helper()
+	if _, _, err := e.s.MakePreviews(context.Background(), nil, nil); err != nil {
 		e.t.Fatal(err)
 	}
 }
@@ -228,7 +248,7 @@ func TestRefreshFillsGenresAndCreditsOfMatchedItems(t *testing.T) {
 	if err := e.items.SetMetadata(&item.Metadata{ItemID: it.ID, ProviderID: &pid, Status: item.Matched, Title: "The Matrix", RetryAt: &due}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.s.RetryDue(context.Background(), 10); err != nil {
+	if _, _, err := e.s.RetryDue(context.Background(), 10, nil); err != nil {
 		t.Fatal(err)
 	}
 	e.wantGenresAndCredits(it.ID, 2, 3, 3)
@@ -250,7 +270,7 @@ func TestRefreshStoresKeywords(t *testing.T) {
 	if err := occasion.New(e.d).Create(o, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.s.RetryDue(context.Background(), 10); err != nil {
+	if _, _, err := e.s.RetryDue(context.Background(), 10, nil); err != nil {
 		t.Fatal(err)
 	}
 	if ms, err := e.items.List(item.Filter{OccasionID: &o.ID}); err != nil || len(ms) != 1 || ms[0].ID != it.ID {
@@ -266,6 +286,7 @@ func TestScanTVWithChaptersAndEpisodeMetadata(t *testing.T) {
 	fixtureCopy(t, "h264-high41.mp4", filepath.Join(e.root, "Breaking Bad (2008)", "Specials", "Breaking.Bad.S00E01.mp4"))
 	fixtureCopy(t, "h264-high41.mp4", filepath.Join(e.root, "loose.S01E01.mp4"))
 	e.mustScan()
+	e.thumbnails()
 
 	shows := e.list(item.Show)
 	if len(shows) != 1 || shows[0].ParsedTitle != "Breaking Bad" {
@@ -386,7 +407,7 @@ func TestOutageLeavesCompleteUnmatchedItemThenRecovers(t *testing.T) {
 		}
 	}
 	// Not yet due: nothing changes.
-	if _, err := e.s.RetryDue(context.Background(), 10); err != nil {
+	if _, _, err := e.s.RetryDue(context.Background(), 10, nil); err != nil {
 		t.Fatal(err)
 	}
 	if md, _ := e.items.Metadata(ms[0].ID); md.Status != item.Unmatched {
@@ -394,7 +415,7 @@ func TestOutageLeavesCompleteUnmatchedItemThenRecovers(t *testing.T) {
 	}
 	e.tmdbUp.Store(true)
 	*e.clock = e.clock.Add(2 * time.Hour)
-	if _, err := e.s.RetryDue(context.Background(), 10); err != nil {
+	if _, _, err := e.s.RetryDue(context.Background(), 10, nil); err != nil {
 		t.Fatal(err)
 	}
 	var matched, unmatched int
@@ -458,7 +479,7 @@ func TestMatchLibraryReachesEveryShowPastSeasonsAndOneBatch(t *testing.T) {
 	for n := 1; n <= batchLimit; n++ {
 		must(t, e.items.Create(&item.Item{LibraryID: e.lib.ID, ParentID: &shows[0].ID, Kind: item.Season, ParsedTitle: "Season", SeasonNumber: &n}))
 	}
-	if _, err := e.s.MatchLibrary(context.Background(), e.lib); err != nil {
+	if _, _, err := e.s.MatchLibrary(context.Background(), e.lib, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := e.items.Metadata(shows[batchLimit].ID); err != nil {
@@ -521,6 +542,7 @@ func TestUnmountedVolumeMarksFilesAndDeletesNothing(t *testing.T) {
 			a := filepath.Join(e.root, "A (2001)", "a.mkv")
 			fixtureCopy(t, "chapters.mkv", a)
 			e.mustScan()
+			e.thumbnails()
 			m := e.onlyMovie()
 			who := &account.Account{Kind: account.Adult, Email: "a@example.test", Name: "A"}
 			must(t, account.New(e.d).Create(who, nil))

@@ -24,68 +24,85 @@ const batchLimit = 1000
 
 // run is one batch of lookups; after the first provider failure the rest of
 // the batch is deferred without more calls, so an outage costs one timeout.
+// Before each lookup it asks yield, when set, whether a task waits; once one
+// does it stops, and what it did not look up is still without a row, or due.
 type run struct {
-	outage bool
-	failed int // lookups that hit a provider error or were deferred by an outage
+	outage  bool
+	failed  int // lookups that hit a provider error or were deferred by an outage
+	yield   func() bool
+	stopped bool
+}
+
+// gaveWay reports whether the run stops here for a task that waits.
+func (r *run) gaveWay() bool {
+	r.stopped = r.stopped || r.yield != nil && r.yield()
+	return r.stopped
 }
 
 // MatchLibrary fetches metadata for the library's movies and shows that have
 // none, and fills in episodes that arrived after their show was matched. It
-// returns how many lookups failed.
-func (s *Scanner) MatchLibrary(ctx context.Context, lib *library.Library) (int, error) {
+// returns how many lookups failed and whether it gave way (see run).
+func (s *Scanner) MatchLibrary(ctx context.Context, lib *library.Library, yield func() bool) (int, bool, error) {
 	if s.Provider == nil || !s.Provider.Enabled() || !s.remote() {
-		return 0, nil
+		return 0, false, nil
 	}
-	r := &run{}
+	r := &run{yield: yield}
 	// Every fetch writes the item's metadata row, so each batch is new items.
 	for {
 		items, err := s.Items.WithoutMetadata(lib.ID, batchLimit)
 		if err != nil {
-			return r.failed, err
+			return r.failed, false, err
 		}
 		for _, it := range items {
+			if r.gaveWay() {
+				return r.failed, true, nil
+			}
 			if err := s.fetch(ctx, r, it, nil); err != nil {
-				return r.failed, err
+				return r.failed, false, err
 			}
 		}
 		if len(items) < batchLimit {
 			break
 		}
 	}
-	if err := s.checkIdentities(ctx, r, lib.ID); err != nil {
-		return r.failed, err
+	if err := s.checkIdentities(ctx, r, lib.ID); err != nil || r.stopped {
+		return r.failed, r.stopped, err
 	}
 	shows, err := s.Items.List(item.Filter{LibraryID: &lib.ID, Kind: item.Show, Limit: 100000})
 	if err != nil {
-		return r.failed, err
+		return r.failed, false, err
 	}
 	for _, show := range shows {
 		if err := s.fillNewEpisodes(ctx, r, show); err != nil {
-			return r.failed, err
+			return r.failed, false, err
 		}
 	}
-	return r.failed, nil
+	return r.failed, r.stopped, nil
 }
 
 // RetryDue re-fetches up to limit items whose retry or refresh time has
 // come, across all libraries: movies and shows from TMDB, albums from
-// MusicBrainz, channel avatars from YouTube, and reports whether more may
-// be due. Each provider's outage defers only its own items, and an item
-// whose provider is off is deferred. Then every library's items no
-// provider was asked about yet are looked up, as its scan would, and each
-// Movies library's movies of one TMDB id are folded into one. While the
+// MusicBrainz, channel avatars from YouTube. Each provider's outage defers
+// only its own items, and an item whose provider is off is deferred. Then
+// every library's items no provider was asked about yet are looked up (see
+// lookUp). It returns how many lookups failed and whether more may be due:
+// a batch of limit, or a lookup it gave way before (see run). While the
 // metadata settings use no remote data it does nothing.
-func (s *Scanner) RetryDue(ctx context.Context, limit int) (bool, error) {
+func (s *Scanner) RetryDue(ctx context.Context, limit int, yield func() bool) (int, bool, error) {
 	video := s.Provider != nil && s.Provider.Enabled()
 	if !video && s.Music == nil && s.Avatars == nil || !s.remote() {
-		return false, nil
+		return 0, false, nil
 	}
 	due, err := s.Items.DueForRetry(s.Now(), limit)
 	if err != nil {
-		return false, err
+		return 0, false, err
 	}
 	tv, music, channels := &run{}, &run{}, &run{}
+	failed := func() int { return tv.failed + music.failed + channels.failed }
 	for _, m := range due {
+		if yield != nil && yield() {
+			return failed(), true, nil
+		}
 		it, err := s.Items.Get(m.ItemID)
 		if err != nil {
 			continue
@@ -103,25 +120,33 @@ func (s *Scanner) RetryDue(ctx context.Context, limit int) (bool, error) {
 			err = s.deferFetch(it, m, s.Now().UTC())
 		}
 		if err != nil {
-			return false, err
+			return failed(), false, err
 		}
 	}
 	libs, err := s.Libraries.List()
 	if err != nil {
-		return false, err
+		return failed(), false, err
 	}
+	n := failed()
 	for _, l := range libs {
-		if _, err := s.matcher(l)(ctx, l); err != nil {
-			return false, err
-		}
-		if l.Kind != library.Movies {
-			continue
-		}
-		if err := s.foldMovies(l.ID, nil); err != nil {
-			return false, err
+		f, more, err := s.lookUp(ctx, l, yield)
+		if n += f; err != nil || more {
+			return n, more, err
 		}
 	}
-	return len(due) == limit, nil
+	return n, len(due) == limit, nil
+}
+
+// lookUp looks up the library's titles no provider was asked about yet, and
+// those whose names changed, as matcher has it, then folds each of a Movies
+// library's movies of one TMDB id into one. It returns how many lookups
+// failed and whether it gave way (see run).
+func (s *Scanner) lookUp(ctx context.Context, lib *library.Library, yield func() bool) (int, bool, error) {
+	failed, more, err := s.matcher(lib)(ctx, lib, yield)
+	if err != nil || more || lib.Kind != library.Movies {
+		return failed, more, err
+	}
+	return failed, false, s.foldMovies(lib.ID, nil)
 }
 
 // fetch looks one movie or show up and stores the outcome. Provider errors
@@ -269,9 +294,9 @@ var (
 //     never fall back to a looser reading; the title keeps the match it
 //     has, or none, and is left for review.
 //
-// A matched title's names are read only with check, which each scan and
-// each metadata run asks of every title whose stamp differs; a refresh
-// that comes due between them fetches the match it has.
+// A matched title's names are read only with check, which each metadata
+// run asks of every title whose stamp differs; a refresh that comes due
+// fetches the match it has.
 func (s *Scanner) rematch(itemID uid.ID, matched bool, was string, st stated, rv *review.Review) (take bool, stamp string, err error) {
 	byHand, stamp := matched && was == "", st.stamp
 	switch {
@@ -478,6 +503,9 @@ func (s *Scanner) fillNewEpisodes(ctx context.Context, r *run, show *item.Item) 
 	}
 	for _, e := range eps {
 		if _, err := s.Items.Remote(e.ID); errors.Is(err, db.ErrNotFound) && (m.FetchedAt == nil || e.AddedAt.After(*m.FetchedAt)) {
+			if r.gaveWay() {
+				return nil
+			}
 			return s.fetch(ctx, r, show, m)
 		}
 	}

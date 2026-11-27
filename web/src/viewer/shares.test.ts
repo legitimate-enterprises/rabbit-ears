@@ -29,10 +29,10 @@ const acct = (id: number, name: string, kind = "adult") => ({
 });
 const me = (active: number) => ({
   device: { id: uid(1) },
-  account: acct(1, "Heidi"),
+  account: acct(1, "Helga"),
   activeProfileId: uid(active),
-  household: { id: uid(1), name: "Heidi", adultId: uid(1), createdAt: ts },
-  profiles: [acct(1, "Heidi"), acct(2, "Jax", "kid")],
+  household: { id: uid(1), name: "Helga", adultId: uid(1), createdAt: ts },
+  profiles: [acct(1, "Helga"), acct(2, "Jason", "kid")],
 });
 const page = (items: unknown[]) => ({ items });
 const base = (active = 1) => ({
@@ -146,12 +146,12 @@ describe("a playlist shared with the profile", () => {
       fetch: mockFetch({
         ...base(2),
         [`GET /profiles/${uid(2)}/playlists`]: page([
-          pl(5, "Cartoons", { profileId: uid(1), access: "read", ownerName: "Heidi" }),
+          pl(5, "Cartoons", { profileId: uid(1), access: "read", ownerName: "Helga" }),
         ]),
       }),
     });
     await until(() => r.querySelector(".poster"));
-    expect(r.querySelector(".poster")!.textContent).toContain("Shared by Heidi");
+    expect(r.querySelector(".poster")!.textContent).toContain("Shared by Helga");
     expect(button(r, "New playlist")).toBeUndefined();
     expect(button(r, "Playlists")).toBeDefined();
   });
@@ -203,7 +203,7 @@ const hshare = (householdId: number, name: string, access: string) => ({
   createdAt: ts,
 });
 const households = [
-  { id: uid(1), name: "Heidi's household", profiles: 3 },
+  { id: uid(1), name: "Helga's household", profiles: 3 },
   { id: uid(4), name: "Ann's household", profiles: 1 },
 ];
 const owner = (routes: Record<string, unknown>) => ({
@@ -270,12 +270,12 @@ describe("the owner's Share sheet", () => {
         items: [...households, { id: uid(6), name: "Big house", profiles: 2 }],
       },
       [`GET /profiles/${uid(1)}/playlists/${uid(5)}/household-shares`]: page([
-        hshare(1, "Heidi's household", "read"),
+        hshare(1, "Helga's household", "read"),
         hshare(6, "Big house", "write"),
       ]),
     });
     expect(rows(dlg, "Households")).toEqual([
-      ["Heidi's household", "3 profiles", "read"],
+      ["Helga's household", "3 profiles", "read"],
       ["Ann's household", "1 profile", ""],
       ["Big house", "2 profiles", "write"],
     ]);
@@ -297,9 +297,9 @@ describe("the owner's Share sheet", () => {
       [`GET /profiles/${uid(1)}/share-candidates`]: page([
         {
           profileId: uid(2),
-          name: "Jax",
+          name: "Jason",
           kind: "kid",
-          householdName: "Heidi's household",
+          householdName: "Helga's household",
           householdId: uid(1),
         },
         // A household of the same name that is not one of the owner's is not named.
@@ -307,7 +307,7 @@ describe("the owner's Share sheet", () => {
           profileId: uid(9),
           name: "Ola",
           kind: "adult",
-          householdName: "Heidi's household",
+          householdName: "Helga's household",
           householdId: uid(99),
         },
         {
@@ -322,18 +322,18 @@ describe("the owner's Share sheet", () => {
       [`GET /profiles/${uid(1)}/playlists/${uid(5)}/shares`]: page([
         share(7, "Ann", "write", "adult", { householdId: uid(4), color: "#6b3a2e" }),
         share(3, "Sam", "read", "adult", { householdId: uid(1) }),
-        share(2, "Jax", "read", "kid", { householdId: uid(1) }),
+        share(2, "Jason", "read", "kid", { householdId: uid(1) }),
       ]),
     });
     await until(() => dlg.querySelector("[aria-label=Profiles] li"));
     expect(rows(dlg, "Profiles")).toEqual([
-      ["Jax", "Heidi's household · Kid", "read"],
+      ["Jason", "Helga's household · Kid", "read"],
       ["Ola", "", ""],
       ["Ann", "Ann's household", "write"],
-      ["Sam", "Heidi's household", "read"],
+      ["Sam", "Helga's household", "read"],
     ]);
-    const jax = dlg.querySelector<HTMLSelectElement>("[aria-label='Access for Jax']")!;
-    expect([...jax.options].map((o) => o.textContent)).toEqual(["Not shared", "Can view"]);
+    const jason = dlg.querySelector<HTMLSelectElement>("[aria-label='Access for Jason']")!;
+    expect([...jason.options].map((o) => o.textContent)).toEqual(["Not shared", "Can view"]);
     const avatars = [...dlg.querySelectorAll<HTMLElement>("[aria-label=Profiles] li .avatar")];
     expect(avatars.map((a) => a.textContent)).toEqual(["J", "O", "A", "S"]);
     expect(avatars[2].style.background).toBe("rgb(107, 58, 46)");
@@ -346,16 +346,16 @@ describe("the owner's Share sheet", () => {
       [`GET /profiles/${uid(1)}/share-candidates`]: page([
         {
           profileId: uid(2),
-          name: "Jax",
+          name: "Jason",
           kind: "kid",
-          householdName: "Heidi's household",
+          householdName: "Helga's household",
           householdId: uid(1),
         },
         {
           profileId: uid(3),
           name: "Sam",
           kind: "adult",
-          householdName: "Heidi's household",
+          householdName: "Helga's household",
           householdId: uid(1),
         },
       ]),
@@ -442,7 +442,7 @@ describe("the owner's Share sheet", () => {
     await until(() => sent(`POST /profiles/${uid(1)}/playlists/${uid(5)}/household-shares`));
     expect(s.disabled).toBe(true);
     expect(
-      dlg.querySelector<HTMLSelectElement>('[aria-label="Access for Heidi\'s household"]')!
+      dlg.querySelector<HTMLSelectElement>('[aria-label="Access for Helga\'s household"]')!
         .disabled,
     ).toBe(false);
     answer(json(hshare(4, "Ann's household", "read"), 201));
@@ -453,12 +453,12 @@ describe("the owner's Share sheet", () => {
   it("shows a failed change and puts the control back", async () => {
     const dlg = await openShare({
       [`GET /profiles/${uid(1)}/playlists/${uid(5)}/household-shares`]: page([
-        hshare(1, "Heidi's household", "read"),
+        hshare(1, "Helga's household", "read"),
       ]),
       [`PUT /profiles/${uid(1)}/playlists/${uid(5)}/household-shares/${uid(1)}`]: () =>
         json({ code: "conflict", message: "Not now." }, 409),
     });
-    const s = choose(dlg, "Heidi's household", "write");
+    const s = choose(dlg, "Helga's household", "write");
     await until(() => dlg.querySelector<HTMLElement>(".err:not([hidden])"));
     expect(dlg.querySelector(".err")!.textContent).toBe("Not now.");
     expect(s.value).toBe("read");
