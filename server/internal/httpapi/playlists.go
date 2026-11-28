@@ -143,7 +143,7 @@ func (s *Server) entryWith(ctx context.Context, e *playlist.Entry, t playlist.To
 		}
 		out.EditionId, out.EditionName = e.EditionID, name
 	}
-	only := item.MusicFilter{IDs: []uid.ID{it.ID}, AccountID: &caller(ctx).profile.ID}
+	only := item.MusicFilter{IDs: []uid.ID{it.ID}, AccountID: &caller(ctx).profile.ID, Clean: clean(ctx)}
 	switch it.Kind {
 	case item.Song:
 		v, err := one(s.svc.Music.Repo().Songs(only))

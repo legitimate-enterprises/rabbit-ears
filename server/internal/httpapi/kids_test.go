@@ -3,10 +3,13 @@ package httpapi_test
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"testing"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/api"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db/dbtest"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/httpapi"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
@@ -293,6 +296,46 @@ func TestArtistArtForKidsSkipsExplicitAlbums(t *testing.T) {
 	k := e.kid(e.plain, "Kid")
 	if res, body := e.raw("GET", poster, e.kidDevice(e.plain, k.Id)); res.StatusCode != 200 || string(body) == "explicit cover" {
 		t.Fatalf("a kid sees the art of an album they may not hear: %d %q", res.StatusCode, body)
+	}
+}
+
+// A playlist's artist entry shows a kid the art getMusicArtist shows them,
+// never that of an album they may not hear.
+func TestPlaylistArtistArtForKidsSkipsExplicitAlbums(t *testing.T) {
+	e := newEnv(t)
+	data := t.TempDir()
+	dbtest.DataDir(t, data)
+	m := e.music()
+	year, yes := 2099, true
+	newer := &item.Item{LibraryID: m.band.LibraryId, ParentID: &m.band.Id, Kind: item.Album, ParsedTitle: "Loud", ParsedYear: &year}
+	must(t, e.svc.Items.Repo().Create(newer))
+	must(t, e.svc.Items.Repo().Create(&item.Item{LibraryID: m.band.LibraryId, ParentID: &newer.ID, Kind: item.Song, ParsedTitle: "Shout", Explicit: &yes}))
+	cover := filepath.Join(data, "thumbnails", "music", "0123abcd.jpg")
+	must(t, os.MkdirAll(filepath.Dir(cover), 0o750))
+	must(t, os.WriteFile(cover, []byte("explicit cover"), 0o600))
+	must(t, e.svc.Items.Repo().SetLocal(&item.Metadata{ItemID: newer.ID, Title: "Loud", PosterPath: cover}))
+	loud := httpapi.BasePath + "/artwork/music/0123abcd.jpg"
+
+	owner := "/profiles/" + itoa(e.plain.account.ID) + "/playlists"
+	var pl api.Playlist
+	e.expect(201, "POST", owner, e.plain.token, map[string]any{"name": "Bands", "kind": "music"}, &pl)
+	var entry api.PlaylistEntry
+	e.expect(201, "POST", owner+"/"+itoa(pl.Id)+"/entries", e.plain.token, map[string]any{"itemId": m.band.Id}, &entry)
+	if entry.Artist == nil || entry.Artist.PosterUrl == nil || *entry.Artist.PosterUrl != loud {
+		t.Fatalf("an adult sees the newest album's art: %+v", entry.Artist)
+	}
+	k := e.kid(e.plain, "Kid")
+	tok := e.kidDevice(e.plain, k.Id)
+	e.expect(201, "POST", owner+"/"+itoa(pl.Id)+"/shares", e.plain.token, map[string]any{"profileId": k.Id, "access": "read"}, nil)
+	var heard api.MusicArtist
+	e.expect(200, "GET", "/music/artists/"+itoa(m.band.Id), tok, nil, &heard)
+	var entries api.PlaylistEntryPage
+	e.expect(200, "GET", "/profiles/"+itoa(k.Id)+"/playlists/"+itoa(pl.Id)+"/entries", tok, nil, &entries)
+	if len(entries.Items) != 1 || entries.Items[0].Artist == nil {
+		t.Fatalf("entries %+v", entries)
+	}
+	if got := entries.Items[0].Artist.PosterUrl; got != nil && *got == loud || !reflect.DeepEqual(got, heard.PosterUrl) {
+		t.Fatalf("a kid's artist entry shows %v, getMusicArtist %v", deref(got), deref(heard.PosterUrl))
 	}
 }
 
