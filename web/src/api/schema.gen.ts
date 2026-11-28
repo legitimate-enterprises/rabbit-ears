@@ -2431,6 +2431,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/client-errors": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stores errors a client app met, for the admin Logs page.
+         * @description For an error worth an admin's attention: one that put an error screen in front of the person, stopped what they asked for, or was not caught. The device, its platform and the acting profile are the caller's, never the body's. An entry whose id is stored already, sent before or replayed, is skipped, and the answer is still 204. An `at` ahead of the server's clock is taken as now. listLogs shows each entry at level error with source `client`. More than 100 entries from one device within an hour answer 429 and store none of the batch, so a replayed batch past that is rejected with too_many_requests. The server keeps client entries 30 days, at most the newest 10,000, apart from its own entries, so clients cannot push those out. The text is shown to admins as sent, with control characters escaped and credentials the server recognizes redacted: a client sends no tokens, passwords, PINs, email addresses, stream URLs or other URLs with credentials in them.
+         */
+        post: operations["reportClientErrors"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/logs": {
         parameters: {
             query?: never;
@@ -5744,7 +5764,7 @@ export interface components {
             /** Format: date-time */
             at: string;
             level: components["schemas"]["LogLevel"];
-            /** @description Subsystem: scan, tmdb, playback, transcode, task, auth, http or server. */
+            /** @description Subsystem: scan, tmdb, playback, transcode, task, auth, http or server; client for an entry a client app reported. */
             source: string;
             message: string;
             sessionId?: components["schemas"]["Id"];
@@ -5753,6 +5773,45 @@ export interface components {
             ffmpegCommand?: string;
             /** @description Why the playback decision was not direct play. */
             transcodeReason?: string;
+            client?: components["schemas"]["ClientErrorOrigin"];
+        };
+        /** @description With source client, what reported the entry. */
+        ClientErrorOrigin: {
+            platform: components["schemas"]["Platform"];
+            appVersion: string;
+            osVersion: string;
+            context: string;
+            detail?: string;
+            /** @description Absent once the device is gone. */
+            deviceId?: components["schemas"]["Id"];
+            /** @description Absent once the device is gone. */
+            deviceName?: string;
+            /** @description Absent once the profile is gone, as when its account is deleted. */
+            profileId?: components["schemas"]["Id"];
+            /** @description Absent once the profile is gone. */
+            profileName?: string;
+        };
+        ClientErrorBatch: {
+            /** @description The reporting app's version, as M.m.N; the web viewer sends the server's. */
+            appVersion: string;
+            /** @description The operating system and its version, as "iOS 27.1"; the web viewer sends the browser's user agent. */
+            osVersion: string;
+            entries: components["schemas"]["ClientError"][];
+        };
+        ClientError: {
+            /** @description Chosen by the client, once per error, and kept when it is sent again. */
+            id: components["schemas"]["Id"];
+            /**
+             * Format: date-time
+             * @description When it happened on the device.
+             */
+            at: string;
+            /** @description What went wrong, in the words of the error or the screen. */
+            message: string;
+            /** @description Where: the screen or operation, as home, details or playback.start. */
+            context: string;
+            /** @description More to go on, such as a stack trace or the failing request's operationId and status. */
+            detail?: string;
         };
         LogEntryPage: {
             items: components["schemas"]["LogEntry"][];
@@ -7613,6 +7672,8 @@ export interface components {
         /** @description Minimum level; entries at or above it match. */
         LogLevel: components["schemas"]["LogLevel"];
         LogSource: string;
+        /** @description Only client entries from this platform. */
+        LogPlatform: components["schemas"]["Platform"];
         LogSince: string;
         LogUntil: string;
         /** @description Case-insensitive substring of the message. */
@@ -12220,12 +12281,39 @@ export interface operations {
             404: components["responses"]["NotFound"];
         };
     };
+    reportClientErrors: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ClientErrorBatch"];
+            };
+        };
+        responses: {
+            /** @description Stored. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
     listLogs: {
         parameters: {
             query?: {
                 /** @description Minimum level; entries at or above it match. */
                 level?: components["parameters"]["LogLevel"];
                 source?: components["parameters"]["LogSource"];
+                /** @description Only client entries from this platform. */
+                platform?: components["parameters"]["LogPlatform"];
                 since?: components["parameters"]["LogSince"];
                 until?: components["parameters"]["LogUntil"];
                 /** @description Case-insensitive substring of the message. */
@@ -12259,6 +12347,8 @@ export interface operations {
                 /** @description Minimum level; entries at or above it match. */
                 level?: components["parameters"]["LogLevel"];
                 source?: components["parameters"]["LogSource"];
+                /** @description Only client entries from this platform. */
+                platform?: components["parameters"]["LogPlatform"];
                 since?: components["parameters"]["LogSince"];
                 until?: components["parameters"]["LogUntil"];
                 /** @description Case-insensitive substring of the message. */

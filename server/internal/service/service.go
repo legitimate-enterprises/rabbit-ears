@@ -67,26 +67,28 @@ type Services struct {
 	AdultLinks  *AdultLinkService
 	Offers      *OfferService
 	Friends     *FriendService
-	Sessions    *SessionService
-	Playback    *PlaybackService
-	WatchStates *WatchStateService
-	Favorites   *FavoriteService
-	Tasks       *TaskService
-	Auth        *AuthService
-	SSO         *SSOService
-	Music       *MusicService
-	YouTube     *YouTubeService
-	Playlists   *PlaylistService
-	Collections *CollectionService
-	Stations    *StationService
-	Covers      *CoverService
-	Channels    *ChannelService
-	Together    *WatchTogetherService
-	Local       *LocalCheckService
-	UpNext      *UpNextService
-	Related     *RelatedService
-	Downloads   *DownloadService
-	Smart       *smart.Service
+	// ClientErrors stores what client apps report into Logs.
+	ClientErrors *ClientErrorService
+	Sessions     *SessionService
+	Playback     *PlaybackService
+	WatchStates  *WatchStateService
+	Favorites    *FavoriteService
+	Tasks        *TaskService
+	Auth         *AuthService
+	SSO          *SSOService
+	Music        *MusicService
+	YouTube      *YouTubeService
+	Playlists    *PlaylistService
+	Collections  *CollectionService
+	Stations     *StationService
+	Covers       *CoverService
+	Channels     *ChannelService
+	Together     *WatchTogetherService
+	Local        *LocalCheckService
+	UpNext       *UpNextService
+	Related      *RelatedService
+	Downloads    *DownloadService
+	Smart        *smart.Service
 	// Events is the stream every signed-in client follows; EventHold is
 	// how long a poll of it waits for something to tell.
 	Events    *live.Hub
@@ -119,50 +121,51 @@ func New(d *sql.DB) *Services {
 	smarts := smart.New(d)
 	playback.Events, stations.Events, watching.Events, smarts.Events = events, events, events, events
 	s := &Services{
-		Events:      events,
-		EventHold:   Hold,
-		Sync:        replica.New(d),
-		Libraries:   NewLibraryService(library.New(d), task.New(d)),
-		Items:       items,
-		Genres:      NewGenreService(genre.New(d)),
-		Occasions:   NewOccasionService(occasion.New(d), item.New(d)),
-		People:      NewPersonService(person.New(d)),
-		MediaFiles:  NewMediaFileService(mediafile.New(d)),
-		Editions:    NewEditionService(edition.New(d)),
-		Previews:    NewSeekPreviewService(seekpreview.New(d)),
-		Reviews:     NewReviewService(review.New(d)),
-		Accounts:    NewAccountService(account.New(d), d),
-		Households:  NewHouseholdService(household.New(d), d),
-		Devices:     NewDeviceService(device.New(d), account.New(d)),
-		JoinCodes:   NewJoinCodeService(joincode.New(d)),
-		DeviceLinks: NewDeviceLinkService(d),
-		AdultLinks:  NewAdultLinkService(d),
-		Offers:      NewOfferService(d),
-		Friends:     NewFriendService(d),
-		Sessions:    NewSessionService(session.New(d)),
-		Playback:    playback,
-		WatchStates: NewWatchStateService(watchstate.New(d)),
-		Favorites:   NewFavoriteService(favorite.New(d)),
-		Tasks:       NewTaskService(task.New(d)),
-		Auth:        NewAuthService(d),
-		SSO:         NewSSOService(d),
-		Music:       NewMusicService(item.New(d)),
-		YouTube:     NewYouTubeService(youtube.New(d)),
-		Playlists:   NewPlaylistService(playlist.New(d), edition.New(d), station.New(d), account.New(d)),
-		Collections: NewCollectionService(collection.New(d), items),
-		Stations:    stations,
-		Covers:      NewCoverService(cover.New(d), playlist.New(d), item.New(d)),
-		Together:    watching,
-		Local:       NewLocalCheckService(),
-		Downloads:   NewDownloadService(download.New(d), edition.New(d), mediafile.New(d), watchstate.New(d), playback),
-		UpNext:      NewUpNextService(item.New(d), collection.New(d), youtube.New(d), playlist.New(d), mediafile.New(d)),
-		Related:     NewRelatedService(item.New(d), collection.New(d)),
-		Smart:       smarts,
-		Server:      serverinfo.New(d),
-		Logs:        logstore.New(d),
-		Sampler:     sysinfo.New(),
-		DataDir:     os.TempDir(),
-		TMDB:        NewTMDBService(serverinfo.New(d)),
+		Events:       events,
+		EventHold:    Hold,
+		Sync:         replica.New(d),
+		Libraries:    NewLibraryService(library.New(d), task.New(d)),
+		Items:        items,
+		Genres:       NewGenreService(genre.New(d)),
+		Occasions:    NewOccasionService(occasion.New(d), item.New(d)),
+		People:       NewPersonService(person.New(d)),
+		MediaFiles:   NewMediaFileService(mediafile.New(d)),
+		Editions:     NewEditionService(edition.New(d)),
+		Previews:     NewSeekPreviewService(seekpreview.New(d)),
+		Reviews:      NewReviewService(review.New(d)),
+		Accounts:     NewAccountService(account.New(d), d),
+		Households:   NewHouseholdService(household.New(d), d),
+		Devices:      NewDeviceService(device.New(d), account.New(d)),
+		JoinCodes:    NewJoinCodeService(joincode.New(d)),
+		DeviceLinks:  NewDeviceLinkService(d),
+		AdultLinks:   NewAdultLinkService(d),
+		Offers:       NewOfferService(d),
+		Friends:      NewFriendService(d),
+		Sessions:     NewSessionService(session.New(d)),
+		Playback:     playback,
+		WatchStates:  NewWatchStateService(watchstate.New(d)),
+		Favorites:    NewFavoriteService(favorite.New(d)),
+		Tasks:        NewTaskService(task.New(d)),
+		Auth:         NewAuthService(d),
+		SSO:          NewSSOService(d),
+		Music:        NewMusicService(item.New(d)),
+		YouTube:      NewYouTubeService(youtube.New(d)),
+		Playlists:    NewPlaylistService(playlist.New(d), edition.New(d), station.New(d), account.New(d)),
+		Collections:  NewCollectionService(collection.New(d), items),
+		Stations:     stations,
+		Covers:       NewCoverService(cover.New(d), playlist.New(d), item.New(d)),
+		Together:     watching,
+		Local:        NewLocalCheckService(),
+		Downloads:    NewDownloadService(download.New(d), edition.New(d), mediafile.New(d), watchstate.New(d), playback),
+		UpNext:       NewUpNextService(item.New(d), collection.New(d), youtube.New(d), playlist.New(d), mediafile.New(d)),
+		Related:      NewRelatedService(item.New(d), collection.New(d)),
+		Smart:        smarts,
+		Server:       serverinfo.New(d),
+		Logs:         logstore.New(d),
+		ClientErrors: NewClientErrorService(logstore.New(d)),
+		Sampler:      sysinfo.New(),
+		DataDir:      os.TempDir(),
+		TMDB:         NewTMDBService(serverinfo.New(d)),
 	}
 	s.Channels = NewChannelService(s.Stations, s.Playback, playlist.New(d), item.New(d), mediafile.New(d), session.New(d))
 	return s

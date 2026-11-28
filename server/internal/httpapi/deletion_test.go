@@ -425,6 +425,7 @@ func TestDeletingOwnAccountLeavesNoOrphans(t *testing.T) {
 	var asked api.OutgoingFriendRequest
 	e.expect(202, "POST", "/friend-requests", e.admin.token, map[string]any{"email": e.plain.account.Email}, &asked)
 	e.expect(204, "DELETE", "/friend-requests/"+itoa(asked.Id), e.plain.token, nil, nil)
+	e.expect(204, "POST", "/client-errors", e.plain.token, clientErrors(clientError(uid.New(), "Home failed")), nil)
 	e.offer(201, e.plain.token, k.Id, e.admin.account.ID)
 	e.offer(201, e.admin.token, e.kid(e.admin, "Rex").Id, owner)
 	e.expect(201, "POST", admins+"/"+itoa(given.Id)+"/shares", e.admin.token, map[string]any{"profileId": owner, "access": "read"}, nil)

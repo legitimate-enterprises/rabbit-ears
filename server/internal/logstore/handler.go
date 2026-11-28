@@ -65,15 +65,27 @@ func scrub(s string) string {
 	return streamPath.ReplaceAllString(secretText.ReplaceAllString(s, "${1}${2}[redacted]"), "${1}[redacted]")
 }
 
+// Untrusted is text a client sent, with credentials removed and control
+// characters escaped as oneLine does; lines keeps line feeds and tabs.
+func Untrusted(s string, lines bool) string {
+	s = scrub(s)
+	if !lines {
+		return oneLine(s)
+	}
+	return escape(s, func(r rune) bool { return unicode.IsControl(r) && r != '\n' && r != '\t' })
+}
+
 // oneLine escapes control characters, so text a client chose cannot pass
 // for another entry or drive a terminal.
-func oneLine(s string) string {
-	if !strings.ContainsFunc(s, unicode.IsControl) {
+func oneLine(s string) string { return escape(s, unicode.IsControl) }
+
+func escape(s string, control func(rune) bool) string {
+	if !strings.ContainsFunc(s, control) {
 		return s
 	}
 	var b strings.Builder
 	for _, r := range s {
-		if unicode.IsControl(r) {
+		if control(r) {
 			q := strconv.QuoteRune(r)
 			b.WriteString(q[1 : len(q)-1])
 		} else {
@@ -200,7 +212,7 @@ func (w *Writer) run() {
 		_ = w.repo.Insert(e)
 		if now := time.Now(); now.Sub(w.lastPruned) > time.Hour {
 			w.lastPruned = now
-			_ = w.repo.Prune(now.Add(-Retention), MaxRows)
+			_ = w.repo.Prune(now.Add(-Retention), MaxRows, MaxClientRows)
 		}
 	}
 }

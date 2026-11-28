@@ -122,7 +122,8 @@ var (
 		"edition_file", "station_day", "station_loop", "playlist_share", "watch_together_member",
 		"item_metadata", "item_genre", "household_member", "adult_link", "playlist_household_share",
 		"item_keyword", "occasion_keyword", "occasion_item", "occasion_exclusion", "occasion_phrase",
-		"song_release", "favorite", "friendship", "friend_request_decline", "keyframe_probe", "keyframe"}
+		"song_release", "favorite", "friendship", "friend_request_decline", "keyframe_probe", "keyframe",
+		"client_log_entry"}
 	bookTables = []string{"server_info", "occasion_seed", "sync_clock",
 		"sync_tombstone", "sync_action", "schema_migration"}
 	syncedTables = []string{"account", "account_allow", "adult_link", "chapter", "collection",

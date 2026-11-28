@@ -70,13 +70,13 @@ func TestPrune(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := r.Prune(now.Add(-3*24*time.Hour+time.Hour), 100); err != nil { // keeps days 0..2
+	if err := r.Prune(now.Add(-3*24*time.Hour+time.Hour), 100, 100); err != nil { // keeps days 0..2
 		t.Fatal(err)
 	}
 	if got, _ := r.List(logstore.Filter{}); len(got) != 3 {
 		t.Fatalf("age: %d", len(got))
 	}
-	if err := r.Prune(time.Time{}, 2); err != nil {
+	if err := r.Prune(time.Time{}, 2, 2); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := r.List(logstore.Filter{}); len(got) != 2 || !got[0].At.Equal(now) {
@@ -152,5 +152,75 @@ func TestHandlerEscapesControlCharacters(t *testing.T) {
 	}
 	if !strings.Contains(e.Message, `TV\nlevel=ERROR`) {
 		t.Errorf("stored %q", e.Message)
+	}
+}
+
+func clientEntry(id uid.ID, at time.Time, platform, msg string) *logstore.Entry {
+	return &logstore.Entry{ID: id, At: at, Level: "error", Source: logstore.ClientSource, Message: msg,
+		Client: &logstore.Client{Platform: platform, AppVersion: "1.2.3", OSVersion: "iOS 27.1", Context: "home",
+			Detail: "at a\nat b"}}
+}
+
+// A client's entry is stored once per id, however often it is sent, and
+// lists with its own columns beside the server's entries.
+func TestClientEntriesStoreOnceAndFilter(t *testing.T) {
+	r := logstore.New(dbtest.Open(t))
+	t0 := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	must(t, r.Insert(entry(t0, "info", "scan", "Scan finished")))
+	for range 2 {
+		must(t, r.InsertClient(clientEntry(uid.N(1), t0.Add(time.Minute), "ios", "Home failed")))
+	}
+	must(t, r.InsertClient(clientEntry(uid.N(2), t0.Add(2*time.Minute), "web", "Details failed")))
+	all, err := r.List(logstore.Filter{})
+	if err != nil || len(all) != 3 || all[0].Client == nil || all[2].Client != nil {
+		t.Fatalf("%+v %v", all, err)
+	}
+	c := all[1].Client
+	if all[1].ID != uid.N(1) || c.Platform != "ios" || c.AppVersion != "1.2.3" || c.OSVersion != "iOS 27.1" || c.Context != "home" ||
+		c.Detail != "at a\nat b" || c.DeviceID != nil || c.ProfileID != nil || c.DeviceName != "" {
+		t.Fatalf("client columns: %+v", c)
+	}
+	for name, f := range map[string]struct {
+		f    logstore.Filter
+		want int
+	}{
+		"source client": {logstore.Filter{Source: logstore.ClientSource}, 2},
+		"platform":      {logstore.Filter{Platform: "web"}, 1},
+		"platform none": {logstore.Filter{Platform: "roku"}, 0},
+		"server source": {logstore.Filter{Source: "scan", Platform: "web"}, 0},
+	} {
+		if got, err := r.List(f.f); err != nil || len(got) != f.want {
+			t.Errorf("%s: got %d want %d (%v)", name, len(got), f.want, err)
+		}
+	}
+}
+
+// Clients' entries and the server's are capped apart, so a chatty client
+// cannot push the server's own out of the window.
+func TestPruneCapsClientEntriesApart(t *testing.T) {
+	r := logstore.New(dbtest.Open(t))
+	now := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+	must(t, r.Insert(entry(now.Add(-2*time.Hour), "error", "transcode", "old server error")))
+	must(t, r.Insert(entry(now.Add(-time.Hour), "info", "scan", "server")))
+	for i := range 5 {
+		must(t, r.InsertClient(clientEntry(uid.N(i+1), now.Add(time.Duration(i)*time.Minute), "web", "client")))
+	}
+	must(t, r.InsertClient(clientEntry(uid.N(9), now.Add(-40*24*time.Hour), "web", "too old")))
+	must(t, r.Prune(now.Add(-30*24*time.Hour), 2, 3))
+	server, _ := r.List(logstore.Filter{Source: "transcode"})
+	clients, _ := r.List(logstore.Filter{Source: logstore.ClientSource})
+	if len(server) != 1 || len(clients) != 3 || clients[0].ID != uid.N(5) || clients[2].ID != uid.N(3) {
+		t.Fatalf("server %d, clients %+v", len(server), clients)
+	}
+	must(t, r.Prune(time.Time{}, 1, 3))
+	if all, _ := r.List(logstore.Filter{}); len(all) != 4 {
+		t.Fatalf("server cap counts the server's only: %d", len(all))
+	}
+}
+
+func must(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
 	}
 }
