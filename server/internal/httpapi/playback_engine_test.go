@@ -456,7 +456,14 @@ func TestIdleTranscodeYieldsItsSlot(t *testing.T) {
 	if res, _ := e.get(rung + "0.m4s"); res.StatusCode != 200 {
 		t.Fatalf("segment: %d", res.StatusCode)
 	}
-	for end := time.Now().Add(10 * time.Second); len(e.svc.Playback.Engine.Transcoding()) > 0; time.Sleep(50 * time.Millisecond) {
+	// Reaching the read-ahead takes as long as the host's encoder does; the
+	// slot is due within Idle of the pause.
+	for end := time.Now().Add(60 * time.Second); e.svc.Playback.Engine.Busy(); time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(end) {
+			t.Fatal("the encoder never paused")
+		}
+	}
+	for end := time.Now().Add(5 * time.Second); len(e.svc.Playback.Engine.Transcoding()) > 0; time.Sleep(50 * time.Millisecond) {
 		if time.Now().After(end) {
 			t.Fatal("the paused viewer keeps its slot")
 		}
