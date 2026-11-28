@@ -43,6 +43,9 @@ type Config struct {
 	Reach    int           // segments past the encoder's position a request waits for; one further restarts it there
 	Wait     time.Duration // longest wait for one segment
 	Idle     time.Duration // longest an encoder stays paused with no request before it stops
+	// Files keeps probed bounds across restarts; nil keeps them in memory
+	// only.
+	Files *mediafile.Repo
 }
 
 // Stream is one entry at one rung of a session. Key names it within the

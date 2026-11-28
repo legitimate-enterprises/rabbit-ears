@@ -2,6 +2,7 @@ package scan
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -11,7 +12,9 @@ import (
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/library"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/mediafile"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/task"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/transcode"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
@@ -598,5 +601,45 @@ func TestPurgeTaskRunsDaily(t *testing.T) {
 	}
 	if last, err := tasks.LastRun(p.ID); err != nil || last.Summary != "3 tombstones and 0 actions purged" || last.Status != task.Succeeded {
 		t.Fatalf("%+v %v", last, err)
+	}
+}
+
+// The Seek previews task keeps each video file's keyframes before its
+// previews, so a first play need not probe them; a file whose probe fails
+// is left out until it changes.
+func TestSeekPreviewsKeepKeyframes(t *testing.T) {
+	e := newEnv(t, library.Movies, "")
+	p := filepath.Join(e.root, "A (2001)", "a.mp4")
+	fixtureCopy(t, "h264-high41.mp4", p)
+	e.mustScan()
+	engine := transcode.New(transcode.Config{Root: t.TempDir(), Files: e.files})
+	e.s.Bounds = func(ctx context.Context, f *mediafile.File) error {
+		_, err := engine.Bounds(ctx, f)
+		return err
+	}
+	if sum, _, err := e.s.MakePreviews(context.Background(), nil, nil); err != nil || sum != "1 keyframe probe, 1 file" {
+		t.Fatalf("%q %v", sum, err)
+	}
+	fs, err := e.files.FilesForItem(e.list(item.Movie)[0].ID)
+	must(t, err)
+	if at, err := e.files.Keyframes(fs[0].ID, fs[0].FileModifiedAt); err != nil || len(at) == 0 || at[0] != 0 {
+		t.Fatalf("%v %v", at, err)
+	}
+
+	probes := 0
+	e.s.Bounds = func(context.Context, *mediafile.File) error {
+		probes++
+		return errors.New("no keyframes")
+	}
+	later := time.Now().Add(time.Hour)
+	must(t, os.Chtimes(p, later, later))
+	e.mustScan()
+	for range 2 {
+		if _, _, err := e.s.MakePreviews(context.Background(), nil, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if need, _ := e.files.NeedingKeyframes(); probes != 1 || len(need) != 0 {
+		t.Fatalf("%d probes, %d files need keyframes", probes, len(need))
 	}
 }

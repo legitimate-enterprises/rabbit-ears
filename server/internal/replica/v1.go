@@ -315,7 +315,7 @@ var V1 = Schema{
 	NotSynced: []string{
 		"account_identity", "conversion", "device_link", "identity_evidence", "identity_review", "join_code",
 		"library_folder", "log_entry", "occasion_seed", "playback_session", "seek_preview", "session_plan_entry", "song_release",
-		"sso_provider", "task", "task_run", "throughput_sample", "watch_together", "watch_together_member",
+		"sso_provider", "task", "task_run", "throughput_sample", "watch_together", "watch_together_member", "keyframe_probe", "keyframe",
 		"schema_migration", "sync_clock", "sync_tombstone", "sync_action", "smart_group", "smart_condition",
 	},
 }

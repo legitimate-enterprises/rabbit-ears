@@ -961,7 +961,7 @@ func TestCopiedTSSegmentsMatchAcrossRuns(t *testing.T) {
 	m := New(Config{Root: t.TempDir(), Ahead: 50})
 	defer m.Close()
 	ctx := context.Background()
-	b, err := m.Bounds(ctx, clip, 30_042)
+	b, err := m.Bounds(ctx, fileOf(clip, 30_042))
 	must(t, err)
 	if len(b) != 3 {
 		t.Fatalf("bounds %+v", b)

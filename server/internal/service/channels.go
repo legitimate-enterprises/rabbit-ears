@@ -223,11 +223,11 @@ func copies(m playback.Media, e *session.PlanEntry) bool {
 // a file not probed yet answers channel.ErrPending while the probe runs.
 func (c *ChannelService) bounds(ctx context.Context, f *mediafile.File, wait bool) ([]transcode.Bound, error) {
 	engine := c.playback.Engine
-	if b, ok := engine.BoundsKnown(f.Path); ok {
+	if b, ok := engine.BoundsKnown(f); ok {
 		return b, nil
 	}
 	probe := func(ctx context.Context) ([]transcode.Bound, error) {
-		b, err := engine.Bounds(ctx, f.Path, deref(f.DurationMs))
+		b, err := engine.Bounds(ctx, f)
 		if err != nil && ctx.Err() == nil {
 			c.mu.Lock()
 			c.unbounded[f.Path] = time.Now()

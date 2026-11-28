@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -536,5 +537,73 @@ func TestProblems(t *testing.T) {
 	}
 	if n, _ := r.ProblemCount(mediafile.NoDuration); n != 0 {
 		t.Fatalf("a forgotten probe still counts: %d", n)
+	}
+}
+
+// A file's keyframes hold for the modification time they were probed at; a
+// failure there leaves the file out of NeedingKeyframes until it changes.
+func TestKeyframesFollowTheFilesModificationTime(t *testing.T) {
+	r, _, it := setup(t)
+	mod := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	probed := mod.Add(time.Hour)
+	f := &mediafile.File{ItemID: &it, Path: "/m/a.mkv", FileModifiedAt: mod, ProbedAt: &probed}
+	audio := &mediafile.File{ItemID: &it, Path: "/m/a.flac", FileModifiedAt: mod, ProbedAt: &probed}
+	for _, x := range []*mediafile.File{f, audio} {
+		if err := r.CreateFile(x); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := r.ReplaceTracks(f.ID, []*mediafile.Track{{Kind: mediafile.Video, Codec: "h264"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.ReplaceTracks(audio.ID, []*mediafile.Track{{Kind: mediafile.Audio, Codec: "flac"}}); err != nil {
+		t.Fatal(err)
+	}
+	need := func() int {
+		t.Helper()
+		n, err := r.NeedingKeyframes()
+		if err != nil || len(n) > 0 && n[0].ID != f.ID {
+			t.Fatalf("%+v %v", n, err)
+		}
+		return len(n)
+	}
+	if _, err := r.Keyframes(f.ID, mod); !errors.Is(err, db.ErrNotFound) || need() != 1 {
+		t.Fatalf("never probed: %v", err)
+	}
+	at := []float64{0.042, 4.3, 7199.091999}
+	if err := r.ReplaceKeyframes(f.ID, mod, []float64{9, 10}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.ReplaceKeyframes(f.ID, mod, at); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := r.Keyframes(f.ID, mod); err != nil || !slices.Equal(got, at) || need() != 0 {
+		t.Fatalf("%v %v, want %v", got, err, at)
+	}
+	changed := mod.Add(time.Second)
+	if _, err := r.Keyframes(f.ID, changed); !errors.Is(err, db.ErrNotFound) {
+		t.Fatalf("another modification time: %v", err)
+	}
+	f.FileModifiedAt = changed
+	if err := r.UpdateFile(f); err != nil || need() != 1 {
+		t.Fatalf("a changed file needs keyframes again: %v", err)
+	}
+	if err := r.KeyframesFailed(f.ID, changed); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Keyframes(f.ID, mod); !errors.Is(err, db.ErrNotFound) || need() != 0 {
+		t.Fatalf("a failure replaces what was probed before: %v", err)
+	}
+	if err := r.ReplaceKeyframes(uid.N(999), mod, at); !errors.Is(err, db.ErrReference) {
+		t.Fatalf("unknown file: %v", err)
+	}
+	if err := r.ReplaceKeyframes(f.ID, changed, at); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.DeleteFile(f.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Keyframes(f.ID, changed); !errors.Is(err, db.ErrNotFound) {
+		t.Fatalf("keyframes outlived their file: %v", err)
 	}
 }

@@ -113,7 +113,7 @@ type Services struct {
 func New(d *sql.DB) *Services {
 	items := NewItemService(item.New(d))
 	events := live.NewHub(eventBacklog)
-	playback := NewPlaybackService(session.New(d), mediafile.New(d), device.New(d), transcode.New(transcode.Config{}))
+	playback := NewPlaybackService(session.New(d), mediafile.New(d), device.New(d), transcode.New(transcode.Config{Files: mediafile.New(d)}))
 	stations := NewStationService(station.New(d), playlist.New(d), item.New(d))
 	watching := NewWatchTogetherService(together.New(d), item.New(d), account.New(d))
 	smarts := smart.New(d)

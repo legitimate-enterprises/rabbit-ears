@@ -100,7 +100,7 @@ func dataDir(dbFile string) string {
 // stations task, and the daily purge of sync history, and tells events of
 // each scan that changed its library.
 func startScanning(ctx context.Context, wg *sync.WaitGroup, d *sql.DB, client *tmdb.Client, data string, stations, smart func(context.Context) (string, error),
-	events *live.Hub) error {
+	events *live.Hub, engine *transcode.Manager) error {
 	if !client.Enabled() {
 		logstore.Log("server").Info("No TMDB key is set; no metadata will be fetched from TMDB until one is saved in Settings")
 	}
@@ -110,7 +110,11 @@ func startScanning(ctx context.Context, wg *sync.WaitGroup, d *sql.DB, client *t
 		Collections: collection.New(d), Music: musicbrainz.New(musicbrainz.Config{CacheDir: filepath.Join(data, "cache", "musicbrainz")}),
 		ImageDir: filepath.Join(data, "images"), ThumbDir: filepath.Join(data, "thumbnails"),
 		Previews: seekpreview.New(d), PreviewDir: filepath.Join(data, "previews"), YouTube: youtube.New(d),
-		Avatars: youtube.NewAvatars(filepath.Join(data, "cache", "youtube")), Settings: info, Reviews: review.New(d)})
+		Avatars: youtube.NewAvatars(filepath.Join(data, "cache", "youtube")), Settings: info, Reviews: review.New(d),
+		Bounds: func(ctx context.Context, f *mediafile.File) error {
+			_, err := engine.Bounds(ctx, f)
+			return err
+		}})
 	runner := scan.NewRunner(sc, task.New(d))
 	runner.Stations, runner.Smart, runner.Events = stations, smart, events
 	runner.Purge = func(context.Context) (string, error) { return replica.Purge(d, time.Now()) }
@@ -363,7 +367,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	svc.Playback.Engine = transcode.New(transcode.Config{Root: cache, MaxVideo: maxVideo, CacheCap: cacheCap})
+	svc.Playback.Engine = transcode.New(transcode.Config{Root: cache, MaxVideo: maxVideo, CacheCap: cacheCap, Files: mediafile.New(d)})
 	client := tmdb.New(tmdb.Config{CacheDir: filepath.Join(data, "cache", "tmdb")})
 	svc.DataDir, svc.TMDB.Client, svc.TMDB.FallbackKey = data, client, os.Getenv("RABBIT_EARS_TMDB_KEY")
 	svc.Port, svc.DatabasePath = ln.Addr().(*net.TCPAddr).Port, path
@@ -389,7 +393,7 @@ func run() error {
 	go func() { defer bg.Done(); expire(ctx, svc.Friends) }()
 	go func() { defer bg.Done(); air(ctx, svc.Stations) }()
 	go func() { defer bg.Done(); svc.Downloads.Run(ctx) }()
-	if err := startScanning(ctx, &bg, d, client, data, svc.Channels.Schedule, svc.Smart.Run, svc.Events); err != nil {
+	if err := startScanning(ctx, &bg, d, client, data, svc.Channels.Schedule, svc.Smart.Run, svc.Events, svc.Playback.Engine); err != nil {
 		stop()
 		bg.Wait()
 		return err

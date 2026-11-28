@@ -5,6 +5,7 @@ package mediafile
 import (
 	"database/sql"
 	"errors"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -280,6 +281,66 @@ func (r *Repo) NeedingPreviews() ([]*File, error) {
 func (r *Repo) PreviewsFailed(f *File) error {
 	f.ModifiedAt = now()
 	return db.ExecOne(r.d, `UPDATE media_file SET previews_failed_for = ?, modified_at = ? WHERE id = ?`, db.Ms(f.FileModifiedAt), db.Ms(f.ModifiedAt), f.ID)
+}
+
+// NeedingKeyframes lists probed files with a video track, not marked
+// missing, whose keyframes were not probed at their current modification
+// time.
+func (r *Repo) NeedingKeyframes() ([]*File, error) {
+	return r.files(`SELECT ` + fcols + ` FROM media_file f LEFT JOIN keyframe_probe k ON k.media_file_id = f.id
+		WHERE f.probed_at IS NOT NULL AND f.missing_at IS NULL
+		AND (k.media_file_id IS NULL OR k.source_modified_at != f.file_modified_at)
+		AND EXISTS (SELECT 1 FROM track t WHERE t.media_file_id = f.id AND t.kind = 'video') ORDER BY f.id`)
+}
+
+// Keyframes returns, in seconds, the keyframes a file's copied video is cut
+// on as probed at modifiedAt, or db.ErrNotFound when none were.
+func (r *Repo) Keyframes(fileID uid.ID, modifiedAt time.Time) ([]float64, error) {
+	rows, err := r.d.Query(`SELECT k.at_us FROM keyframe_probe p JOIN keyframe k ON k.media_file_id = p.media_file_id
+		WHERE p.media_file_id = ? AND p.source_modified_at = ? AND p.failed = 0 ORDER BY k.at_us`, fileID, db.Ms(modifiedAt))
+	us, err := db.Collect(rows, err, db.Column[int64])
+	if err != nil {
+		return nil, err
+	}
+	if len(us) == 0 {
+		return nil, db.ErrNotFound
+	}
+	at := make([]float64, len(us))
+	for i, u := range us {
+		at[i] = float64(u) / 1e6
+	}
+	return at, nil
+}
+
+// ReplaceKeyframes atomically keeps at, in seconds, as a file's keyframes
+// probed at modifiedAt.
+func (r *Repo) ReplaceKeyframes(fileID uid.ID, modifiedAt time.Time, at []float64) error {
+	return r.putKeyframes(fileID, modifiedAt, false, at)
+}
+
+// KeyframesFailed records that probing a file's keyframes failed at
+// modifiedAt.
+func (r *Repo) KeyframesFailed(fileID uid.ID, modifiedAt time.Time) error {
+	return r.putKeyframes(fileID, modifiedAt, true, nil)
+}
+
+func (r *Repo) putKeyframes(fileID uid.ID, modifiedAt time.Time, failed bool, at []float64) error {
+	return db.InTx(r.d, func(d db.DBTX) error {
+		if _, err := d.Exec(`INSERT INTO keyframe_probe (media_file_id, source_modified_at, failed) VALUES (?,?,?)
+			ON CONFLICT (media_file_id) DO UPDATE SET source_modified_at = excluded.source_modified_at, failed = excluded.failed`,
+			fileID, db.Ms(modifiedAt), failed); err != nil {
+			return db.Wrap(err)
+		}
+		if _, err := d.Exec(`DELETE FROM keyframe WHERE media_file_id = ?`, fileID); err != nil {
+			return db.Wrap(err)
+		}
+		for _, s := range at {
+			if _, err := d.Exec(`INSERT INTO keyframe (media_file_id, at_us) VALUES (?,?)`, fileID, int64(math.Round(s*1e6))); err != nil {
+				return db.Wrap(err)
+			}
+		}
+		return nil
+	})
 }
 
 // UnavailableOf is the SQL for whether the item whose id is the expression

@@ -8,10 +8,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db/dbtest"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/library"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/mediafile"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/session"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
@@ -36,14 +40,14 @@ func gopClip(t *testing.T) string {
 func TestBoundsAreTheKeyframesSeeksLandOn(t *testing.T) {
 	m := New(Config{Root: t.TempDir()})
 	clip := gopClip(t)
-	if _, ok := m.BoundsKnown(clip); ok {
+	if _, ok := m.BoundsKnown(fileOf(clip, 80_000)); ok {
 		t.Fatal("known before any probe")
 	}
-	b, err := m.Bounds(context.Background(), clip, 80_000)
+	b, err := m.Bounds(context.Background(), fileOf(clip, 80_000))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if known, ok := m.BoundsKnown(clip); !ok || len(known) != len(b) {
+	if known, ok := m.BoundsKnown(fileOf(clip, 80_000)); !ok || len(known) != len(b) {
 		t.Fatalf("a probe's bounds are known without another: %v %v", known, ok)
 	}
 	// Slots 0, 6, 12, 18, 24 s land on the keyframes at or before them;
@@ -93,7 +97,7 @@ func TestCopiedSegmentsMatchAcrossRuns(t *testing.T) {
 	m := New(Config{Root: t.TempDir(), Ahead: 50})
 	defer m.Close()
 	ctx := context.Background()
-	b, err := m.Bounds(ctx, clip, 80_000)
+	b, err := m.Bounds(ctx, fileOf(clip, 80_000))
 	must(t, err)
 	job := Job{Input: clip, Entry: &session.PlanEntry{VideoAction: "copy", AudioAction: "convert", AudioChannels: 2}, Bounds: b,
 		Video: &mediafile.Track{StreamIndex: 0, Kind: mediafile.Video, Codec: "h264"}, Audio: &mediafile.Track{StreamIndex: 1, Kind: mediafile.Audio, Codec: "aac"}}
@@ -141,7 +145,7 @@ func TestCopiedBFrameSegmentsSpanTheirBounds(t *testing.T) {
 	m := New(Config{Root: t.TempDir(), Ahead: 50})
 	defer m.Close()
 	ctx := context.Background()
-	b, err := m.Bounds(ctx, clip, 40_000)
+	b, err := m.Bounds(ctx, fileOf(clip, 40_000))
 	must(t, err)
 	for _, ts := range []bool{false, true} {
 		job := Job{Input: clip, Entry: &session.PlanEntry{VideoAction: "copy", AudioAction: "copy", TS: ts}, Bounds: b,
@@ -222,7 +226,7 @@ func TestRestartKeepsEncodedSegments(t *testing.T) {
 	m := New(Config{Root: t.TempDir(), Ahead: 2})
 	defer m.Close()
 	ctx := context.Background()
-	b, err := m.Bounds(ctx, clip, 80_000)
+	b, err := m.Bounds(ctx, fileOf(clip, 80_000))
 	must(t, err)
 	st := Stream{SessionID: uid.N(1), Key: "0-0", Job: Job{Input: clip, Entry: &session.PlanEntry{VideoAction: "copy", AudioAction: "copy"}, Bounds: b,
 		Video: &mediafile.Track{StreamIndex: 0, Kind: mediafile.Video, Codec: "h264"}}}
@@ -281,9 +285,9 @@ func TestBoundsProbeIsSharedAndOutlivesItsCaller(t *testing.T) {
 	short, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	gaveUp := make(chan error, 1)
-	go func() { _, err := m.Bounds(short, clip, 80_000); gaveUp <- err }()
+	go func() { _, err := m.Bounds(short, fileOf(clip, 80_000)); gaveUp <- err }()
 	time.Sleep(20 * time.Millisecond)
-	b, err := m.Bounds(context.Background(), clip, 80_000)
+	b, err := m.Bounds(context.Background(), fileOf(clip, 80_000))
 	if err != nil || len(b) == 0 {
 		t.Fatal(b, err)
 	}
@@ -293,4 +297,53 @@ func TestBoundsProbeIsSharedAndOutlivesItsCaller(t *testing.T) {
 	if n := runs(t, count); n != 1 {
 		t.Fatalf("%d probes", n)
 	}
+}
+
+// clipFile records clip as a probed file in a fresh database, the way a
+// scan does, and returns the repository that keeps its keyframes.
+func clipFile(t *testing.T, clip string, durationMs int64) (*mediafile.Repo, *mediafile.File) {
+	t.Helper()
+	d := dbtest.Open(t)
+	l := &library.Library{Name: "m", Kind: library.Movies}
+	must(t, library.New(d).Create(l, nil))
+	it := &item.Item{LibraryID: l.ID, Kind: item.Movie, ParsedTitle: "x"}
+	must(t, item.New(d).Create(it))
+	files := mediafile.New(d)
+	f := &mediafile.File{ItemID: &it.ID, Path: clip, FileModifiedAt: time.Now().UTC(), DurationMs: &durationMs}
+	must(t, files.CreateFile(f))
+	return files, f
+}
+
+// Bounds outlive the Manager that probed them, for as long as the file
+// keeps its modification time.
+func TestBoundsSurviveARestartUntilTheFileChanges(t *testing.T) {
+	clip := gopClip(t)
+	count := slowTool(t, "ffprobe", "0")
+	files, f := clipFile(t, clip, 80_000)
+	b, err := New(Config{Root: t.TempDir(), Files: files}).Bounds(context.Background(), f)
+	must(t, err)
+	restarted := New(Config{Root: t.TempDir(), Files: files})
+	if known, ok := restarted.BoundsKnown(f); !ok || !slices.Equal(known, b) {
+		t.Fatalf("known after a restart: %v %v, want %v", known, ok, b)
+	}
+	if again, err := restarted.Bounds(context.Background(), f); err != nil || !slices.Equal(again, b) || runs(t, count) != 1 {
+		t.Fatalf("%v %v after %d probes, want %v", again, err, runs(t, count), b)
+	}
+	later := time.Now().Add(time.Hour)
+	must(t, os.Chtimes(clip, later, later))
+	changed := New(Config{Root: t.TempDir(), Files: files})
+	if _, ok := changed.BoundsKnown(f); ok {
+		t.Fatal("a changed file's bounds are known")
+	}
+	if _, err := changed.Bounds(context.Background(), f); err != nil || runs(t, count) != 2 {
+		t.Fatalf("a changed file is probed again: %v, %d probes", err, runs(t, count))
+	}
+	if _, err := files.Keyframes(f.ID, later); err != nil {
+		t.Fatalf("the new probe is kept: %v", err)
+	}
+}
+
+// fileOf is clip as a file Bounds probes, kept by no database.
+func fileOf(clip string, durationMs int64) *mediafile.File {
+	return &mediafile.File{Path: clip, DurationMs: &durationMs}
 }

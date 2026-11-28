@@ -108,6 +108,9 @@ type Config struct {
 	// Settings holds the metadata settings; while they use no remote data,
 	// and while Settings is nil, no provider is called.
 	Settings *serverinfo.Repo
+	// Bounds probes and keeps a file's keyframes for copied video
+	// (transcode.Manager.Bounds); nil probes none.
+	Bounds func(ctx context.Context, f *mediafile.File) error
 }
 
 // Scanner scans libraries.
@@ -953,13 +956,14 @@ func (s *Scanner) gone(fileID uid.ID) bool {
 	return errors.Is(err, db.ErrNotFound)
 }
 
-// MakePreviews makes the chapter thumbnails not yet tried of every file,
-// then seek preview frames for every file that has none. After each file it
-// stops if yield reports another task waiting, and then reports more: the
-// files left are what NeedingChapterThumbnails and NeedingPreviews return
-// next time. A file whose previews fail is recorded and left out until it
-// changes, and a chapter whose thumbnail fails until its file is probed
-// again; a file that is not on disk is passed over.
+// MakePreviews keeps the keyframes of every file not yet probed for them,
+// then makes the chapter thumbnails not yet tried of every file, then seek
+// preview frames for every file that has none. After each file it stops if
+// yield reports another task waiting, and then reports more: the files left
+// are what NeedingKeyframes, NeedingChapterThumbnails and NeedingPreviews
+// return next time. A file whose keyframes or previews fail is recorded and
+// left out until it changes, and a chapter whose thumbnail fails until its
+// file is probed again; a file that is not on disk is passed over.
 func (s *Scanner) MakePreviews(ctx context.Context, progress func(float64), yield func() bool) (string, bool, error) {
 	var chaptered []*mediafile.File
 	if s.ThumbDir != "" {
@@ -968,11 +972,18 @@ func (s *Scanner) MakePreviews(ctx context.Context, progress func(float64), yiel
 			return "", false, err
 		}
 	}
+	var keyed []*mediafile.File
+	if s.Bounds != nil {
+		var err error
+		if keyed, err = s.Files.NeedingKeyframes(); err != nil {
+			return "", false, err
+		}
+	}
 	files, err := s.Files.NeedingPreviews()
 	if err != nil {
 		return "", false, err
 	}
-	steps, step := len(chaptered)+len(files), 0
+	steps, step := len(keyed)+len(chaptered)+len(files), 0
 	// The first file always gets its turn, so a run that gives way gets on.
 	gaveWay := func() bool {
 		step++
@@ -983,10 +994,33 @@ func (s *Scanner) MakePreviews(ctx context.Context, progress func(float64), yiel
 			progress(float64(step) / float64(steps))
 		}
 	}
-	thumbed, done, failed, more := 0, 0, 0, false
+	keyframed, thumbed, done, failed, more := 0, 0, 0, 0, false
+	summary := func() string { return previewsSummary(keyframed, thumbed, done, failed, more) }
+	for _, f := range keyed {
+		if more = gaveWay(); more {
+			return summary(), more, nil
+		}
+		if !fileExists(f.Path) {
+			continue
+		}
+		err := s.Bounds(ctx, f)
+		if err != nil && ctx.Err() != nil {
+			return "", false, ctx.Err()
+		}
+		if err != nil {
+			failed++
+			logstore.Log("scan").Warn("Keyframes failed", "path", f.Path, "err", err)
+			if err := s.Files.KeyframesFailed(f.ID, f.FileModifiedAt); err != nil && !s.gone(f.ID) {
+				return "", false, err
+			}
+		} else {
+			keyframed++
+		}
+		report()
+	}
 	for _, f := range chaptered {
 		if more = gaveWay(); more {
-			return previewsSummary(thumbed, done, failed, more), more, nil
+			return summary(), more, nil
 		}
 		if fileExists(f.Path) {
 			n, err := s.chapterThumbs(ctx, f)
@@ -1027,15 +1061,18 @@ func (s *Scanner) MakePreviews(ctx context.Context, progress func(float64), yiel
 		done++
 		report()
 	}
-	return previewsSummary(thumbed, done, failed, more), more, nil
+	return summary(), more, nil
 }
 
-// previewsSummary is "2 chapter thumbnails, 3 files, 1 failed, more to do",
-// the thumbnails only when there are some.
-func previewsSummary(thumbed, done, failed int, more bool) string {
+// previewsSummary is "4 keyframe probes, 2 chapter thumbnails, 3 files, 1
+// failed, more to do", the probes and thumbnails only when there are some.
+func previewsSummary(keyframed, thumbed, done, failed int, more bool) string {
 	sum := plural(done, "file")
 	if thumbed > 0 {
 		sum = plural(thumbed, "chapter thumbnail") + ", " + sum
+	}
+	if keyframed > 0 {
+		sum = plural(keyframed, "keyframe probe") + ", " + sum
 	}
 	if failed > 0 {
 		sum += fmt.Sprintf(", %d failed", failed)

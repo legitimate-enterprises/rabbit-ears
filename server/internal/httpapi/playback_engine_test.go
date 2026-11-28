@@ -739,3 +739,92 @@ func TestConvertedStreamListsOnlyWhatItsEncoderWrites(t *testing.T) {
 		t.Fatalf("a segment past the list: %d", res.StatusCode)
 	}
 }
+
+// failingProbe puts an ffprobe on PATH that fails, and counts its runs in
+// the returned file.
+func failingProbe(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	count := filepath.Join(dir, "count")
+	script := "#!/bin/sh\necho x >> '" + count + "'\nexit 1\n"
+	must(t, os.WriteFile(filepath.Join(dir, "ffprobe"), []byte(script), 0o700)) //nolint:gosec // a test script
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return count
+}
+
+// A server restarted since a file's keyframes were probed lists its copied
+// video's segments from the kept ones, without probing again.
+func TestCopiedPlaylistUsesKeptKeyframes(t *testing.T) {
+	e := newEnv(t)
+	m := e.probed("h264-high41.mp4", "")
+	files, err := e.svc.MediaFiles.Repo().FilesForItem(m)
+	must(t, err)
+	info, err := os.Stat(files[0].Path)
+	must(t, err)
+	must(t, e.svc.MediaFiles.Repo().ReplaceKeyframes(files[0].ID, info.ModTime(), []float64{0, 4.25, 8.5}))
+	count := failingProbe(t)
+	st := e.start(m, roku())
+	if st.Entry.VideoAction != api.PlanEntryVideoActionCopy {
+		t.Fatalf("%+v", st.Entry)
+	}
+	res, list := e.get(st.StreamUrl[:strings.LastIndex(st.StreamUrl, "/")+1] + "0/index.m3u8")
+	if res.StatusCode != 200 || strings.Count(string(list), "#EXTINF:4.250,") != 2 || strings.Count(string(list), "#EXTINF:") != 3 {
+		t.Fatalf("%d %s", res.StatusCode, list)
+	}
+	if b, _ := os.ReadFile(count); len(b) != 0 { //nolint:gosec // test temp path
+		t.Fatalf("%d probes", len(b)/2)
+	}
+}
+
+// A keyframe probe that outlasts the wait fails every entry that copies
+// the video, so the player starts on one that converts it at once; the
+// probe finishes behind it and is kept.
+func TestSlowKeyframeProbeFallsBackToConversion(t *testing.T) {
+	e := newEnv(t)
+	m := e.probed("h264-high41.mp4", "")
+	real, err := exec.LookPath("ffprobe")
+	if err != nil {
+		t.Skip("ffprobe not installed")
+	}
+	dir := t.TempDir()
+	script := "#!/bin/sh\nsleep 1\nexec '" + real + "' \"$@\"\n"
+	must(t, os.WriteFile(filepath.Join(dir, "ffprobe"), []byte(script), 0o700)) //nolint:gosec // a test script
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	httpapi.SetBoundsWait(t, 100*time.Millisecond)
+	st := e.start(m, roku())
+	if st.Entry.VideoAction != api.PlanEntryVideoActionCopy {
+		t.Fatalf("%+v", st.Entry)
+	}
+	began := time.Now()
+	res, _ := e.get(st.StreamUrl[:strings.LastIndex(st.StreamUrl, "/")+1] + "0/index.m3u8")
+	if took := time.Since(began); res.StatusCode != 503 || took > 700*time.Millisecond {
+		t.Fatalf("%d after %v", res.StatusCode, took)
+	}
+	var sess api.Session
+	e.expect(200, "GET", "/sessions/"+itoa(st.SessionId), e.admin.token, nil, &sess)
+	cur := sess.Plan[sess.CurrentEntry]
+	if cur.VideoAction == api.PlanEntryVideoActionCopy || cur.Bad {
+		t.Fatalf("on %+v of %+v", cur, sess.Plan)
+	}
+	for _, p := range sess.Plan[:sess.CurrentEntry] {
+		if !p.Bad || p.VideoAction != api.PlanEntryVideoActionCopy {
+			t.Fatalf("%+v", sess.Plan)
+		}
+	}
+	var up api.PlaybackUpdate
+	e.expect(200, "POST", "/playback/sessions/"+itoa(st.SessionId)+"/events", e.plain.token, map[string]any{"kind": "client_failure", "positionMs": 0}, &up)
+	if up.Action != api.Restart || up.Stream.Entry.Position != sess.CurrentEntry {
+		t.Fatalf("the player's report of the 503 moves no further: %+v", up.Stream.Entry)
+	}
+	files, err := e.svc.MediaFiles.Repo().FilesForItem(m)
+	must(t, err)
+	info, err := os.Stat(files[0].Path)
+	must(t, err)
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(50 * time.Millisecond) {
+		if _, err := e.svc.MediaFiles.Repo().Keyframes(files[0].ID, info.ModTime()); err == nil {
+			break
+		} else if time.Now().After(deadline) {
+			t.Fatalf("the probe was not kept: %v", err)
+		}
+	}
+}

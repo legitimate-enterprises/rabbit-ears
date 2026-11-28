@@ -11,27 +11,27 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/logstore"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/mediafile"
 )
 
 // Bound is where a copied-video segment starts: At is the source keyframe,
 // in seconds.
 type Bound struct{ At float64 }
 
-// Bounds lists the segment starts of copied video in input: for each
-// multiple of SegmentSeconds, the keyframe a seek there lands on, without
-// repeats. Seeking reads only the container's index and one packet per
-// slot. The encoder seeks just past a bound, so its runs start on these
-// keyframes. Cached per input and modification time.
-func (m *Manager) Bounds(ctx context.Context, input string, durationMs int64) ([]Bound, error) {
-	info, err := os.Stat(input)
+// Bounds lists the segment starts of copied video in f: for each multiple
+// of SegmentSeconds, the keyframe a seek there lands on, without repeats.
+// Seeking reads only the container's index and one packet per slot. The
+// encoder seeks just past a bound, so its runs start on these keyframes.
+// Cached per file and modification time, and kept in Config.Files so they
+// outlive the process.
+func (m *Manager) Bounds(ctx context.Context, f *mediafile.File) ([]Bound, error) {
+	key, mod, err := boundsKey(f)
 	if err != nil {
 		return nil, err
 	}
-	key := input + "\x00" + strconv.FormatInt(info.ModTime().UnixNano(), 10)
-	m.mu.Lock()
-	b, ok := m.bounds[key]
-	m.mu.Unlock()
-	if ok {
+	if b, ok := m.known(f, key, mod); ok {
 		return b, nil
 	}
 	// The probe runs on its own clock, so a player abandoning the request
@@ -40,11 +40,24 @@ func (m *Manager) Bounds(ctx context.Context, input string, durationMs int64) ([
 	ch := m.probes.DoChan(key, func() (any, error) {
 		pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), probeTimeout)
 		defer cancel()
-		b, err := probeBounds(pctx, input, durationMs)
+		var durationMs int64
+		if f.DurationMs != nil {
+			durationMs = *f.DurationMs
+		}
+		b, err := probeBounds(pctx, f.Path, durationMs)
 		if err == nil {
 			m.mu.Lock()
 			m.bounds[key] = b
 			m.mu.Unlock()
+			if m.cfg.Files != nil {
+				at := make([]float64, len(b))
+				for i, x := range b {
+					at[i] = x.At
+				}
+				if perr := m.cfg.Files.ReplaceKeyframes(f.ID, mod, at); perr != nil {
+					logstore.Log("playback").Warn("Keyframes not kept", "path", f.Path, "err", perr)
+				}
+			}
 		}
 		return b, err
 	})
@@ -59,17 +72,45 @@ func (m *Manager) Bounds(ctx context.Context, input string, durationMs int64) ([
 	}
 }
 
-// BoundsKnown is Bounds without the probe: the bounds of input when an
-// earlier Bounds found them, and whether one has.
-func (m *Manager) BoundsKnown(input string) ([]Bound, bool) {
-	info, err := os.Stat(input)
+// BoundsKnown is Bounds without the probe: the bounds of f when an earlier
+// Bounds found them, and whether one has.
+func (m *Manager) BoundsKnown(f *mediafile.File) ([]Bound, bool) {
+	key, mod, err := boundsKey(f)
 	if err != nil {
 		return nil, false
 	}
+	return m.known(f, key, mod)
+}
+
+func boundsKey(f *mediafile.File) (string, time.Time, error) {
+	info, err := os.Stat(f.Path)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	return f.Path + "\x00" + strconv.FormatInt(info.ModTime().UnixNano(), 10), info.ModTime(), nil
+}
+
+// known looks in memory, then in Config.Files, remembering what it finds
+// there.
+func (m *Manager) known(f *mediafile.File, key string, mod time.Time) ([]Bound, bool) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	b, ok := m.bounds[input+"\x00"+strconv.FormatInt(info.ModTime().UnixNano(), 10)]
-	return b, ok
+	b, ok := m.bounds[key]
+	m.mu.Unlock()
+	if ok || m.cfg.Files == nil {
+		return b, ok
+	}
+	at, err := m.cfg.Files.Keyframes(f.ID, mod)
+	if err != nil {
+		return nil, false
+	}
+	b = make([]Bound, len(at))
+	for i, x := range at {
+		b[i] = Bound{At: x}
+	}
+	m.mu.Lock()
+	m.bounds[key] = b
+	m.mu.Unlock()
+	return b, true
 }
 
 // probeTimeout bounds one keyframe probe, which seeks once per segment.

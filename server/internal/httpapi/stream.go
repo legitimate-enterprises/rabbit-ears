@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/logstore"
@@ -242,6 +244,24 @@ func (h *streams) master(w http.ResponseWriter, r *http.Request, s *streamReq) {
 	_, _ = w.Write([]byte(b.String()))
 }
 
+// boundsWait is how long a copied stream's request waits for a keyframe
+// probe, well inside the 20 s AVPlayer gives a playlist; the probe runs on
+// and is kept for the next play.
+var boundsWait = 8 * time.Second
+
+// leaveCopies fails the session's entries from its current one while they
+// copy video: each would wait on the same keyframes.
+func (h *streams) leaveCopies(sess *session.Session, cause error) {
+	for {
+		entry := sess.CurrentEntry
+		h.svc.Playback.ServerFailed(sess, entry, cause)
+		plan, err := h.svc.Sessions.Repo().Plan(sess.ID)
+		if sess.CurrentEntry == entry || err != nil || sess.CurrentEntry >= len(plan) || plan[sess.CurrentEntry].VideoAction != session.ActionCopy {
+			return
+		}
+	}
+}
+
 // rung serves a variant's playlist, init segment and media segments.
 func (h *streams) rung(w http.ResponseWriter, r *http.Request, s *streamReq) {
 	rungs := s.rungs()
@@ -255,9 +275,12 @@ func (h *streams) rung(w http.ResponseWriter, r *http.Request, s *streamReq) {
 	// Copied video cuts only on source keyframes, so its segments follow them.
 	var bounds []transcode.Bound
 	if video != nil && s.entry.VideoAction == session.ActionCopy {
-		if bounds, err = h.svc.Playback.Engine.Bounds(r.Context(), s.file.Path, dur); err != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), boundsWait)
+		bounds, err = h.svc.Playback.Engine.Bounds(ctx, s.file)
+		cancel()
+		if err != nil {
 			if r.Context().Err() == nil {
-				h.svc.Playback.ServerFailed(s.sess, s.sess.CurrentEntry, err)
+				h.leaveCopies(s.sess, fmt.Errorf("keyframes: %w", err))
 			}
 			http.Error(w, "stream unavailable", http.StatusServiceUnavailable)
 			return
