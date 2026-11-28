@@ -32,7 +32,9 @@ type Playlist struct {
 	// deleted with its station.
 	StationOwned bool
 	// Shared reports a share of it with any profile or household, as read.
-	Shared       bool
+	Shared bool
+	// Smart reports that rules choose its entries, as read.
+	Smart        bool
 	LastPlayedAt *time.Time
 	CreatedAt    time.Time
 	ModifiedAt   time.Time
@@ -69,13 +71,13 @@ func New(d db.DBTX) *Repo { return &Repo{d} }
 const cols = `id, account_id, name, kind, station_owned,
 	EXISTS (SELECT 1 FROM playlist_share s WHERE s.playlist_id = playlist.id)
 		OR EXISTS (SELECT 1 FROM playlist_household_share s WHERE s.playlist_id = playlist.id),
-	last_played_at, created_at, modified_at, created_by, modified_by`
+	EXISTS (SELECT 1 FROM smart_list l WHERE l.playlist_id = playlist.id), last_played_at, created_at, modified_at, created_by, modified_by`
 
 func scan(s db.Scanner) (*Playlist, error) {
 	var p Playlist
 	var played sql.NullInt64
 	var created, modified int64
-	if err := s.Scan(&p.ID, &p.AccountID, &p.Name, &p.Kind, &p.StationOwned, &p.Shared, &played, &created, &modified,
+	if err := s.Scan(&p.ID, &p.AccountID, &p.Name, &p.Kind, &p.StationOwned, &p.Shared, &p.Smart, &played, &created, &modified,
 		&p.CreatedBy, &p.ModifiedBy); err != nil {
 		return nil, db.Wrap(err)
 	}
@@ -584,6 +586,113 @@ func (r *Repo) RankEntry(id uid.ID, rank string, by *uid.ID) error {
 // RemoveEntry deletes an entry; later entries move up.
 func (r *Repo) RemoveEntry(id uid.ID) error {
 	return db.ExecOne(r.d, `DELETE FROM playlist_entry WHERE id = ?`, id)
+}
+
+// SetItems makes the playlist's entries the items, in their order, each
+// once and the server's doing. An entry keeps its id, edition, rank and
+// added_at while its item stays, and every other entry goes. A new item's
+// entry is ranked between its neighbours', unless the kept entries are out
+// of order, when every entry is ranked anew. It reports whether anything
+// changed.
+func (r *Repo) SetItems(playlistID uid.ID, items []uid.ID) (changed bool, err error) {
+	return changed, db.InTx(r.d, func(d db.DBTX) error {
+		type entry struct {
+			id   uid.ID
+			item *uid.ID
+			rank string
+		}
+		rows, err := d.Query(`SELECT id, item_id, rank FROM playlist_entry WHERE playlist_id = ? ORDER BY rank, id`, playlistID)
+		have, err := db.Collect(rows, err, func(s db.Scanner) (entry, error) {
+			var e entry
+			return e, db.Wrap(s.Scan(&e.id, &e.item, &e.rank))
+		})
+		if err != nil {
+			return err
+		}
+		want := make(map[uid.ID]bool, len(items))
+		for _, it := range items {
+			want[it] = true
+		}
+		kept := map[uid.ID]entry{}
+		var keptOrder []uid.ID
+		for _, e := range have {
+			if e.item == nil || !want[*e.item] || kept[*e.item].rank != "" {
+				if _, err := d.Exec(`DELETE FROM playlist_entry WHERE id = ?`, e.id); err != nil {
+					return db.Wrap(err)
+				}
+				changed = true
+				continue
+			}
+			kept[*e.item] = e
+			keptOrder = append(keptOrder, *e.item)
+		}
+		// The kept entries are in order when they come in the items' order
+		// with strictly rising ranks, so a key fits between each two.
+		inOrder, k := true, 0
+		for _, it := range items {
+			if e, ok := kept[it]; ok {
+				if keptOrder[k] != it || k > 0 && kept[keptOrder[k-1]].rank >= e.rank {
+					inOrder = false
+					break
+				}
+				k++
+			}
+		}
+		now := db.Ms(time.Now())
+		add := func(it uid.ID, rank string) error {
+			changed = true
+			_, err := d.Exec(`INSERT INTO playlist_entry (id, playlist_id, item_id, rank, added_at, created_at, modified_at) VALUES (?,?,?,?,?,?,?)`,
+				uid.New(), playlistID, it, rank, now, now, now)
+			return db.Wrap(err)
+		}
+		if !inOrder {
+			ranks, err := NKeysBetween("", "", len(items))
+			if err != nil {
+				return err
+			}
+			for i, it := range items {
+				e, ok := kept[it]
+				switch {
+				case !ok:
+					err = add(it, ranks[i])
+				case e.rank != ranks[i]:
+					changed = true
+					_, err = d.Exec(`UPDATE playlist_entry SET rank = ?, modified_at = ?, modified_by = NULL WHERE id = ?`, ranks[i], now, e.id)
+					err = db.Wrap(err)
+				}
+				if err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		lo := ""
+		for i := 0; i < len(items); {
+			if e, ok := kept[items[i]]; ok {
+				lo, i = e.rank, i+1
+				continue
+			}
+			j, hi := i, ""
+			for j < len(items) {
+				if e, ok := kept[items[j]]; ok {
+					hi = e.rank
+					break
+				}
+				j++
+			}
+			ranks, err := NKeysBetween(lo, hi, j-i)
+			if err != nil {
+				return err
+			}
+			for n, it := range items[i:j] {
+				if err := add(it, ranks[n]); err != nil {
+					return err
+				}
+			}
+			i = j
+		}
+		return nil
+	})
 }
 
 // rankAt is a rank for position at among the playlist's entries other than

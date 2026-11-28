@@ -35,6 +35,8 @@ type Collection struct {
 	ModifiedAt   time.Time
 	CreatedBy    *uid.ID
 	ModifiedBy   *uid.ID
+	// Smart reports that rules choose its movies, as read.
+	Smart bool
 }
 
 // View is a collection as one reader sees it.
@@ -84,14 +86,14 @@ type Repo struct{ d db.DBTX }
 func New(d db.DBTX) *Repo { return &Repo{d} }
 
 const cols = `c.id, c.source, c.household_id, c.tmdb_id, c.name, c.overview, c.poster_path, c.backdrop_path, c.created_at, c.modified_at,
-	c.created_by, c.modified_by`
+	c.created_by, c.modified_by, EXISTS (SELECT 1 FROM smart_list l WHERE l.collection_id = c.id)`
 
 func scanInto(s db.Scanner, c *Collection, more ...any) error {
 	var tmdb sql.NullInt64
 	var overview, poster, backdrop sql.NullString
 	var created, modified int64
 	if err := s.Scan(append([]any{&c.ID, &c.Source, &c.HouseholdID, &tmdb, &c.Name, &overview, &poster, &backdrop, &created, &modified,
-		&c.CreatedBy, &c.ModifiedBy}, more...)...); err != nil {
+		&c.CreatedBy, &c.ModifiedBy, &c.Smart}, more...)...); err != nil {
 		return db.Wrap(err)
 	}
 	if tmdb.Valid {
@@ -330,6 +332,47 @@ func (r *Repo) ResetOrder(id uid.ID) error {
 // RemoveMovie takes a movie out of a collection, else db.ErrNotFound.
 func (r *Repo) RemoveMovie(id, movieID uid.ID) error {
 	return db.ExecOne(r.d, `DELETE FROM collection_movie WHERE collection_id = ? AND item_id = ?`, id, movieID)
+}
+
+// SetMovies makes the collection's movies these, in release order, and
+// reports whether anything changed.
+func (r *Repo) SetMovies(id uid.ID, movies []uid.ID) (changed bool, err error) {
+	return changed, db.InTx(r.d, func(d db.DBTX) error {
+		rows, err := d.Query(`SELECT item_id FROM collection_movie WHERE collection_id = ?`, id)
+		have, err := db.Collect(rows, err, db.Column[uid.ID])
+		if err != nil {
+			return err
+		}
+		want := make(map[uid.ID]bool, len(movies))
+		for _, m := range movies {
+			want[m] = true
+		}
+		for _, m := range have {
+			if !want[m] {
+				if _, err := d.Exec(`DELETE FROM collection_movie WHERE collection_id = ? AND item_id = ?`, id, m); err != nil {
+					return db.Wrap(err)
+				}
+				changed = true
+			}
+			delete(want, m)
+		}
+		for _, m := range movies {
+			if want[m] {
+				if _, err := d.Exec(`INSERT INTO collection_movie (collection_id, item_id) VALUES (?, ?)`, id, m); err != nil {
+					return db.Wrap(err)
+				}
+				changed = true
+			}
+		}
+		res, err := d.Exec(`UPDATE collection_movie SET position = NULL WHERE collection_id = ? AND position IS NOT NULL`, id)
+		if err != nil {
+			return db.Wrap(err)
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			changed = true
+		}
+		return nil
+	})
 }
 
 // SetTMDBMovie makes collectionID the movie's only TMDB collection, or
