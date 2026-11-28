@@ -447,8 +447,6 @@ describe("who's watching", () => {
     expect([...r.querySelectorAll(".who")].map((a) => a.lastChild!.textContent)).toEqual([
       "Helga",
       "Jason",
-      "Add kid",
-      "Add adult",
     ]);
     expect(r.querySelectorAll("[aria-label='PIN required']")).toHaveLength(1);
     r.querySelector<HTMLElement>(".who")!.click();
@@ -518,7 +516,7 @@ describe("who's watching", () => {
     });
   });
 
-  it("hides invited adults and offers Add adult to the owner only", async () => {
+  it("hides invited adults", async () => {
     const others = [acct(3, "Bea"), acct(4, "Cy", "adult", { pending: true })];
     await at("#/who");
     const r = root();
@@ -530,7 +528,6 @@ describe("who's watching", () => {
       "Helga",
       "Jason",
       "Bea",
-      "Add kid",
     ]);
     expect(r.textContent).toContain("Helga's household");
   });
@@ -572,6 +569,36 @@ describe("who's watching", () => {
     expect(r.querySelector<HTMLInputElement>("[aria-label='Join link']")!.value).toMatch(
       /\/join\/7KQ4-MNP2$/,
     );
+    expect(r.querySelector("a.btn.p")!.getAttribute("href")).toBe("#/household");
+  });
+
+  it("returns to Manage household from Add a kid and Add an adult", async () => {
+    for (const hash of ["#/add-kid", "#/add-adult"]) {
+      document.body.replaceChildren();
+      await at(hash);
+      const r = root();
+      await boot(r, { fetch: mockFetch({ "GET /health": health, "GET /me": me(1) }) });
+      await until(() => r.querySelector("form"));
+      expect(r.querySelector(".end a")!.getAttribute("href")).toBe("#/household");
+    }
+  });
+
+  it("shows the household once a kid is added", async () => {
+    await at("#/add-kid");
+    const r = root();
+    await boot(r, {
+      fetch: mockFetch({
+        "GET /health": health,
+        "GET /me": me(1),
+        "POST /profiles": acct(9, "Joan", "kid"),
+      }),
+    });
+    await until(() => r.querySelector("#kb"));
+    r.querySelector<HTMLInputElement>("#kn")!.value = "Joan";
+    r.querySelector<HTMLInputElement>("#kb")!.value = "2017-08-19";
+    r.querySelector("form")!.requestSubmit();
+    await until(() => calls.some((c) => c.key === "POST /profiles"));
+    await until(() => location.hash === "#/household");
   });
 
   it("suggests ceilings from the birthday on Add a kid", async () => {
@@ -919,23 +946,6 @@ describe("device lock", () => {
       });
       expect(calls.map((c) => c.key)).not.toContain(`PUT /profiles/${uid(1)}/preferences`);
     });
-  });
-
-  it("unlocks an adult without a PIN before Add kid goes there", async () => {
-    await at("#/who");
-    const r = root();
-    await boot(r, {
-      fetch: mockFetch({
-        "GET /health": health,
-        "GET /me": { ...me(1), profiles: [acct(1, "Helga"), acct(2, "Jason", "kid")] },
-        [`POST /profiles/${uid(1)}/unlock`]: unlocked,
-      }),
-    });
-    await until(() => r.querySelector(".profiles"));
-    r.querySelector<HTMLElement>("a[href='#/add-kid']")!.click();
-    expect(location.hash).toBe("#/who");
-    await until(() => location.hash === "#/add-kid");
-    expect(calls.find((c) => c.key === `POST /profiles/${uid(1)}/unlock`)!.body).toEqual({});
   });
 });
 
@@ -2847,7 +2857,7 @@ describe("household", () => {
       ]),
     );
 
-  it("offers Add kid and Add adult on Who's watching to an adult, none to a kid, and no Manage household", async () => {
+  it("offers no household actions on Who's watching to anyone", async () => {
     await at("#/who");
     const noPin = { ...me(1), profiles: [acct(1, "Helga"), acct(2, "Jason", "kid")] };
     const links = async (m: unknown) => {
@@ -2859,9 +2869,8 @@ describe("household", () => {
         r.querySelector(`a[href='${href}']`),
       );
     };
-    const all = ["#/add-kid", "#/add-adult"];
-    expect(await links(noPin)).toEqual(all);
-    expect(await links(me(1))).toEqual(all);
+    expect(await links(noPin)).toEqual([]);
+    expect(await links(me(1))).toEqual([]);
     expect(await links(me(2))).toEqual([]);
   });
 
@@ -2883,50 +2892,6 @@ describe("household", () => {
       await until(() => r.querySelector("header .profile"));
       expect(r.querySelector("main form")).toBeNull();
     }
-  });
-
-  describe("management behind the active adult's PIN", () => {
-    const open = async (unlock: () => Response) => {
-      await at("#/who");
-      const r = root();
-      await boot(r, {
-        fetch: mockFetch({
-          "GET /health": health,
-          "GET /me": me(1),
-          [`POST /profiles/${uid(1)}/unlock`]: unlock,
-        }),
-      });
-      await until(() => r.querySelector(".profiles"));
-      return r;
-    };
-    const type = (pin: string) => {
-      const field = document.querySelector<HTMLInputElement>("[role=dialog] input")!;
-      field.value = pin;
-      field.dispatchEvent(new Event("input"));
-    };
-
-    it("asks for the PIN first and goes nowhere until it is right", async () => {
-      const r = await open(() => json({ code: "forbidden", message: "wrong" }, 403));
-      r.querySelector<HTMLElement>("a[href='#/add-kid']")!.click();
-      expect(document.querySelector("[role=dialog]")).not.toBeNull();
-      expect(location.hash).toBe("#/who");
-      type("0000");
-      await until(() => document.querySelector("[role=alert]")?.textContent === "Wrong PIN.");
-      expect(location.hash).toBe("#/who");
-      button(document.body, "Cancel").click();
-      expect(document.querySelector("[role=dialog]")).toBeNull();
-      expect(location.hash).toBe("#/who");
-    });
-
-    it("goes to the target once the PIN is right", async () => {
-      const r = await open(() => new Response(null, { status: 204 }));
-      r.querySelector<HTMLElement>("a[href='#/add-kid']")!.click();
-      type("1234");
-      await until(() => location.hash === "#/add-kid");
-      expect(calls.find((c) => c.key === `POST /profiles/${uid(1)}/unlock`)!.body).toEqual({
-        pin: "1234",
-      });
-    });
   });
 
   it("gives the owner every action on others and only PIN actions on themselves, then resends a code", async () => {

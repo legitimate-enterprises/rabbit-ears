@@ -233,20 +233,20 @@ test("search finds a fixture by title as it is typed and opens its details", asy
   await expect(page.locator(".detail + section")).toHaveAttribute("aria-label", "Details");
 });
 
-test("the owner sets a kid's PIN and removes the kid from Manage household", async ({
+test("the owner adds a kid from Manage household, sets the kid's PIN and removes the kid", async ({
   page,
   request,
 }, info) => {
-  const headers = await seed(request);
+  await seed(request);
   const name = `Robin ${info.project.name}`;
-  const kid = await request.post(`${api}/profiles`, {
-    headers,
-    data: { name, birthday: "2016-05-01" },
-  });
-  expect(kid.ok()).toBeTruthy();
   await signIn(page);
   await page.getByRole("button", { name: "Ada" }).click();
   await page.getByRole("menuitem", { name: "Manage household" }).click();
+  await page.getByRole("link", { name: "Add kid" }).click();
+  await page.getByLabel("Name").fill(name);
+  await page.getByLabel("Birthday", { exact: true }).fill("2016-05-01");
+  await page.getByRole("button", { name: `Add ${name}` }).click();
+  await expect(page.getByRole("heading", { name: "Household" })).toBeVisible();
   const row = page.getByRole("listitem").filter({ hasText: name });
   await expect(row).toContainText("Kid · Movies up to");
   await expect(row).not.toContainText("PIN");

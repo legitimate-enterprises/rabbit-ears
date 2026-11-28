@@ -51,19 +51,10 @@ export async function who(ctx: Ctx, query: URLSearchParams): Promise<HTMLElement
       ),
       p.name,
     );
-  // ctx.profile is the one the server still treats as active, not one picked here.
-  const guarded = (href: string) => ({
-    href,
-    onclick: (e: Event) => (e.preventDefault(), pick(ctx.profile, href)),
-  });
-  const adder = (href: string, label: string) =>
-    h("a.who", guarded(href), h("span.ring", icon("plus", 40)), label);
   const ownerId = ctx.me.household?.adultId;
   const owner = ctx.me.profiles.find((p) => p.id === ownerId) ?? ctx.me.account;
   // Invited adults appear once they have joined.
   const ready = ctx.me.profiles.filter((p) => !p.pending && !p.revokedAt);
-  // An adult only visiting manages nothing of this household.
-  const manage = ctx.profile.kind === "adult" && !ctx.profile.present;
   const remembered = ready.find((p) => p.id === query.get("pick"));
   if (remembered) pick(remembered, then);
   return [
@@ -71,12 +62,7 @@ export async function who(ctx: Ctx, query: URLSearchParams): Promise<HTMLElement
     h(
       "div.whopage",
       h("h1.big", "Who's watching?"),
-      h(
-        "div.profiles",
-        ...ready.map(tile),
-        manage ? adder("#/add-kid", "Add kid") : null,
-        manage && ctx.profile.id === ownerId ? adder("#/add-adult", "Add adult") : null,
-      ),
+      h("div.profiles", ...ready.map(tile)),
       h(
         "p.sub",
         `This browser is in ${owner.name}'s household. `,
@@ -157,9 +143,9 @@ export async function editKid(ctx: Ctx, profileId: string): Promise<HTMLElement[
   );
 }
 
-/** Add a kid, or edit one when given; edits return to the household page. */
+/** Add a kid, or edit one when given; either returns to the household page. */
 function kidForm(ctx: Ctx, kid?: Schemas["Account"]): HTMLElement[] {
-  const back = kid ? "#/household" : "#/who";
+  const back = "#/household";
   const name = input("text", { required: true, maxLength: 40, id: "kn", value: kid?.name ?? "" });
   const birthday = input("date", {
     required: true,
@@ -586,7 +572,7 @@ export async function addAdult(ctx: Ctx): Promise<HTMLElement[]> {
     err,
     h(
       "div.end",
-      h("a.btn.s", { href: "#/who" }, "Cancel"),
+      h("a.btn.s", { href: "#/household" }, "Cancel"),
       h("button.btn.p", { type: "submit" }, "Add"),
     ),
   );
@@ -597,7 +583,7 @@ export async function addAdult(ctx: Ctx): Promise<HTMLElement[]> {
 export function invite(
   name: string,
   jc: Schemas["JoinCode"],
-  done: HTMLElement = h("a.btn.p", { href: "#/who" }, "Done"),
+  done: HTMLElement = h("a.btn.p", { href: "#/household" }, "Done"),
 ) {
   const url = new URL(jc.link, location.origin).href;
   return h(
