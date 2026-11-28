@@ -862,6 +862,51 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/profiles/{profileId}/favorites": {
+        parameters: {
+            query?: {
+                limit?: components["parameters"]["Limit"];
+                offset?: components["parameters"]["Offset"];
+            };
+            header?: never;
+            path: {
+                profileId: components["parameters"]["ProfileId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * The profile's favorites, most recently favorited first, then by item id.
+         * @description Only items the profile browses: a favorite hidden from it, as by a kid's ceilings, is kept and listed again once it may be seen. An adult with hideKidsContent is not listed kids' content (Item.kidsContent, YouTubeChannel.forKids).
+         */
+        get: operations["listFavorites"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/profiles/{profileId}/favorites/{itemId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                profileId: components["parameters"]["ProfileId"];
+                itemId: components["parameters"]["ItemId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** Favorite an item of a FavoriteKind the profile may see. */
+        put: operations["putFavorite"];
+        post?: never;
+        delete: operations["deleteFavorite"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/profiles/{profileId}/watch-state": {
         parameters: {
             query?: {
@@ -4456,6 +4501,24 @@ export interface components {
         };
         AllowList: {
             itemIds: components["schemas"]["Id"][];
+        };
+        /**
+         * @description The kinds of item a profile favorites.
+         * @enum {string}
+         */
+        FavoriteKind: "movie" | "show" | "season" | "episode" | "artist" | "album" | "song" | "video";
+        Favorite: {
+            itemId: components["schemas"]["Id"];
+            kind: components["schemas"]["FavoriteKind"];
+            /**
+             * Format: date-time
+             * @description When the profile favorited it.
+             */
+            createdAt: string;
+        };
+        FavoritePage: {
+            items: components["schemas"]["Favorite"][];
+            nextOffset?: number;
         };
         AllowedFor: {
             /** @description The kids of the device household on a manual allow list whose list holds the item itself, by id. */
@@ -8572,6 +8635,89 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listFavorites: {
+        parameters: {
+            query?: {
+                limit?: components["parameters"]["Limit"];
+                offset?: components["parameters"]["Offset"];
+                kind?: components["schemas"]["FavoriteKind"];
+            };
+            header?: never;
+            path: {
+                profileId: components["parameters"]["ProfileId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Favorites. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FavoritePage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    putFavorite: {
+        parameters: {
+            query?: {
+                /** @description When it was favorited, as a device that was offline knows it; absent is now, and a time ahead of the server's is taken as now. An item already a favorite keeps its createdAt. */
+                at?: string;
+            };
+            header?: never;
+            path: {
+                profileId: components["parameters"]["ProfileId"];
+                itemId: components["parameters"]["ItemId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Favorited; idempotent. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    deleteFavorite: {
+        parameters: {
+            query?: {
+                /** @description When it was unfavorited, as a device that was offline knows it; a time ahead of the server's is taken as now. A favorite made later stays, and the answer is still 204. */
+                at?: string;
+            };
+            header?: never;
+            path: {
+                profileId: components["parameters"]["ProfileId"];
+                itemId: components["parameters"]["ItemId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed; idempotent, also for an item that is gone or hidden. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
             404: components["responses"]["NotFound"];
         };
     };

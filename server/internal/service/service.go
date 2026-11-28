@@ -18,6 +18,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/device"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/download"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/edition"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/favorite"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/genre"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/gravatar"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/household"
@@ -67,6 +68,7 @@ type Services struct {
 	Sessions    *SessionService
 	Playback    *PlaybackService
 	WatchStates *WatchStateService
+	Favorites   *FavoriteService
 	Tasks       *TaskService
 	Auth        *AuthService
 	SSO         *SSOService
@@ -135,6 +137,7 @@ func New(d *sql.DB) *Services {
 		Sessions:    NewSessionService(session.New(d)),
 		Playback:    playback,
 		WatchStates: NewWatchStateService(watchstate.New(d)),
+		Favorites:   NewFavoriteService(favorite.New(d)),
 		Tasks:       NewTaskService(task.New(d)),
 		Auth:        NewAuthService(d),
 		SSO:         NewSSOService(d),
@@ -474,6 +477,15 @@ func NewWatchStateService(repo *watchstate.Repo) *WatchStateService { return &Wa
 
 // Repo exposes the repository.
 func (s *WatchStateService) Repo() *watchstate.Repo { return s.repo }
+
+// FavoriteService manages the items each profile starred.
+type FavoriteService struct{ repo *favorite.Repo }
+
+// NewFavoriteService returns a FavoriteService over repo.
+func NewFavoriteService(repo *favorite.Repo) *FavoriteService { return &FavoriteService{repo} }
+
+// Repo exposes the repository.
+func (s *FavoriteService) Repo() *favorite.Repo { return s.repo }
 
 // TaskService manages tasks and their runs.
 type TaskService struct{ repo *task.Repo }
