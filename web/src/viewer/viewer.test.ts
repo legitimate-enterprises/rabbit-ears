@@ -1002,6 +1002,42 @@ describe("grids", () => {
     expect(r.textContent).not.toContain("Season 0");
   });
 
+  it("dismisses an episode in progress, and offers it on no other", async () => {
+    await at(`#/episode/${uid(21)}`);
+    const r = root();
+    const going = {
+      itemId: uid(21),
+      positionMs: 600000,
+      watched: true,
+      playCount: 1,
+      changedAt: ts,
+    };
+    await boot(r, {
+      fetch: mockFetch({
+        ...tv(1),
+        "GET /media-files": page([]),
+        [`GET /profiles/${uid(1)}/watch-state/${uid(21)}`]: going,
+        [`DELETE /profiles/${uid(1)}/watch-state/${uid(21)}/position`]: () =>
+          new Response(null, { status: 204 }),
+      }),
+    });
+    await until(() => button(r, "Dismiss"));
+    expect([...r.querySelectorAll(".actions .btn")].map((b) => b.textContent)).toContain(
+      "Mark unwatched",
+    );
+    button(r, "Dismiss").click();
+    await until(() =>
+      calls.some((c) => c.key === `DELETE /profiles/${uid(1)}/watch-state/${uid(21)}/position`),
+    );
+    expect(calls.some((c) => c.key.startsWith(`PUT /profiles/${uid(1)}/watch-state`))).toBe(false);
+
+    await at(`#/episode/${uid(22)}`);
+    const r2 = root();
+    await boot(r2, { fetch: mockFetch({ ...tv(1), "GET /media-files": page([]) }) });
+    await until(() => button(r2, "Mark watched"));
+    expect(button(r2, "Dismiss")).toBeUndefined();
+  });
+
   it("shows nothing in place of a show's absent cast", async () => {
     await at(`#/show/${uid(10)}`);
     const r = root();
@@ -3316,8 +3352,9 @@ describe("More on details", () => {
     createdAt: ts,
     modifiedAt: ts,
   });
-  const routes = (m: unknown, movie: object) =>
+  const routes = (m: unknown, movie: object, more: Record<string, unknown> = {}) =>
     mockFetch({
+      ...more,
       "GET /health": health,
       "GET /me": m,
       [`GET /profiles/${uid(1)}/watch-state`]: page([]),
@@ -3391,6 +3428,37 @@ describe("More on details", () => {
     });
     opt("Use rating").click();
     await until(() => calls.some((c) => c.key === `DELETE /items/${uid(30)}/kids-content`));
+  });
+
+  it("dismisses a movie in progress beside its watched mark", async () => {
+    await at(`#/movie/${uid(30)}`);
+    const r = root();
+    await boot(r, {
+      fetch: routes(
+        me(1),
+        { kidsContent: false },
+        {
+          [`GET /profiles/${uid(1)}/watch-state/${uid(30)}`]: {
+            itemId: uid(30),
+            positionMs: 600000,
+            watched: false,
+            playCount: 0,
+            changedAt: ts,
+          },
+          [`DELETE /profiles/${uid(1)}/watch-state/${uid(30)}/position`]: () =>
+            new Response(null, { status: 204 }),
+        },
+      ),
+    });
+    await until(() => button(r, "More"));
+    button(r, "More").click();
+    expect(rows(r).slice(0, 2)).toEqual(["Mark as watched", "Dismiss"]);
+    [...r.querySelectorAll<HTMLElement>("[role=menuitem]")]
+      .find((e) => e.textContent === "Dismiss")!
+      .click();
+    await until(() =>
+      calls.some((c) => c.key === `DELETE /profiles/${uid(1)}/watch-state/${uid(30)}/position`),
+    );
   });
 
   it("a More option whose write fails says so in a toast", async () => {

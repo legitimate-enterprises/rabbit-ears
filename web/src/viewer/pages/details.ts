@@ -64,6 +64,14 @@ async function put(ctx: Ctx, id: string, watched: boolean) {
     }),
   );
 }
+/** Takes a title out of progress, keeping whether it was watched. */
+async function dismiss(ctx: Ctx, id: string) {
+  await ok(
+    ctx.api.DELETE("/profiles/{profileId}/watch-state/{itemId}/position", {
+      params: { path: { profileId: ctx.profile.id, itemId: id } },
+    }),
+  );
+}
 async function files(ctx: Ctx, id: string): Promise<File[]> {
   return (await ok(ctx.api.GET("/media-files", { params: { query: { itemId: id } } })))
     .items as File[];
@@ -170,7 +178,7 @@ async function videoLine(ctx: Ctx, itemId: string, f?: File) {
 }
 
 /**
- * A movie's or show's More: watched, then for an adult its kids' content and the kids' allow
+ * A movie's or show's More: watched and, for a title in progress, Dismiss, then for an adult its kids' content and the kids' allow
  * lists, then what adds it elsewhere.
  */
 async function more(
@@ -179,11 +187,13 @@ async function more(
   watched: boolean,
   mark: () => Promise<unknown>,
   add: (HTMLElement | null)[],
+  dismissIt?: () => Promise<unknown>,
 ) {
   const adult = ctx.profile.kind === "adult";
   const kidsPath = { params: { path: { itemId: i.id } } };
   return menu(h("button.btn.s", { type: "button" }, "More"), "More", [
     opt(watched ? "Mark as unwatched" : "Mark as watched", async () => (await mark(), refresh())),
+    !!dismissIt && opt("Dismiss", async () => (await dismissIt(), refresh())),
     adult &&
       opt(
         "Kids' content",
@@ -334,11 +344,18 @@ export async function movie(ctx: Ctx, [id]: string[]): Promise<HTMLElement[]> {
           "div.actions",
           play,
           edition,
-          await more(ctx, m, !!w?.watched, () => put(ctx, m.id, !w?.watched), [
-            addToPlaylist(ctx, m.id, "movies", () => editionId),
-            addToStation(ctx, m.id, "movies", () => editionId),
-            addToCollection(ctx, m.id),
-          ]),
+          await more(
+            ctx,
+            m,
+            !!w?.watched,
+            () => put(ctx, m.id, !w?.watched),
+            [
+              addToPlaylist(ctx, m.id, "movies", () => editionId),
+              addToStation(ctx, m.id, "movies", () => editionId),
+              addToCollection(ctx, m.id),
+            ],
+            inProgress(w) ? () => dismiss(ctx, m.id) : undefined,
+          ),
           neighbor("Previous", "film", rel.previous),
           neighbor("Next", "film", rel.next),
           tg.actions,
@@ -603,6 +620,8 @@ export async function episode(ctx: Ctx, [id]: string[]): Promise<HTMLElement[]> 
             "s",
             async () => (await put(ctx, e.id, !w?.watched), refresh()),
           ),
+          inProgress(w) &&
+            btn("Dismiss", "x", "s", async () => (await dismiss(ctx, e.id), refresh())),
           addToPlaylist(ctx, e.id, "tv"),
           addToStation(ctx, e.id, "tv"),
           neighbor("Previous", "episode", rel.previous),
@@ -705,6 +724,7 @@ export async function video(ctx: Ctx, [id]: string[]): Promise<HTMLElement[]> {
             "s",
             async () => (await put(ctx, v.id, !v.watched), refresh()),
           ),
+          resumed && btn("Dismiss", "x", "s", async () => (await dismiss(ctx, v.id), refresh())),
           tg.actions,
         ),
         tg.note,

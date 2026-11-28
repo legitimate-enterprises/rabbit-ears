@@ -449,6 +449,28 @@ describe("Video details", () => {
       calls.some((c) => c.key === `PUT /profiles/${uid(1)}/watch-state/${uid(60)}`),
     );
   });
+
+  it("dismisses a started video beside its watched mark", async () => {
+    await at(`#/video/${uid(60)}`);
+    const r = root();
+    await boot(r, {
+      fetch: mockFetch({
+        ...base(),
+        [`GET /youtube/videos/${uid(60)}`]: video(60, "The dishwasher video", {
+          positionMs: 600000,
+        }),
+        "GET /media-files": page([]),
+        [`DELETE /profiles/${uid(1)}/watch-state/${uid(60)}/position`]: none,
+      }),
+    });
+    await until(() => r.querySelector(".actions"));
+    const labels = [...r.querySelectorAll(".actions .btn")].map((b) => b.textContent);
+    expect(labels).toEqual(["Resume", "Mark watched", "Dismiss", "Watch together"]);
+    [...r.querySelectorAll("button")].find((b) => b.textContent === "Dismiss")!.click();
+    await until(() =>
+      calls.some((c) => c.key === `DELETE /profiles/${uid(1)}/watch-state/${uid(60)}/position`),
+    );
+  });
 });
 
 describe("Home and kids", () => {
