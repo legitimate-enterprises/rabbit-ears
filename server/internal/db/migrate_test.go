@@ -122,11 +122,11 @@ var (
 		"edition_file", "station_day", "station_loop", "playlist_share", "watch_together_member",
 		"item_metadata", "item_genre", "household_member", "adult_link", "playlist_household_share",
 		"item_keyword", "occasion_keyword", "occasion_item", "occasion_exclusion", "occasion_phrase",
-		"song_release"}
+		"song_release", "favorite"}
 	bookTables = []string{"server_info", "occasion_seed", "sync_clock",
 		"sync_tombstone", "sync_action", "schema_migration"}
 	syncedTables = []string{"account", "account_allow", "adult_link", "chapter", "collection",
-		"collection_movie", "cover", "credit", "download", "edition", "edition_file", "genre", "household",
+		"collection_movie", "cover", "credit", "download", "edition", "edition_file", "favorite", "genre", "household",
 		"household_member", "item", "item_genre", "item_keyword", "item_metadata", "library", "media_file",
 		"occasion", "occasion_exclusion", "occasion_item", "occasion_keyword", "occasion_phrase", "person",
 		"playlist", "playlist_entry", "playlist_household_share", "playlist_share", "profile_offer",

@@ -201,6 +201,8 @@ var V1 = Schema{
 		{Name: "watch_state", Source: "watch_state", Key: []string{"account_id", "item_id"}, Cols: plain("account_id", "item_id",
 			"position_ms", "watched", "play_count", "last_played_at", "changed_at", "edition_id"),
 			Scope: `account_id IN (` + members + `)`, TombScope: `k1 IN (` + members + `) OR ` + gone("k1", "account")},
+		{Name: "favorite", Source: "favorite", Key: []string{"account_id", "item_id"}, Cols: plain("account_id", "item_id", "created_at"),
+			Scope: `account_id IN (` + members + `)`, TombScope: `k1 IN (` + members + `) OR ` + gone("k1", "account")},
 		// station_owned is not in a response, but which playlists the lists
 		// leave out is.
 		{Name: "playlist", Source: "playlist", Key: []string{"id"}, Cols: plain("id", "account_id", "name", "kind", "last_played_at",

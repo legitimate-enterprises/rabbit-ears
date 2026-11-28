@@ -488,7 +488,12 @@ func TestSortTitlesReachReplicas(t *testing.T) {
 	if err := db.MigrateTo(d, 1); err != nil {
 		t.Fatal(err)
 	}
-	for _, q := range replica.V1.Triggers() {
+	// A table a later migration creates had no trigger in that release.
+	then := replica.V1
+	then.Tables = slices.DeleteFunc(slices.Clone(then.Tables), func(tb replica.Table) bool {
+		return count(t, d, `SELECT count(*) FROM sqlite_schema WHERE type = 'table' AND name = ?`, tb.Source) == 0
+	})
+	for _, q := range then.Triggers() {
 		mustExec(t, d, q)
 	}
 	mustExec(t, d, `UPDATE sync_clock SET release = '0.22.0'`)
