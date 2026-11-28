@@ -16,7 +16,7 @@ func TestOccasionsCRUDAndValidation(t *testing.T) {
 	e := newEnv(t)
 	var page api.OccasionPage
 	e.expect(200, "GET", "/occasions", e.plain.token, nil, &page)
-	if len(page.Items) != 2 || page.Items[0].Name != "Christmas" || *page.Items[0].Holiday != "christmas" || page.Items[0].KeywordIds[0] != 207317 ||
+	if len(page.Items) != 4 || page.Items[0].Name != "Christmas" || *page.Items[0].Holiday != "christmas" || page.Items[0].KeywordIds[0] != 207317 ||
 		page.Items[1].Name != "Halloween" || page.Items[1].DaysBefore != 30 || page.Items[1].DaysAfter != 1 {
 		t.Fatalf("seeded: %+v", page)
 	}
@@ -89,7 +89,7 @@ func TestOccasionsCRUDAndValidation(t *testing.T) {
 
 	var hs api.HolidayList
 	e.expect(200, "GET", "/holidays", e.plain.token, nil, &hs)
-	if len(hs.Items) != 14 || hs.Items[3].Key != "easter" || hs.Items[3].Dates[1].Format("2006-01-02") != "2027-03-28" {
+	if len(hs.Items) != 16 || hs.Items[3].Key != "easter" || hs.Items[3].Dates[1].Format("2006-01-02") != "2027-03-28" {
 		t.Fatalf("%+v", hs.Items[3])
 	}
 }

@@ -349,6 +349,8 @@ func TestBaselineSeedsItsRows(t *testing.T) {
 	want := []string{
 		"00000000-0000-7000-9000-000000000001 Christmas:christmas:30:5:0:0:-:207317:1",
 		"00000000-0000-7000-9000-000000000002 Halloween:halloween:30:1:0:0:-:3335:1",
+		"00000000-0000-7000-9000-000000000003 May the 4th:may-the-4th:14:1:0:0:-:371623:1",
+		"00000000-0000-7000-9000-000000000004 National Dog Day:national-dog-day:14:1:0:0:-:15162:1",
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("occasions\n%q\nwant\n%q", got, want)
@@ -572,7 +574,7 @@ func TestMigrationGivesEveryOccasionTheDefaultWash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"Christmas=200,15,0,100", "Halloween=200,15,0,100"}; !slices.Equal(got, want) {
+	if want := []string{"Christmas=200,15,0,100", "Halloween=200,15,0,100", "May the 4th=200,15,0,100", "National Dog Day=200,15,0,100"}; !slices.Equal(got, want) {
 		t.Fatalf("%q, want %q", got, want)
 	}
 	for _, set := range []string{"wash_strength = 99", "wash_strength = 401", "wash_brightness = -1", "wash_brightness = 61",
@@ -583,5 +585,34 @@ func TestMigrationGivesEveryOccasionTheDefaultWash(t *testing.T) {
 	}
 	if _, err := d.Exec(`UPDATE occasion SET wash_strength = 400, wash_brightness = 60, wash_sharpness = 70, wash_reach = 160`); err != nil {
 		t.Errorf("the upper bounds: %v", err)
+	}
+}
+
+// A server upgraded from before May the 4th and National Dog Day gets them
+// as new servers do, but keeps an occasion an admin already gave either name.
+func TestMigrationAddsMayThe4thAndNationalDogDay(t *testing.T) {
+	d := open(t)
+	if err := db.MigrateTo(d, 7); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Exec(`INSERT INTO occasion (id, name, month, day, days_before, days_after, created_at, modified_at)
+		VALUES (?, 'may the 4TH', 5, 4, 3, 0, 1, 1)`, uid.N(1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Migrate(d); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := d.Query(`SELECT name || ':' || COALESCE(holiday, month || '/' || day) || ':' || days_before || ':' || days_after || ':' ||
+			COALESCE((SELECT group_concat(keyword_id) FROM occasion_keyword k WHERE k.occasion_id = o.id), '-') || ':' ||
+			(SELECT COUNT(*) FROM occasion_seed s WHERE s.occasion_id = o.id)
+		FROM occasion o ORDER BY o.name`)
+	got, err := db.Collect(rows, err, db.Column[string])
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"Christmas:christmas:30:5:207317:1", "Halloween:halloween:30:1:3335:1", "may the 4TH:5/4:3:0:-:0",
+		"National Dog Day:national-dog-day:14:1:15162:1"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("%q, want %q", got, want)
 	}
 }

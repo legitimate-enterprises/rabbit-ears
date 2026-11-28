@@ -107,9 +107,10 @@ func TestSeedBuiltIns(t *testing.T) {
 		h, _ := occasion.HolidayByKey(key)
 		return occasion.BuiltInPhrases(key), h.Colors
 	}
-	for name, key := range map[string]string{"Christmas": "christmas", "Halloween": "halloween", "Eggs": "easter"} {
+	for name, key := range map[string]string{"Christmas": "christmas", "Halloween": "halloween", "May the 4th": "may-the-4th",
+		"National Dog Day": "national-dog-day", "Eggs": "easter"} {
 		p, c := builtIn(key)
-		if !reflect.DeepEqual(phrases[name], p) || !reflect.DeepEqual(colors[name], c) {
+		if len(p) == 0 || !reflect.DeepEqual(phrases[name], p) || !reflect.DeepEqual(colors[name], c) {
 			t.Errorf("%s: %v %v", name, phrases[name], colors[name])
 		}
 	}

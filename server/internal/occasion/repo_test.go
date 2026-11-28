@@ -29,12 +29,16 @@ func TestCRUDAndSeeds(t *testing.T) {
 	must(t, err)
 	bolder := &occasion.Wash{Strength: 200, Brightness: 15, Sharpness: 0, Reach: 100}
 	want := []occasion.Occasion{{Name: "Christmas", Holiday: "christmas", DaysBefore: 30, DaysAfter: 5, Keywords: []int64{207317}, Wash: bolder},
-		{Name: "Halloween", Holiday: "halloween", DaysBefore: 30, DaysAfter: 1, Keywords: []int64{3335}, Wash: bolder}}
-	christmas, halloween := uid.ID{6: 0x70, 8: 0x90, 15: 1}, uid.ID{6: 0x70, 8: 0x90, 15: 2}
-	if len(seeded) != 2 || seeded[0].ID != christmas || seeded[1].ID != halloween {
+		{Name: "Halloween", Holiday: "halloween", DaysBefore: 30, DaysAfter: 1, Keywords: []int64{3335}, Wash: bolder},
+		{Name: "May the 4th", Holiday: "may-the-4th", DaysBefore: 14, DaysAfter: 1, Keywords: []int64{371623}, Wash: bolder},
+		{Name: "National Dog Day", Holiday: "national-dog-day", DaysBefore: 14, DaysAfter: 1, Keywords: []int64{15162}, Wash: bolder}}
+	if len(seeded) != len(want) {
 		t.Fatalf("%+v", seeded)
 	}
 	for i, o := range seeded {
+		if o.ID != (uid.ID{6: 0x70, 8: 0x90, 15: byte(i + 1)}) {
+			t.Errorf("seeded %s with id %s", o.Name, o.ID)
+		}
 		if !o.CreatedAt.Equal(db.FromMs(0)) || !o.ModifiedAt.Equal(db.FromMs(0)) {
 			t.Errorf("seeded %+v at %v %v", *o, o.CreatedAt, o.ModifiedAt)
 		}
