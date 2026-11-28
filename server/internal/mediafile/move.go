@@ -35,8 +35,18 @@ func (r *Repo) Absorb(into, from uid.ID) error {
 		if err := absorb(d, into, from, `season_number`); err != nil {
 			return err
 		}
+		if err := keepFavorites(d, into, from); err != nil {
+			return err
+		}
 		return db.ExecOne(d, `DELETE FROM item WHERE id = ?`, from)
 	})
+}
+
+// keepFavorites moves the favorites of from, about to be deleted, to into;
+// one into already has wins.
+func keepFavorites(d db.DBTX, into, from uid.ID) error {
+	_, err := d.Exec(`UPDATE OR IGNORE favorite SET item_id = ? WHERE item_id = ?`, into, from)
+	return db.Wrap(err)
 }
 
 // absorb re-parents from's children under into. A child whose number (a
@@ -57,6 +67,9 @@ func absorb(d db.DBTX, into, from uid.ID, number string) error {
 		case err != nil:
 		case number == `season_number`:
 			if err = absorb(d, twin, kid, `episode_number`); err == nil {
+				err = keepFavorites(d, twin, kid)
+			}
+			if err == nil {
 				err = db.ExecOne(d, `DELETE FROM item WHERE id = ?`, kid)
 			}
 		default:

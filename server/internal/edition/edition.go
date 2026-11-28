@@ -356,6 +356,7 @@ func (r *Repo) Fold(into, from uid.ID) error {
 				WHERE k.item_id = ?1 AND g.item_id = ?2 AND g.account_id = k.account_id AND g.watched = 1`,
 			`UPDATE OR IGNORE watch_state SET item_id = ?1 WHERE item_id = ?2`,
 			`UPDATE OR IGNORE account_allow SET item_id = ?1 WHERE item_id = ?2`,
+			`UPDATE OR IGNORE favorite SET item_id = ?1 WHERE item_id = ?2`,
 			`UPDATE OR IGNORE collection_movie SET item_id = ?1 WHERE item_id = ?2`,
 			`UPDATE playlist_entry SET item_id = ?1 WHERE item_id = ?2`,
 			`UPDATE station_program SET item_id = ?1 WHERE item_id = ?2`,
