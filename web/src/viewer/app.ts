@@ -25,6 +25,7 @@ import { mini, music as musicEngine, resetMusic } from "./audio";
 import { command, helpSheet, SECTIONS } from "./keys";
 import { follow, onLive, type LiveEvent } from "./live";
 import { loadSections, rememberedSections, SECTION_KINDS } from "./sections";
+import { report, reporter } from "./report";
 
 export interface BootOptions {
   fetch?: (req: Request) => Promise<Response>;
@@ -111,7 +112,7 @@ export async function boot(root: HTMLElement, opts: BootOptions = {}, start = tr
   // Pages end their work on a hashchange, which a boot that replaces them does not send.
   window.dispatchEvent(new HashChangeEvent("hashchange"));
   const token = getToken();
-  const api = createApi({ token, fetch: opts.fetch });
+  const api = createApi({ token, fetch: reporter.wrap(opts.fetch) });
   // Only the page load's own boot is a start; signing in, a pick and a reload boot again.
   const again = () => boot(root, opts, false);
   // A lock or a pick in another tab changes who this one answers as; Who's watching gives way to the pick.
@@ -126,6 +127,7 @@ export async function boot(root: HTMLElement, opts: BootOptions = {}, start = tr
   const join = /^\/join\/([A-Za-z0-9-]+)\/?$/.exec(location.pathname)?.[1];
   const health = await ok(api.GET("/health"));
   if (mine !== boots) return;
+  reporter.version = health.version;
   nameServer(health.serverName);
   if (join)
     return accept(root, {
@@ -329,7 +331,9 @@ function mount(root: HTMLElement, ctx: Ctx) {
         toWho();
         return render();
       }
-      if (mine === gen) main.replaceChildren(h("p.err", { role: "alert" }, (e as Error).message));
+      if (mine !== gen) return;
+      report(key, e);
+      main.replaceChildren(h("p.err", { role: "alert" }, (e as Error).message));
     }
   };
   window.onhashchange = render;

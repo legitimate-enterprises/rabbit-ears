@@ -26,6 +26,7 @@ import { findTogether, otherName, Sync, type Together } from "../together";
 import { askHandoff, elsewhere, movedTo, moveHere, toast } from "../handoff";
 import { onLive } from "../live";
 import { runNext } from "../shuffle";
+import { report } from "../report";
 
 interface Opt {
   name: string;
@@ -48,6 +49,7 @@ export interface Live {
 
 /** The player's screen when its session could not start: why, and a way Home. */
 export const cannotPlay = (e: unknown) => {
+  report("player", e);
   const msg =
     e instanceof ApiError && e.status === 409
       ? "No way to play this on this device."

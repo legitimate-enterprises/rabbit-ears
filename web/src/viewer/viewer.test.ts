@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setToken } from "../admin/api";
 import { boot } from "./app";
+import { Reporter, reporter } from "./report";
 import { type Handler, at, calls, json, mockFetch, root, until } from "./testSupport";
 import { uid } from "../api/uid";
 
@@ -4037,6 +4038,39 @@ describe("profile menu and preferences", () => {
     const d = document.querySelector<HTMLElement>("[role=dialog]")!;
     expect(d.textContent).toContain("server's only admin");
     expect(d.querySelector("input, form")).toBeNull();
+  });
+});
+
+describe("error reports", () => {
+  it("reports a page that failed to the server with the next request that succeeds", async () => {
+    // The pages share one reporter, which earlier tests' errors have throttled.
+    Object.assign(reporter, new Reporter());
+    await at("#/search?q=x");
+    const r = root();
+    let failing = true;
+    const base = mockFetch({
+      "GET /health": { ...health, version: "0.26.0" },
+      "GET /me": me(1),
+      "GET /libraries": page([]),
+      "POST /client-errors": () => new Response(null, { status: 204 }),
+    });
+    setToken("tok");
+    await boot(r, {
+      fetch: (req) =>
+        failing && req.url.includes("/search")
+          ? Promise.resolve(json({ code: "internal", message: "database is locked" }, 500))
+          : base(req),
+    });
+    await until(() => r.querySelector("main [role=alert]")?.textContent === "database is locked");
+    failing = false;
+    document.dispatchEvent(new Event("visibilitychange"));
+    await until(() => calls.some((c) => c.key === "POST /client-errors"));
+    const sent = calls.find((c) => c.key === "POST /client-errors")!.body as {
+      appVersion: string;
+      entries: { context: string; message: string }[];
+    };
+    expect(sent.appVersion).toBe("0.26.0");
+    expect(sent.entries).toMatchObject([{ context: "search", message: "database is locked" }]);
   });
 });
 

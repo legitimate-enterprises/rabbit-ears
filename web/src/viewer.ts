@@ -1,5 +1,8 @@
 import "./viewer/style.css";
 import { boot } from "./viewer/app";
+import { listen } from "./viewer/report";
+
+listen();
 
 const root = document.getElementById("app");
 if (root)
