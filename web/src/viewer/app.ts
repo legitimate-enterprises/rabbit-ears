@@ -7,6 +7,7 @@ import { profileTabs, remembered } from "./device";
 import { signIn, accept } from "./pages/signIn";
 import { who, addKid, addAdult, password, editKid, preferences } from "./pages/who";
 import { household } from "./pages/household";
+import { friends } from "./pages/friends";
 import { search, personPage } from "./pages/search";
 import { home } from "./pages/home";
 import { grid } from "./pages/grid";
@@ -43,6 +44,7 @@ const routes: Record<string, Page> = {
   "station-edit": adult(editStation),
   tune,
   preferences: adult(preferences),
+  friends: adult(friends),
   household,
   show,
   season,
@@ -447,6 +449,7 @@ function profileMenu(ctx: Ctx) {
     [
       opt("Switch profile", ctx.switchProfile),
       adult && opt("Preferences", "#/preferences"),
+      adult && opt("Friends", "#/friends"),
       adult && opt("Manage household", "#/household"),
       adult && ctx.me.account.isAdmin && opt("Admin", "/admin/"),
       adult && opt("Password", "#/password"),

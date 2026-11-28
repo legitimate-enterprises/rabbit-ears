@@ -3965,6 +3965,7 @@ describe("profile menu and preferences", () => {
     expect(texts(r, "header [role=menu] [role=menuitem]")).toEqual([
       "Switch profile",
       "Preferences",
+      "Friends",
       "Manage household",
       "Admin",
       "Password",
