@@ -557,3 +557,31 @@ func TestMigrationFillsSortTitlesOfMoviesAndShows(t *testing.T) {
 		t.Errorf("run again\n%q\nwas\n%q", again, migrated)
 	}
 }
+
+func TestMigrationGivesEveryOccasionTheDefaultWash(t *testing.T) {
+	d := open(t)
+	if err := db.MigrateTo(d, 6); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Migrate(d); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := d.Query(`SELECT name || '=' || wash_strength || ',' || wash_brightness || ',' || wash_sharpness || ',' || wash_reach
+		FROM occasion ORDER BY name`)
+	got, err := db.Collect(rows, err, db.Column[string])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"Christmas=200,15,0,100", "Halloween=200,15,0,100"}; !slices.Equal(got, want) {
+		t.Fatalf("%q, want %q", got, want)
+	}
+	for _, set := range []string{"wash_strength = 99", "wash_strength = 401", "wash_brightness = -1", "wash_brightness = 61",
+		"wash_sharpness = -1", "wash_sharpness = 71", "wash_reach = 59", "wash_reach = 161", "wash_reach = NULL"} {
+		if _, err := d.Exec(`UPDATE occasion SET ` + set); err == nil { //nolint:gosec // fixed strings
+			t.Errorf("%s is allowed", set)
+		}
+	}
+	if _, err := d.Exec(`UPDATE occasion SET wash_strength = 400, wash_brightness = 60, wash_sharpness = 70, wash_reach = 160`); err != nil {
+		t.Errorf("the upper bounds: %v", err)
+	}
+}

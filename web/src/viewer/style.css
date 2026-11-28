@@ -841,19 +841,14 @@ kbd {
 .sec a {
   color: inherit;
 }
-/* An occasion's three colors washed over the top of its page, strongest behind the title and
-   gone below the first rows; it sits under the content, which keeps its own colors. */
+/* An occasion's wash (wash.ts) fills the viewport under the content, which keeps its own
+   colors, and stays put as the page scrolls. */
 .wash {
-  position: absolute;
-  inset: 0 0 auto;
-  height: 900px;
+  position: fixed;
+  inset: 0;
   z-index: -1;
   pointer-events: none;
-  background:
-    radial-gradient(55% 60% at 50% 0%, color-mix(in srgb, var(--w1) 30%, transparent), transparent),
-    radial-gradient(45% 55% at 0% 8%, color-mix(in srgb, var(--w2) 24%, transparent), transparent),
-    radial-gradient(45% 55% at 100% 8%, color-mix(in srgb, var(--w3) 24%, transparent), transparent);
-  mask-image: linear-gradient(#000 40%, transparent);
+  background: var(--wash);
 }
 .kv {
   display: grid;

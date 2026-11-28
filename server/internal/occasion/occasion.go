@@ -16,7 +16,8 @@ import (
 // Occasion is anchored to a Holiday key, or to Month and Day when Holiday
 // is empty. Its window runs from DaysBefore before the anchor to DaysAfter
 // after it. Keywords are TMDB keyword ids. Phrases title its Home row in
-// place of Name; Colors are none or three #RRGGBB.
+// place of Name; Colors are none or three #RRGGBB, washed behind its
+// screens as Wash says.
 type Occasion struct {
 	ID                    uid.ID
 	CreatedAt, ModifiedAt time.Time
@@ -28,6 +29,16 @@ type Occasion struct {
 	Keywords              []int64
 	Phrases               []string
 	Colors                []string
+	// Wash is always read; written nil, a create takes the schema's
+	// defaults and an update keeps what is stored.
+	Wash *Wash
+}
+
+// Wash is how the colors are drawn, each in percent: the glows' strength,
+// how far each color is brightened toward white, how much of a glow's
+// radius is at full strength, and the glows' radius.
+type Wash struct {
+	Strength, Brightness, Sharpness, Reach int
 }
 
 // MaxDays bounds DaysBefore and DaysAfter, so a date is in at most one
@@ -144,15 +155,19 @@ type Repo struct{ d db.DBTX }
 // New returns a repository over d.
 func New(d db.DBTX) *Repo { return &Repo{d} }
 
-const cols = `id, name, holiday, month, day, days_before, days_after, color1, color2, color3, created_at, modified_at, created_by, modified_by`
+const (
+	washCols = `wash_strength, wash_brightness, wash_sharpness, wash_reach`
+	cols     = `id, name, holiday, month, day, days_before, days_after, color1, color2, color3, created_at, modified_at, created_by, modified_by, ` +
+		washCols
+)
 
 func scan(s db.Scanner) (*Occasion, error) {
-	var o Occasion
+	o := Occasion{Wash: &Wash{}}
 	var holiday, c1, c2, c3 sql.NullString
 	var month, day sql.NullInt64
 	var created, modified int64
 	if err := s.Scan(&o.ID, &o.Name, &holiday, &month, &day, &o.DaysBefore, &o.DaysAfter, &c1, &c2, &c3,
-		&created, &modified, &o.CreatedBy, &o.ModifiedBy); err != nil {
+		&created, &modified, &o.CreatedBy, &o.ModifiedBy, &o.Wash.Strength, &o.Wash.Brightness, &o.Wash.Sharpness, &o.Wash.Reach); err != nil {
 		return nil, db.Wrap(err)
 	}
 	o.CreatedAt, o.ModifiedAt = db.FromMs(created), db.FromMs(modified)
@@ -189,8 +204,23 @@ func (r *Repo) Create(o *Occasion, by *uid.ID) error {
 			append(fields(o), o.ID, db.Ms(o.CreatedAt), db.Ms(o.ModifiedAt), by, by)...); err != nil {
 			return db.Wrap(err)
 		}
+		if err := setWash(tx, o); err != nil {
+			return err
+		}
 		return setLists(tx, o)
 	})
+}
+
+// setWash writes o's wash, or reads the stored one into o when it has none.
+func setWash(tx db.DBTX, o *Occasion) error {
+	if o.Wash == nil {
+		o.Wash = &Wash{}
+		return db.Wrap(tx.QueryRow(`SELECT `+washCols+` FROM occasion WHERE id = ?`, o.ID).
+			Scan(&o.Wash.Strength, &o.Wash.Brightness, &o.Wash.Sharpness, &o.Wash.Reach))
+	}
+	_, err := tx.Exec(`UPDATE occasion SET wash_strength = ?, wash_brightness = ?, wash_sharpness = ?, wash_reach = ? WHERE id = ?`,
+		o.Wash.Strength, o.Wash.Brightness, o.Wash.Sharpness, o.Wash.Reach, o.ID)
+	return db.Wrap(err)
 }
 
 // Update rewrites an occasion and replaces its keywords and phrases.
@@ -200,6 +230,9 @@ func (r *Repo) Update(o *Occasion, by *uid.ID) error {
 		if err := db.ExecOne(tx, `UPDATE occasion SET name = ?, holiday = ?, month = ?, day = ?, days_before = ?, days_after = ?,
 			color1 = ?, color2 = ?, color3 = ?, modified_at = ?, modified_by = ? WHERE id = ?`,
 			append(fields(o), db.Ms(o.ModifiedAt), by, o.ID)...); err != nil {
+			return err
+		}
+		if err := setWash(tx, o); err != nil {
 			return err
 		}
 		return setLists(tx, o)

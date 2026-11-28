@@ -4,6 +4,7 @@ import { ok } from "../../admin/api";
 import { items, today, type Ctx, type Item } from "../data";
 import { plural, runtime } from "../format";
 import { back, section, tile } from "../ui";
+import { washBackground } from "../wash";
 
 const year = (i: Item) => (i.parsedYear ? String(i.parsedYear) : "");
 
@@ -14,16 +15,9 @@ export async function occasion(ctx: Ctx, [id]: string[]): Promise<HTMLElement[]>
     ok(ctx.api.GET("/occasions/{occasionId}", { params: { path: { occasionId } } })),
     items(ctx.api, { occasionId }),
   ]);
-  const c = o.colors?.length === 3 ? o.colors : undefined;
+  const wash = washBackground(o.colors, o.wash);
   return [
-    ...(c
-      ? [
-          h("div.wash", {
-            "aria-hidden": "true",
-            style: `--w1:${c[0]};--w2:${c[1]};--w3:${c[2]}`,
-          }),
-        ]
-      : []),
+    ...(wash ? [h("div.wash", { "aria-hidden": "true", style: `--wash:${wash}` })] : []),
     back("Home", "#/"),
     h("div.titlerow", h("h1", o.name), h("span.sub", plural(members.length, "title"))),
     section(

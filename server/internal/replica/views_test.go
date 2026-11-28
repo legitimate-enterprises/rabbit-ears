@@ -123,6 +123,10 @@ INSERT INTO playlist_entry (id, playlist_id, item_id, collection_id, edition_id,
   (uid(614), uid(502), uid(38), NULL, NULL, 'a3', 0, 0, 0);
 `
 
+// washed gives the fixture's Snow a wash of its own; Sun keeps the
+// defaults. It is apart from fixture, which runs on the first schema too.
+const washed = `UPDATE occasion SET wash_strength = 300, wash_brightness = 30, wash_sharpness = 20, wash_reach = 140 WHERE id = uid(301)`
+
 // replicaOf is household 201's snapshot of d, opened, so a view reading
 // what a replica never holds fails.
 func replicaOf(t *testing.T, d *sql.DB) *sql.DB {

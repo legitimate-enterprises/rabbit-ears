@@ -1,5 +1,6 @@
 import type { Api, Schemas } from "../../api/client";
 import { artOf, watchArt } from "../../viewer/artwork";
+import { washBackground } from "../../viewer/wash";
 import type { Ctx } from "../api";
 import { ok, paged } from "../api";
 import { confirming, table } from "../common";
@@ -10,11 +11,18 @@ type Occasion = Schemas["Occasion"];
 type Member = Schemas["OccasionMember"];
 type Item = Schemas["Item"];
 type Child = Node | string | null | false;
+type Wash = Schemas["OccasionWash"];
 
 const PREVIEW = 10;
 const MAX_KEYWORDS = 100;
 const MAX_PHRASES = 200;
 const MAX_PHRASE = 60;
+const WASH: [keyof Wash, string, number, number][] = [
+  ["strength", "Strength", 100, 400],
+  ["brightness", "Brightness", 0, 60],
+  ["sharpness", "Sharpness", 0, 70],
+  ["reach", "Reach", 60, 160],
+];
 // What Add colors starts from without a holiday's own: the viewer's palette, for the admin to change.
 const NEW_COLORS = ["#2e6b8a", "#6b3a2e", "#5b6b3f"];
 const MONTHS = Array.from({ length: 12 }, (_, i) =>
@@ -254,8 +262,42 @@ export async function occasionEdit(ctx: Ctx, id?: string): Promise<HTMLElement[]
   });
 
   let colors = [...(saved?.colors ?? [])];
+  // A new occasion has the server's defaults once saved.
+  const wash = saved && { ...saved.wash };
+  const preview = h("div.wash", { "aria-hidden": "true" });
+  const paintPreview = () =>
+    preview.style.setProperty(
+      "--wash",
+      wash ? (washBackground(colors, wash, ["cqw", "cqh"]) ?? "none") : "none",
+    );
+  const washControls = (wash: Wash) =>
+    h(
+      "div.washedit",
+      h("div.washpreview", preview),
+      ...WASH.map(([key, label, min, max]) => {
+        const shown = sub(`${wash[key]}%`);
+        const slider = h("input", {
+          type: "range",
+          min,
+          max,
+          step: 1,
+          value: String(wash[key]),
+          oninput: () => {
+            wash[key] = Number(slider.value);
+            shown.textContent = `${slider.value}%`;
+            paintPreview();
+          },
+        }) as HTMLInputElement;
+        const f = field(label, slider);
+        f.append(shown);
+        return f;
+      }),
+    );
   const swatches = h("div.row");
-  const drawColors = () =>
+  const washBox = h("div");
+  const drawColors = () => {
+    put(washBox, colors.length > 0 && !!wash && washControls(wash));
+    paintPreview();
     put(
       swatches,
       ...(colors.length
@@ -265,7 +307,10 @@ export async function occasionEdit(ctx: Ctx, id?: string): Promise<HTMLElement[]
                 type: "color",
                 value: c,
                 "aria-label": `Color ${i + 1}`,
-                oninput: (e: Event) => (colors[i] = (e.target as HTMLInputElement).value),
+                oninput: (e: Event) => {
+                  colors[i] = (e.target as HTMLInputElement).value;
+                  paintPreview();
+                },
               }),
             ),
             h(
@@ -293,6 +338,7 @@ export async function occasionEdit(ctx: Ctx, id?: string): Promise<HTMLElement[]
             ),
           ]),
     );
+  };
   drawColors();
 
   const err = errorLine();
@@ -330,6 +376,7 @@ export async function occasionEdit(ctx: Ctx, id?: string): Promise<HTMLElement[]
       // A new occasion left without them takes its holiday's own; a replace sets them as shown.
       ...(id === undefined && !phrases.length ? {} : { phrases: [...phrases] }),
       ...(id === undefined && !colors.length ? {} : { colors: [...colors] }),
+      ...(wash ? { wash: { ...wash } } : {}),
     };
     save.disabled = true;
     try {
@@ -399,7 +446,13 @@ export async function occasionEdit(ctx: Ctx, id?: string): Promise<HTMLElement[]
           "Home titles the row with one of these at random, or with the name when there are none.",
         ),
       ),
-      h("div.field", h("span.lb", "Colors"), swatches, sub("Washed behind the occasion's page.")),
+      h(
+        "div.field",
+        h("span.lb", "Colors"),
+        swatches,
+        sub("Washed behind the occasion's page."),
+        washBox,
+      ),
       id === undefined &&
         sub("A holiday occasion saved without phrases or colors starts with the holiday's own."),
     ),

@@ -5266,6 +5266,7 @@ export interface components {
             phrases: string[];
             /** @description Three colors, as #RRGGBB, for the wash behind the occasion's screen; absent or empty keeps the plain background. */
             colors?: string[];
+            wash: components["schemas"]["OccasionWash"];
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
@@ -5275,7 +5276,7 @@ export interface components {
             /** @description The profile that last changed it; absent when none did, as for what the server made, or when that profile is gone. */
             modifiedBy?: components["schemas"]["Id"];
         };
-        /** @description Exactly one of holiday, or month with day. February 29 anchors only leap years. phrases are trimmed, and a phrase equal to an earlier one ignoring case is dropped; a phrase blank once trimmed is refused. colors are none or exactly three. On createOccasion, phrases or colors absent give an occasion anchored to a holiday that holiday's built-in phrases or colors, and any other occasion none; an empty array gives none. On replaceOccasion, phrases or colors absent are left as stored, and an empty array clears them. */
+        /** @description Exactly one of holiday, or month with day. February 29 anchors only leap years. phrases are trimmed, and a phrase equal to an earlier one ignoring case is dropped; a phrase blank once trimmed is refused. colors are none or exactly three. On createOccasion, phrases or colors absent give an occasion anchored to a holiday that holiday's built-in phrases or colors, and any other occasion none; an empty array gives none. On replaceOccasion, phrases or colors absent are left as stored, and an empty array clears them. wash absent gives the server's defaults on createOccasion and is left as stored on replaceOccasion. */
         OccasionInput: {
             /** @description On createOccasion: the new occasion's id, a UUIDv7 the client chose; absent, the server chooses one. An id already in use answers 409. On replaceOccasion, an id other than the path's answers 400. */
             id?: components["schemas"]["Id"];
@@ -5290,6 +5291,27 @@ export interface components {
             phrases?: string[];
             /** @description Three colors, as #RRGGBB, for the wash behind the occasion's screen; absent or empty keeps the plain background. */
             colors?: string[];
+            wash?: components["schemas"]["OccasionWash"];
+        };
+        /**
+         * @description How every client draws an occasion's three colors behind its screen,
+         *     each value in percent. Nothing is drawn unless colors holds exactly
+         *     three. The wash covers the whole viewport behind the content and
+         *     does not scroll with it. With b = brightness / 100, each sRGB
+         *     channel c of a color is first brightened to c × (1 − b) + 255 × b.
+         *     Each color is then a radial glow, a circle of radius
+         *     R = max(0.8 × viewport width, 0.5 × viewport height) × reach / 100:
+         *     color 1 centered on the top-left corner, color 2 on the bottom
+         *     center, color 3 on the top-right corner. A glow's peak opacity is
+         *     a = min(1, base × strength / 100), base 0.24 for colors 1 and 3 and
+         *     0.30 for color 2. With s = sharpness / 100, its opacity along the
+         *     radius is a from 0 to s, 0.4 × a at s + (1 − s) / 2, and 0 at 1.
+         */
+        OccasionWash: {
+            strength: number;
+            brightness: number;
+            sharpness: number;
+            reach: number;
         };
         OccasionPage: {
             items: components["schemas"]["Occasion"][];
@@ -5316,6 +5338,7 @@ export interface components {
             headline?: string;
             /** @description Three colors, as #RRGGBB, for the wash behind the occasion's screen; absent or empty keeps the plain background. */
             colors?: string[];
+            wash: components["schemas"]["OccasionWash"];
             /** Format: date */
             anchorDate: string;
             /** Format: date */

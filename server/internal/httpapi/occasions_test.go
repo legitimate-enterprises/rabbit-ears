@@ -32,6 +32,9 @@ func TestOccasionsCRUDAndValidation(t *testing.T) {
 		leap.CreatedBy == nil || *leap.CreatedBy != e.admin.account.ID {
 		t.Fatalf("%+v", leap)
 	}
+	if bolder := (api.OccasionWash{Strength: 200, Brightness: 15, Sharpness: 0, Reach: 100}); leap.Wash != bolder || page.Items[0].Wash != bolder {
+		t.Fatalf("a create without a wash, and a seeded occasion, have the defaults: %+v %+v", leap.Wash, page.Items[0].Wash)
+	}
 	e.expect(409, "POST", "/occasions", e.admin.token, map[string]any{"id": oid, "name": "Another", "month": 3, "day": 1, "daysBefore": 0,
 		"daysAfter": 0, "keywordIds": []int64{}}, nil)
 	e.expect(409, "POST", "/occasions", e.admin.token, map[string]any{"name": "leap day", "holiday": "easter", "daysBefore": 0, "daysAfter": 0,
@@ -45,6 +48,12 @@ func TestOccasionsCRUDAndValidation(t *testing.T) {
 		{"name": "Unknown", "holiday": "festivus"},
 		{"name": "Negative", "holiday": "easter", "daysBefore": -1},
 		{"name": "Too long", "holiday": "easter", "daysAfter": 91},
+		{"name": "Faint", "holiday": "easter", "wash": map[string]int{"strength": 99, "brightness": 0, "sharpness": 0, "reach": 100}},
+		{"name": "Glaring", "holiday": "easter", "wash": map[string]int{"strength": 400, "brightness": 61, "sharpness": 0, "reach": 100}},
+		{"name": "Hard", "holiday": "easter", "wash": map[string]int{"strength": 400, "brightness": 0, "sharpness": 71, "reach": 100}},
+		{"name": "Near", "holiday": "easter", "wash": map[string]int{"strength": 400, "brightness": 0, "sharpness": 0, "reach": 59}},
+		{"name": "Far", "holiday": "easter", "wash": map[string]int{"strength": 400, "brightness": 0, "sharpness": 0, "reach": 161}},
+		{"name": "Partial", "holiday": "easter", "wash": map[string]int{"strength": 200}},
 	} {
 		in := map[string]any{"daysBefore": 0, "daysAfter": 0, "keywordIds": []int64{}}
 		for k, v := range bad {
@@ -60,11 +69,18 @@ func TestOccasionsCRUDAndValidation(t *testing.T) {
 	body["id"] = uid.N(1)
 	e.expect(400, "PUT", path, e.admin.token, body, nil)
 	delete(body, "id")
+	mine := api.OccasionWash{Strength: 400, Brightness: 60, Sharpness: 70, Reach: 60}
+	body["wash"] = mine
+	e.expect(200, "PUT", path, e.admin.token, body, &leap)
+	delete(body, "wash")
 	e.expect(200, "PUT", path, e.admin.token, body, &leap)
 	var got api.Occasion
 	e.expect(200, "GET", path, e.plain.token, nil, &got)
 	if got.Name != "Easter" || got.Month != nil || got.Day != nil || *got.Holiday != "easter" || len(got.KeywordIds) != 2 || got.KeywordIds[0] != 4 {
 		t.Fatalf("%+v", got)
+	}
+	if got.Wash != mine || leap.Wash != mine {
+		t.Fatalf("a replace writes the wash, and one without it keeps it: %+v %+v", got.Wash, leap.Wash)
 	}
 	e.expect(404, "PUT", "/occasions/"+itoa(uid.N(999)), e.admin.token, body, nil)
 	e.expect(403, "DELETE", path, e.plain.token, nil, nil)
@@ -127,7 +143,8 @@ func TestOccasionMembersAndSeason(t *testing.T) {
 	var active api.ActiveOccasionList
 	e.expect(200, "GET", inSeason, e.plain.token, nil, &active)
 	if len(active.Items) != 1 || active.Items[0].Name != "Christmas" || active.Items[0].AnchorDate.Format("2006-01-02") != "2026-12-25" ||
-		active.Items[0].FirstDate.Format("2006-01-02") != "2026-11-25" || active.Items[0].LastDate.Format("2006-01-02") != "2026-12-30" {
+		active.Items[0].FirstDate.Format("2006-01-02") != "2026-11-25" || active.Items[0].LastDate.Format("2006-01-02") != "2026-12-30" ||
+		active.Items[0].Wash != (api.OccasionWash{Strength: 200, Brightness: 15, Sharpness: 0, Reach: 100}) {
 		t.Fatalf("%+v", active)
 	}
 	e.expect(400, "GET", "/profiles/"+itoa(e.plain.account.ID)+"/occasions", e.plain.token, nil, nil)

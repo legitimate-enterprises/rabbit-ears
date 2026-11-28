@@ -262,3 +262,52 @@ test("the owner adds a kid from Manage household, sets the kid's PIN and removes
   await page.getByRole("dialog").getByRole("button", { name: "Remove" }).click();
   await expect(row).toHaveCount(0);
 });
+
+test("an occasion's wash fills the viewport, and the admin editor previews and saves it", async ({
+  page,
+  request,
+}) => {
+  const headers = await seed(request);
+  const path = `${api}/occasions/00000000-0000-7000-9000-000000000001`;
+  const o = await (await request.get(path, { headers })).json();
+  const put = await request.put(path, {
+    headers,
+    data: {
+      name: o.name,
+      holiday: o.holiday,
+      daysBefore: o.daysBefore,
+      daysAfter: o.daysAfter,
+      keywordIds: o.keywordIds,
+      colors: ["#1f6b45", "#b3263e", "#e0b252"],
+      wash: { strength: 200, brightness: 15, sharpness: 0, reach: 100 },
+    },
+  });
+  expect(put.ok()).toBeTruthy();
+  await signIn(page);
+  await page.getByRole("region", { name: "Recently added" }).waitFor();
+  await page.evaluate((id) => (location.hash = `#/occasion/${id}`), o.id);
+  const wash = page.locator("main .wash");
+  // A browser that refused the gradient would compute none.
+  await expect
+    .poll(() =>
+      wash.evaluate((e) => getComputedStyle(e).backgroundImage.split("radial-gradient").length - 1),
+    )
+    .toBe(3);
+  expect(await wash.evaluate((e) => getComputedStyle(e).position)).toBe("fixed");
+  const box = await wash.boundingBox();
+  expect(box).toMatchObject({ x: 0, y: 0, ...page.viewportSize() });
+
+  await page.goto(`/admin/#/occasions/${o.id}`);
+  await page.getByLabel("Strength").fill("320");
+  await expect
+    .poll(() =>
+      page
+        .locator(".washpreview .wash")
+        .evaluate((e) => getComputedStyle(e).backgroundImage.split("radial-gradient").length - 1),
+    )
+    .toBe(3);
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByText("Saved")).toBeVisible();
+  const saved = await (await request.get(path, { headers })).json();
+  expect(saved.wash).toEqual({ strength: 320, brightness: 15, sharpness: 0, reach: 100 });
+});

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { boot } from "./app";
 import { setToken } from "./api";
 import { uid } from "../api/uid";
+import { washBackground } from "../viewer/wash";
 
 type Handler = (body: unknown, url: URL) => unknown;
 const calls: { key: string; body: unknown }[] = [];
@@ -96,6 +97,7 @@ const holidays = [
   { key: "thanksgiving", name: "Thanksgiving (US)", dates: ["2026-11-26", "2027-11-25"] },
   { key: "valentine", name: "Valentine's Day", dates: ["2026-02-14", "2027-02-14"] },
 ];
+const bolder = { strength: 200, brightness: 15, sharpness: 0, reach: 100 };
 const occ = (id: number, name: string, extra: object) => ({
   id: uid(id),
   name,
@@ -103,6 +105,7 @@ const occ = (id: number, name: string, extra: object) => ({
   daysAfter: 0,
   keywordIds: [],
   phrases: [],
+  wash: bolder,
   ...extra,
 });
 const christmas = occ(1, "Christmas", {
@@ -424,9 +427,12 @@ describe("new occasion", () => {
     expect(e.defaultPrevented).toBe(true);
     click(byText("button", "Add colors"));
     expect(swatches().every((c) => /^#[0-9a-f]{6}$/i.test(c!))).toBe(true);
+    // The server's defaults are known once it is saved.
+    expect(control("Strength")).toBeUndefined();
     submit();
     await settle();
     expect(body("POST /occasions")).toMatchObject({ phrases: ["Yuletide"], colors: swatches() });
+    expect(body("POST /occasions")).not.toHaveProperty("wash");
   });
 
   it("starts Add colors from the chosen holiday's own, else from neutral ones", async () => {
@@ -559,8 +565,37 @@ describe("edit occasion", () => {
       keywordIds: [65],
       phrases: ["Ho, Ho, Ho!", "Merry Movies"],
       colors: ["#1f6b45", "#b3263e", "#e0b252"],
+      wash: bolder,
     });
     expect(root.textContent).toContain("Saved");
+  });
+
+  it("adjusts the wash with four sliders over a live preview drawn as the viewer draws it, and saves it", async () => {
+    extra[`PUT /occasions/${uid(1)}`] = (b: object) => occ(1, "x", b);
+    await open(`#/occasions/${uid(1)}`);
+    const sliders = ["Strength", "Brightness", "Sharpness", "Reach"].map(control);
+    expect(sliders.map((s) => [s.type, s.min, s.max, s.value])).toEqual([
+      ["range", "100", "400", "200"],
+      ["range", "0", "60", "15"],
+      ["range", "0", "70", "0"],
+      ["range", "60", "160", "100"],
+    ]);
+    const preview = () =>
+      document.querySelector<HTMLElement>(".washpreview .wash")!.style.getPropertyValue("--wash");
+    const colors = ["#1f6b45", "#b3263e", "#e0b252"];
+    expect(preview()).toBe(washBackground(colors, bolder, ["cqw", "cqh"]));
+    set(sliders[0], "300");
+    set(sliders[3], "140");
+    const mine = { strength: 300, brightness: 15, sharpness: 0, reach: 140 };
+    expect(preview()).toBe(washBackground(colors, mine, ["cqw", "cqh"]));
+    set(aria<HTMLInputElement>("Color 2"), "#000000");
+    expect(preview()).toBe(washBackground([colors[0], "#000000", colors[2]], mine, ["cqw", "cqh"]));
+    submit();
+    await settle();
+    expect(body(`PUT /occasions/${uid(1)}`)).toMatchObject({ wash: mine });
+    click(byText("button", "Clear colors"));
+    expect(control("Strength")).toBeUndefined();
+    expect(document.querySelector(".washpreview")).toBeNull();
   });
 
   it("fills the phrases and colors, and replaces them as edited", async () => {

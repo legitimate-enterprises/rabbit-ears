@@ -702,6 +702,32 @@ input[type="radio"] {
   width: 24px;
   height: 24px;
 }
+/* The occasion's wash as the viewer draws it, over a box standing in for the viewport. */
+.washedit {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px 24px;
+  margin-top: 12px;
+}
+.washpreview {
+  grid-column: 1 / -1;
+  position: relative;
+  height: 220px;
+  overflow: hidden;
+  container-type: size;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+}
+.washpreview .wash {
+  position: absolute;
+  inset: 0;
+  background: var(--wash);
+}
+.washedit input[type="range"] {
+  width: 100%;
+  accent-color: var(--amber);
+}
 .swatch {
   width: 44px;
   height: 32px;

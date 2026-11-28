@@ -27,8 +27,9 @@ func TestCRUDAndSeeds(t *testing.T) {
 	r := occasion.New(d)
 	seeded, err := r.List(100, 0)
 	must(t, err)
-	want := []occasion.Occasion{{Name: "Christmas", Holiday: "christmas", DaysBefore: 30, DaysAfter: 5, Keywords: []int64{207317}},
-		{Name: "Halloween", Holiday: "halloween", DaysBefore: 30, DaysAfter: 1, Keywords: []int64{3335}}}
+	bolder := &occasion.Wash{Strength: 200, Brightness: 15, Sharpness: 0, Reach: 100}
+	want := []occasion.Occasion{{Name: "Christmas", Holiday: "christmas", DaysBefore: 30, DaysAfter: 5, Keywords: []int64{207317}, Wash: bolder},
+		{Name: "Halloween", Holiday: "halloween", DaysBefore: 30, DaysAfter: 1, Keywords: []int64{3335}, Wash: bolder}}
 	christmas, halloween := uid.ID{6: 0x70, 8: 0x90, 15: 1}, uid.ID{6: 0x70, 8: 0x90, 15: 2}
 	if len(seeded) != 2 || seeded[0].ID != christmas || seeded[1].ID != halloween {
 		t.Fatalf("%+v", seeded)
@@ -49,7 +50,7 @@ func TestCRUDAndSeeds(t *testing.T) {
 	must(t, err)
 	must(t, r.Create(o, &by))
 	if got, err := r.Get(o.ID); err != nil || o.ID.IsZero() || !reflect.DeepEqual(got, &occasion.Occasion{ID: o.ID, Name: "Groundhog Day", Month: 2, Day: 2,
-		DaysBefore: 1, Keywords: []int64{3, 9}, CreatedAt: o.CreatedAt, ModifiedAt: o.CreatedAt, CreatedBy: &by, ModifiedBy: &by}) {
+		DaysBefore: 1, Keywords: []int64{3, 9}, Wash: bolder, CreatedAt: o.CreatedAt, ModifiedAt: o.CreatedAt, CreatedBy: &by, ModifiedBy: &by}) {
 		t.Fatalf("%+v %v", got, err)
 	}
 	if err := r.Create(&occasion.Occasion{Name: "christmas", Month: 1, Day: 1}, nil); !errors.Is(err, db.ErrConflict) {
@@ -73,6 +74,28 @@ func TestCRUDAndSeeds(t *testing.T) {
 	}
 	if err := r.Update(o, nil); !errors.Is(err, db.ErrNotFound) {
 		t.Fatal(err)
+	}
+}
+
+func TestWash(t *testing.T) {
+	r := occasion.New(dbtest.Open(t))
+	o := &occasion.Occasion{Name: "Snow", Month: 1, Day: 2}
+	must(t, r.Create(o, nil))
+	if bolder := (occasion.Wash{Strength: 200, Brightness: 15, Sharpness: 0, Reach: 100}); o.Wash == nil || *o.Wash != bolder {
+		t.Fatalf("a create without a wash takes the defaults: %+v", o.Wash)
+	}
+	mine := occasion.Wash{Strength: 400, Brightness: 60, Sharpness: 70, Reach: 60}
+	o.Wash = &mine
+	must(t, r.Update(o, nil))
+	o.Wash = nil
+	must(t, r.Update(o, nil))
+	if got, err := r.Get(o.ID); err != nil || *got.Wash != mine || *o.Wash != mine {
+		t.Fatalf("an update without a wash keeps the stored one: %+v %+v %v", o.Wash, got, err)
+	}
+	other := &occasion.Occasion{Name: "Sun", Month: 7, Day: 1, Wash: &occasion.Wash{Strength: 100, Brightness: 0, Sharpness: 0, Reach: 160}}
+	must(t, r.Create(other, nil))
+	if got, err := r.Get(other.ID); err != nil || got.Wash.Strength != 100 || got.Wash.Reach != 160 {
+		t.Fatalf("a create with a wash stores it: %+v %v", got, err)
 	}
 }
 

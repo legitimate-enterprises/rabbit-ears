@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setToken } from "../admin/api";
 import { boot } from "./app";
 import { uid } from "../api/uid";
+import { washBackground } from "./wash";
 
 vi.mock("hls.js", () => ({
   default: class {
@@ -139,6 +140,7 @@ describe("occasion page", () => {
     daysAfter: 5,
     keywordIds: [],
     phrases: ["Ho, Ho, Ho!"],
+    wash: { strength: 300, brightness: 20, sharpness: 10, reach: 120 },
     ...(colors ? { colors } : {}),
   });
   const open = async (o: ReturnType<typeof occasion>) => {
@@ -168,15 +170,12 @@ describe("occasion page", () => {
     expect(asked).toContain(`GET /items?occasionId=${uid(7)}&limit=200&offset=0`);
   });
 
-  it("washes the page in the occasion's three colors", async () => {
-    const r = await open(occasion(["#1F6B45", "#B3263E", "#E0B252"]));
+  it("washes the page in the occasion's three colors as its wash says", async () => {
+    const o = occasion(["#1F6B45", "#B3263E", "#E0B252"]);
+    const r = await open(o);
     const wash = r.querySelector<HTMLElement>(".wash")!;
     expect(wash.getAttribute("aria-hidden")).toBe("true");
-    expect(["--w1", "--w2", "--w3"].map((v) => wash.style.getPropertyValue(v))).toEqual([
-      "#1F6B45",
-      "#B3263E",
-      "#E0B252",
-    ]);
+    expect(wash.style.getPropertyValue("--wash")).toBe(washBackground(o.colors, o.wash));
   });
 
   it("keeps the plain background without colors", async () => {

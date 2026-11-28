@@ -16,7 +16,7 @@ import (
 
 func toOccasion(o *occasion.Occasion) api.Occasion {
 	v := api.Occasion{Id: o.ID, Name: o.Name, DaysBefore: o.DaysBefore, DaysAfter: o.DaysAfter, KeywordIds: append([]int64{}, o.Keywords...),
-		Phrases: append([]string{}, o.Phrases...), Colors: colorsOf(o), CreatedAt: o.CreatedAt, ModifiedAt: o.ModifiedAt,
+		Phrases: append([]string{}, o.Phrases...), Colors: colorsOf(o), Wash: washOf(o), CreatedAt: o.CreatedAt, ModifiedAt: o.ModifiedAt,
 		CreatedBy: o.CreatedBy, ModifiedBy: o.ModifiedBy}
 	if o.Holiday != "" {
 		v.Holiday = &o.Holiday
@@ -24,6 +24,10 @@ func toOccasion(o *occasion.Occasion) api.Occasion {
 		v.Month, v.Day = &o.Month, &o.Day
 	}
 	return v
+}
+
+func washOf(o *occasion.Occasion) api.OccasionWash {
+	return api.OccasionWash{Strength: o.Wash.Strength, Brightness: o.Wash.Brightness, Sharpness: o.Wash.Sharpness, Reach: o.Wash.Reach}
 }
 
 func colorsOf(o *occasion.Occasion) *[]string {
@@ -35,8 +39,8 @@ func colorsOf(o *occasion.Occasion) *[]string {
 
 // occasionFrom copies the input after checking what the schema cannot:
 // one anchor, a holiday the server knows, a day the month has in a leap
-// year, no phrase blank once trimmed, none or three colors. Phrases or
-// colors absent are left as o has them.
+// year, no phrase blank once trimmed, none or three colors. Phrases,
+// colors or a wash absent are left as o has them.
 func occasionFrom(in *api.OccasionInput, o *occasion.Occasion) error {
 	if in.Phrases != nil {
 		o.Phrases = []string{}
@@ -57,6 +61,9 @@ func occasionFrom(in *api.OccasionInput, o *occasion.Occasion) error {
 			return invalid("colors", "give three colors, or none")
 		}
 		o.Colors = *in.Colors
+	}
+	if w := in.Wash; w != nil {
+		o.Wash = &occasion.Wash{Strength: w.Strength, Brightness: w.Brightness, Sharpness: w.Sharpness, Reach: w.Reach}
 	}
 	switch {
 	case (in.Holiday != nil) == (in.Month != nil || in.Day != nil):
@@ -219,7 +226,7 @@ func (s *Server) ListActiveOccasions(ctx context.Context, r api.ListActiveOccasi
 	}
 	return api.ListActiveOccasions200JSONResponse{Items: mapAll(rows, func(v service.ActiveOccasion) api.ActiveOccasion {
 		out := api.ActiveOccasion{Id: v.ID, Name: v.Name, AnchorDate: openapi_types.Date{Time: v.Anchor},
-			FirstDate: openapi_types.Date{Time: v.First}, LastDate: openapi_types.Date{Time: v.Last}, Colors: colorsOf(v.Occasion)}
+			FirstDate: openapi_types.Date{Time: v.First}, LastDate: openapi_types.Date{Time: v.Last}, Colors: colorsOf(v.Occasion), Wash: washOf(v.Occasion)}
 		if v.Headline != "" {
 			out.Headline = &v.Headline
 		}

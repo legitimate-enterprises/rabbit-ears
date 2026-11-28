@@ -93,6 +93,7 @@ func twoHouseholds(t *testing.T) *sql.DB {
 	t.Helper()
 	d := dbtest.OpenPreferLocal(t)
 	mustExec(t, d, fixture)
+	mustExec(t, d, washed)
 	mustExec(t, d, elsewhere)
 	return d
 }
@@ -156,11 +157,15 @@ func TestSnapshotHoldsTheHouseholdAndNoOther(t *testing.T) {
 		`SELECT count(*) FROM account WHERE has_pin`:                                   2,
 		`SELECT count(*) FROM genre WHERE name = 'DRAMA'`:                              1,
 		`SELECT count(*) FROM occasion WHERE name = 'snow'`:                            1,
-		`SELECT count(*) FROM item_genre WHERE source = 'local'`:                       1,
-		`SELECT count(*) FROM holiday`:                                                 int64(len(occasion.Holidays())),
-		`SELECT count(*) FROM holiday_date WHERE key = 'christmas'`:                    int64(len(holiday(t, "christmas").Dates)),
-		`SELECT count(*) FROM holiday_color WHERE key = 'christmas'`:                   int64(len(holiday(t, "christmas").Colors)),
-		`SELECT count(*) FROM holiday_date WHERE day = '2030-12-25'`:                   1,
+		`SELECT count(*) FROM occasion WHERE name = 'Snow' AND wash_strength = 300 AND wash_brightness = 30 AND wash_sharpness = 20
+			AND wash_reach = 140`: 1,
+		`SELECT count(*) FROM occasion WHERE name = 'Sun' AND wash_strength = 200 AND wash_brightness = 15 AND wash_sharpness = 0
+			AND wash_reach = 100`: 1,
+		`SELECT count(*) FROM item_genre WHERE source = 'local'`:     1,
+		`SELECT count(*) FROM holiday`:                               int64(len(occasion.Holidays())),
+		`SELECT count(*) FROM holiday_date WHERE key = 'christmas'`:  int64(len(holiday(t, "christmas").Dates)),
+		`SELECT count(*) FROM holiday_color WHERE key = 'christmas'`: int64(len(holiday(t, "christmas").Colors)),
+		`SELECT count(*) FROM holiday_date WHERE day = '2030-12-25'`: 1,
 	} {
 		if got := count(t, r, q); got != want {
 			t.Errorf("%s = %d, want %d", q, got, want)
