@@ -41,6 +41,9 @@ func (s *Server) playlistOf(ctx context.Context, profileID, id uid.ID, need stri
 		return nil, err
 	}
 	_, err = s.svc.Playlists.Check(p, profileID, need)
+	if err == nil && need == playlist.Write && p.Smart {
+		err = service.ErrSmartPlaylist
+	}
 	return p, playlistError(err)
 }
 
@@ -77,7 +80,7 @@ func playlistError(err error) error {
 		return invalid("householdId", err.Error())
 	case errors.Is(err, service.ErrKidReadsOnly):
 		return invalid("access", err.Error())
-	case errors.Is(err, service.ErrStationPlaylist), errors.Is(err, service.ErrPlaylistOnAir):
+	case errors.Is(err, service.ErrStationPlaylist), errors.Is(err, service.ErrPlaylistOnAir), errors.Is(err, service.ErrSmartPlaylist):
 		return fail(409, api.ErrorCodeConflict, err.Error())
 	case errors.Is(err, db.ErrConflict):
 		return fail(409, api.ErrorCodeConflict, "already shared with that profile")

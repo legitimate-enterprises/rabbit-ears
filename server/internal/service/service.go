@@ -37,6 +37,7 @@ import (
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/seekpreview"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/serverinfo"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/session"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/smart"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/station"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/sysinfo"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/task"
@@ -85,6 +86,7 @@ type Services struct {
 	UpNext      *UpNextService
 	Related     *RelatedService
 	Downloads   *DownloadService
+	Smart       *smart.Service
 	// Events is the stream every signed-in client follows; EventHold is
 	// how long a poll of it waits for something to tell.
 	Events    *live.Hub
@@ -114,7 +116,8 @@ func New(d *sql.DB) *Services {
 	playback := NewPlaybackService(session.New(d), mediafile.New(d), device.New(d), transcode.New(transcode.Config{}))
 	stations := NewStationService(station.New(d), playlist.New(d), item.New(d))
 	watching := NewWatchTogetherService(together.New(d), item.New(d), account.New(d))
-	playback.Events, stations.Events, watching.Events = events, events, events
+	smarts := smart.New(d)
+	playback.Events, stations.Events, watching.Events, smarts.Events = events, events, events, events
 	s := &Services{
 		Events:      events,
 		EventHold:   Hold,
@@ -154,6 +157,7 @@ func New(d *sql.DB) *Services {
 		Downloads:   NewDownloadService(download.New(d), edition.New(d), mediafile.New(d), watchstate.New(d), playback),
 		UpNext:      NewUpNextService(item.New(d), collection.New(d), youtube.New(d), playlist.New(d), mediafile.New(d)),
 		Related:     NewRelatedService(item.New(d), collection.New(d)),
+		Smart:       smarts,
 		Server:      serverinfo.New(d),
 		Logs:        logstore.New(d),
 		Sampler:     sysinfo.New(),

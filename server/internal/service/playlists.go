@@ -35,6 +35,9 @@ var (
 	ErrKidReadsOnly = errors.New("a kid only reads a playlist")
 	// ErrStationPlaylist means the playlist is a station's own.
 	ErrStationPlaylist = errors.New("a station's own playlist is not shared")
+	// ErrSmartPlaylist means a smart playlist's rules choose its entries and
+	// fix its kind.
+	ErrSmartPlaylist = errors.New("a smart playlist's entries follow its rules")
 	// ErrPlaylistOnAir means one of the owner's stations plays the playlist.
 	ErrPlaylistOnAir = errors.New("a station plays this playlist; delete the station or give it another playlist first")
 )
@@ -185,6 +188,9 @@ func Holds(kind, itemKind string) bool { return slices.Contains(holds[kind], ite
 
 // Rename sets p's name and kind. A playlist with entries keeps its kind.
 func (s *PlaylistService) Rename(p *playlist.Playlist, name, kind string, by *uid.ID) error {
+	if kind != p.Kind && p.Smart {
+		return ErrSmartPlaylist
+	}
 	if kind != p.Kind {
 		n, err := s.repo.CountEntries(p.ID)
 		if err != nil {

@@ -26,7 +26,7 @@ func (s *Server) toPlaylist(ctx context.Context, p *playlist.Playlist, profileID
 	n, ms, first, err := s.svc.Playlists.Repo().Totals(p.ID, browse(ctx))
 	shared := access != service.Owner || p.Shared
 	out := api.Playlist{Id: p.ID, ProfileId: p.AccountID, Name: p.Name, Kind: api.PlaylistKind(p.Kind), Access: api.PlaylistAccess(access),
-		Shared: &shared, ItemCount: n, DurationMs: ms, ArtItemId: first, LastPlayedAt: p.LastPlayedAt,
+		Shared: &shared, Smart: &p.Smart, ItemCount: n, DurationMs: ms, ArtItemId: first, LastPlayedAt: p.LastPlayedAt,
 		CreatedAt: p.CreatedAt, ModifiedAt: p.ModifiedAt, CreatedBy: p.CreatedBy, ModifiedBy: p.ModifiedBy}
 	if err != nil {
 		return out, err

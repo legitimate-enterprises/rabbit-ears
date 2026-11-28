@@ -38,6 +38,7 @@ type Station struct {
 	ModifiedAt  time.Time
 	CreatedBy   *uid.ID
 	ModifiedBy  *uid.ID
+	Smart       bool // rules choose its playlist's entries, read only
 }
 
 // Viewer is who asks: the active profile, the device's household and the
@@ -56,7 +57,8 @@ func New(d db.DBTX) *Repo { return &Repo{d} }
 const from = ` FROM station s JOIN account a ON a.id = s.account_id JOIN playlist p ON p.id = s.playlist_id`
 
 const cols = `SELECT s.id, s.account_id, s.playlist_id, a.household_id, p.kind, s.name, s.shuffled, s.visibility,
-	s.timing, COALESCE(s.rating, ''), s.created_at, s.modified_at, s.created_by, s.modified_by` + from
+	s.timing, COALESCE(s.rating, ''), s.created_at, s.modified_at, s.created_by, s.modified_by,
+	EXISTS (SELECT 1 FROM smart_list l WHERE l.playlist_id = s.playlist_id)` + from
 
 // SeenOf keeps the stations s shared with profile, on a device of
 // household, owner being the household of s's owner. What a kid may see of
@@ -77,7 +79,7 @@ func scan(s db.Scanner) (*Station, error) {
 	var v Station
 	var created, modified int64
 	if err := s.Scan(&v.ID, &v.AccountID, &v.PlaylistID, &v.HouseholdID, &v.Kind, &v.Name, &v.Random, &v.Visibility, &v.Timing, &v.Rating,
-		&created, &modified, &v.CreatedBy, &v.ModifiedBy); err != nil {
+		&created, &modified, &v.CreatedBy, &v.ModifiedBy, &v.Smart); err != nil {
 		return nil, db.Wrap(err)
 	}
 	v.CreatedAt, v.ModifiedAt = db.FromMs(created), db.FromMs(modified)

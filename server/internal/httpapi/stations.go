@@ -119,6 +119,9 @@ func (s *Server) stationFrom(ctx context.Context, in *api.StationInput, st *stat
 	if p != nil {
 		st.PlaylistID = p.ID
 		if in.PlaylistId == nil && kind != p.Kind {
+			if p.Smart {
+				return playlistError(service.ErrSmartPlaylist)
+			}
 			n, err := s.svc.Playlists.Repo().CountEntries(p.ID)
 			if err != nil {
 				return err
@@ -240,7 +243,7 @@ func (s *Server) onAir(ctx context.Context, a service.Airing, admin bool) (api.S
 }
 
 func (s *Server) toStation(ctx context.Context, st *station.Station) (api.Station, error) {
-	out := api.Station{Id: st.ID, Name: st.Name, Kind: api.PlaylistKind(st.Kind), OwnerId: st.AccountID,
+	out := api.Station{Id: st.ID, Name: st.Name, Kind: api.PlaylistKind(st.Kind), Smart: &st.Smart, OwnerId: st.AccountID,
 		PlaylistId: st.PlaylistID, Order: api.StationOrderPlaylist, Visibility: api.StationVisibility(st.Visibility), Timing: api.StationTiming(st.Timing),
 		Rating: optStr(st.Rating),
 		Days:   []api.Weekday{}, Times: []api.StationTimeRange{}, CreatedAt: st.CreatedAt, ModifiedAt: st.ModifiedAt, CreatedBy: st.CreatedBy,

@@ -15,6 +15,8 @@ var (
 	ErrCollectionReadOnly = errors.New("a TMDB collection cannot be changed")
 	// ErrNotAMovie means a collection holds movies only.
 	ErrNotAMovie = errors.New("a collection holds movies only")
+	// ErrSmartCollection means a smart collection's rules choose its movies.
+	ErrSmartCollection = errors.New("a smart collection's movies follow its rules")
 )
 
 // CollectionService manages TMDB and custom movie collections.
@@ -39,6 +41,14 @@ func writable(c *collection.Collection) error {
 	return nil
 }
 
+// movable is writable for a change to the collection's movies or order.
+func movable(c *collection.Collection) error {
+	if err := writable(c); err != nil || !c.Smart {
+		return err
+	}
+	return ErrSmartCollection
+}
+
 // Rename sets a custom collection's name.
 func (s *CollectionService) Rename(c *collection.Collection, name string, by *uid.ID) error {
 	if err := writable(c); err != nil {
@@ -58,7 +68,7 @@ func (s *CollectionService) Delete(c *collection.Collection) error {
 
 // AddMovie puts a movie in a custom collection.
 func (s *CollectionService) AddMovie(c *collection.Collection, it *item.Item) error {
-	if err := writable(c); err != nil {
+	if err := movable(c); err != nil {
 		return err
 	}
 	if it.Kind != item.Movie {
@@ -69,7 +79,7 @@ func (s *CollectionService) AddMovie(c *collection.Collection, it *item.Item) er
 
 // RemoveMovie takes a movie out of a custom collection.
 func (s *CollectionService) RemoveMovie(c *collection.Collection, movieID uid.ID) error {
-	if err := writable(c); err != nil {
+	if err := movable(c); err != nil {
 		return err
 	}
 	return s.repo.RemoveMovie(c.ID, movieID)
@@ -78,7 +88,7 @@ func (s *CollectionService) RemoveMovie(c *collection.Collection, movieID uid.ID
 // MoveMovie moves a movie of a custom collection to position at, nil for
 // last; the first move hand-orders the collection.
 func (s *CollectionService) MoveMovie(c *collection.Collection, movieID uid.ID, at *int) error {
-	if err := writable(c); err != nil {
+	if err := movable(c); err != nil {
 		return err
 	}
 	return s.repo.MoveMovie(c.ID, movieID, at)
@@ -86,7 +96,7 @@ func (s *CollectionService) MoveMovie(c *collection.Collection, movieID uid.ID, 
 
 // ResetOrder returns a custom collection to release order.
 func (s *CollectionService) ResetOrder(c *collection.Collection) error {
-	if err := writable(c); err != nil {
+	if err := movable(c); err != nil {
 		return err
 	}
 	return s.repo.ResetOrder(c.ID)

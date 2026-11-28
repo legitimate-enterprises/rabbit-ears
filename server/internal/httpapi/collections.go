@@ -43,7 +43,7 @@ func (s *Server) collectionToWrite(ctx context.Context, id uid.ID) (*collection.
 // collectionError answers the service's rules as the spec does.
 func collectionError(err error) error {
 	switch {
-	case errors.Is(err, service.ErrCollectionReadOnly):
+	case errors.Is(err, service.ErrCollectionReadOnly), errors.Is(err, service.ErrSmartCollection):
 		return fail(403, api.ErrorCodeForbidden, err.Error())
 	case errors.Is(err, service.ErrNotAMovie):
 		return invalid("itemId", err.Error())
@@ -53,7 +53,7 @@ func collectionError(err error) error {
 
 func toCollection(v *collection.View) api.Collection {
 	return api.Collection{Id: v.ID, Source: api.CollectionSource(v.Source), Name: v.Name, Overview: optStr(v.Overview),
-		HouseholdId: v.HouseholdID, TmdbId: v.TMDBID, MovieCount: v.MovieCount, CustomOrder: &v.CustomOrder, CreatedAt: v.CreatedAt, ModifiedAt: v.ModifiedAt,
+		HouseholdId: v.HouseholdID, TmdbId: v.TMDBID, MovieCount: v.MovieCount, CustomOrder: &v.CustomOrder, Smart: &v.Smart, CreatedAt: v.CreatedAt, ModifiedAt: v.ModifiedAt,
 		CreatedBy: v.CreatedBy, ModifiedBy: v.ModifiedBy, PosterUrl: optStr(v.Art.Poster), BackdropUrl: optStr(v.Art.Backdrop)}
 }
 
