@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db/dbtest"
@@ -173,5 +174,57 @@ func TestLocalOnlyMetadataHasNoKeywordMembers(t *testing.T) {
 	must(t, w.r.AddMember(o.ID, w.plain))
 	if got := w.members(t, &o.ID, item.Audience{}); !reflect.DeepEqual(got, []uid.ID{w.plain}) {
 		t.Fatalf("keywords are TMDB's, unused while metadata is local only: %v", got)
+	}
+}
+
+func TestDailyOrder(t *testing.T) {
+	w := newWorld(t, "remote", "only")
+	mv, err := w.items.Get(w.g)
+	must(t, err)
+	a, b := &occasion.Occasion{Name: "Sevens", Month: 7, Day: 7}, &occasion.Occasion{Name: "Eights", Month: 8, Day: 8}
+	must(t, w.r.Create(a, nil))
+	must(t, w.r.Create(b, nil))
+	for i := range 20 {
+		it := &item.Item{LibraryID: mv.LibraryID, Kind: item.Movie, ParsedTitle: string(rune('a' + i))}
+		must(t, w.items.Create(it))
+		must(t, w.r.AddMember(a.ID, it.ID))
+		must(t, w.r.AddMember(b.ID, it.ID))
+	}
+	order := func(o uid.ID, day time.Time, limit, offset int) []uid.ID {
+		t.Helper()
+		rows, err := w.items.List(item.Filter{OccasionID: &o, Daily: day, Limit: limit, Offset: offset})
+		must(t, err)
+		var out []uid.ID
+		for _, it := range rows {
+			out = append(out, it.ID)
+		}
+		return out
+	}
+	day := time.Date(2026, 12, 20, 0, 0, 0, 0, time.UTC)
+	today := order(a.ID, day, 0, 0)
+	if len(today) != 20 || !reflect.DeepEqual(order(a.ID, day.Add(23*time.Hour), 0, 0), today) {
+		t.Fatalf("the same UTC day gives the same order: %v", today)
+	}
+	if reflect.DeepEqual(order(a.ID, day.AddDate(0, 0, 1), 0, 0), today) {
+		t.Fatal("another day gives another order")
+	}
+	if reflect.DeepEqual(order(b.ID, day, 0, 0), today) {
+		t.Fatal("two occasions differ on the same day")
+	}
+	if got := append(order(a.ID, day, 5, 0), order(a.ID, day, 5, 5)...); !reflect.DeepEqual(got, today[:10]) {
+		t.Fatalf("the order comes before the page, so a row's membership rotates: %v", got)
+	}
+	byTitle := order(a.ID, time.Time{}, 0, 0)
+	for i := 1; i < len(byTitle); i++ {
+		x, err := w.items.Get(byTitle[i-1])
+		must(t, err)
+		y, err := w.items.Get(byTitle[i])
+		must(t, err)
+		if x.ParsedTitle > y.ParsedTitle {
+			t.Fatalf("the default is still by title: %v", byTitle)
+		}
+	}
+	if _, err := w.items.List(item.Filter{Daily: day}); err == nil {
+		t.Fatal("a daily order is an occasion's")
 	}
 }

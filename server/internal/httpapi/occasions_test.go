@@ -2,8 +2,10 @@ package httpapi_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/api"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/uid"
 )
 
@@ -112,6 +114,15 @@ func TestOccasionMembersAndSeason(t *testing.T) {
 	if got := ids(items.Items); len(got) != 2 || !got[c.g] || !got[c.r] {
 		t.Fatalf("listItems by occasion: %v", got)
 	}
+	cid, err := uid.Parse(christmasID)
+	must(t, err)
+	want, err := e.svc.Items.Repo().List(item.Filter{OccasionID: &cid, Catalog: true, Daily: time.Now().UTC(), Limit: 1})
+	must(t, err)
+	e.expect(200, "GET", "/items?sort=daily&limit=1&occasionId="+christmasID, e.plain.token, nil, &items)
+	if len(items.Items) != 1 || items.Items[0].Id != want[0].ID || items.NextOffset == nil {
+		t.Fatalf("today's order, before the page: %+v", items)
+	}
+	e.expect(400, "GET", "/items?sort=daily", e.plain.token, nil, nil)
 	inSeason := "/profiles/" + itoa(e.plain.account.ID) + "/occasions?date=2026-12-20"
 	var active api.ActiveOccasionList
 	e.expect(200, "GET", inSeason, e.plain.token, nil, &active)
@@ -149,8 +160,6 @@ func TestOccasionMembersAndSeason(t *testing.T) {
 	}
 	e.expect(403, "PUT", members+"/"+itoa(c.g), e.plain.token, nil, nil)
 	// Without the G film the kid sees no member, and no occasion.
-	cid, err := uid.Parse(christmasID)
-	must(t, err)
 	must(t, e.svc.Occasions.Repo().RemoveMember(cid, c.g))
 	e.expect(200, "GET", kidSeason, e.plain.token, nil, &active)
 	if len(active.Items) != 0 {

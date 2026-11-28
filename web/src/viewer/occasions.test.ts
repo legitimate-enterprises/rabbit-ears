@@ -96,7 +96,7 @@ describe("Home occasions", () => {
   it("shelves each occasion in the server's order before Recently added", async () => {
     const heads = await home(() => page([active(8, "Halloween"), active(7, "Christmas")]));
     expect(heads).toEqual(["Halloween", "Christmas", "Recently added"]);
-    expect(asked).toContain(`GET /items?occasionId=${uid(8)}&limit=14`);
+    expect(asked).toContain(`GET /items?occasionId=${uid(8)}&sort=daily&limit=14`);
   });
 
   it("sends the device's calendar date", async () => {

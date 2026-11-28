@@ -8,8 +8,10 @@
 package item
 
 import (
+	"cmp"
 	"database/sql"
 	"errors"
+	"hash/fnv"
 	"slices"
 	"strings"
 	"time"
@@ -138,6 +140,10 @@ type Filter struct {
 	BestFirst bool
 	// Newest orders by when the item was added, latest first, instead of by title.
 	Newest bool
+	// Daily, when not zero, orders an occasion's members by a hash of its
+	// UTC day, the occasion and the item instead of by title: the same all
+	// that day, another the next. It needs OccasionID.
+	Daily  time.Time
 	Limit  int // 0 means 100
 	Offset int
 	// OccasionID keeps the occasion's members.
@@ -371,6 +377,9 @@ func (r *Repo) List(f Filter) ([]*Item, error) {
 	if f.Limit <= 0 {
 		f.Limit = 100
 	}
+	if !f.Daily.IsZero() {
+		return r.daily(f)
+	}
 	by := ``
 	if f.BestFirst {
 		by = `NOT (instr(lower(parsed_title), lower(?11)) = 1
@@ -387,6 +396,28 @@ func (r *Repo) List(f Filter) ([]*Item, error) {
 	}
 	return r.query(`SELECT `+cols+` FROM item WHERE `+kind+where+f.kidsOnly()+`
 		ORDER BY `+by+order+` LIMIT ?4 OFFSET ?5`, f.args(f.Limit, f.Offset)...)
+}
+
+// daily pages f's matches in Daily's order, which is applied before the
+// page so that the members a first page holds change from day to day.
+func (r *Repo) daily(f Filter) ([]*Item, error) {
+	if f.OccasionID == nil {
+		return nil, errors.New("item: a daily order needs an occasion")
+	}
+	all, err := r.query(`SELECT `+cols+` FROM item WHERE `+where+f.kidsOnly()+` LIMIT -1`, f.args(nil, nil)...)
+	if err != nil {
+		return nil, err
+	}
+	seed := append([]byte(f.Daily.UTC().Format(time.DateOnly)), f.OccasionID[:]...)
+	key := map[uid.ID]uint64{}
+	for _, it := range all {
+		h := fnv.New64a()
+		_, _ = h.Write(append(seed, it.ID[:]...)) // a hash.Hash never fails to write
+		key[it.ID] = h.Sum64()
+	}
+	slices.SortFunc(all, func(x, y *Item) int { return cmp.Or(cmp.Compare(key[x.ID], key[y.ID]), x.ID.Compare(y.ID)) })
+	from := min(f.Offset, len(all))
+	return all[from:min(from+f.Limit, len(all))], nil
 }
 
 // Count returns how many items match f, ignoring paging.

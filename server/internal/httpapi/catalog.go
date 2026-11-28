@@ -245,9 +245,17 @@ func (s *Server) ListItems(ctx context.Context, r api.ListItemsRequestObject) (a
 	if kidsOnly || r.Params.ParentId != nil {
 		a = audience(ctx)
 	}
+	sort := or(r.Params.Sort, api.ItemSortTitle)
+	var daily time.Time
+	if sort == api.ItemSortDaily {
+		if r.Params.OccasionId == nil {
+			return nil, invalid("sort", "daily needs occasionId")
+		}
+		daily = time.Now().UTC()
+	}
 	rows, err := s.svc.Items.Repo().List(item.Filter{LibraryID: r.Params.LibraryId, ParentID: r.Params.ParentId, KidsOnly: kidsOnly,
 		Kind: enumStr(r.Params.Kind), Q: or(r.Params.Q, ""), GenreID: r.Params.GenreId, PersonID: r.Params.PersonId, OccasionID: r.Params.OccasionId,
-		Catalog: true, UHD: r.Params.Resolution != nil, Newest: r.Params.Sort != nil && *r.Params.Sort == api.ItemSortAdded, Audience: a, Limit: limit + 1, Offset: offset})
+		Catalog: true, UHD: r.Params.Resolution != nil, Newest: sort == api.ItemSortAdded, Daily: daily, Audience: a, Limit: limit + 1, Offset: offset})
 	if err != nil {
 		return nil, err
 	}

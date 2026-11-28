@@ -91,7 +91,9 @@ async function occasions(ctx: Ctx): Promise<{ id: string; name: string; items: I
         name: o.headline ?? o.name,
         items: (
           await ok(
-            ctx.api.GET("/items", { params: { query: { occasionId: o.id, limit: RECENT } } }),
+            ctx.api.GET("/items", {
+              params: { query: { occasionId: o.id, sort: "daily", limit: RECENT } },
+            }),
           )
         ).items,
       })),

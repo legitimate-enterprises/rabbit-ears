@@ -5095,10 +5095,13 @@ export interface components {
         /**
          * @description title (the default) is by title, movies and shows by
          *     Item.sortTitle, episodes and seasons by number; added is newest
-         *     first, as Recently added.
+         *     first, as Recently added; daily, for an occasion's Home row and
+         *     only with occasionId, is a shuffle seeded by the server's UTC day
+         *     and the occasion, the same all that day and applied before paging,
+         *     so a first page's members change from day to day.
          * @enum {string}
          */
-        ItemSort: "title" | "added";
+        ItemSort: "title" | "added" | "daily";
         /**
          * @description uhd is 4K: video at least 3200 wide or 2000 tall.
          * @enum {string}
@@ -9775,6 +9778,7 @@ export interface operations {
                 occasionId?: components["schemas"]["Id"];
                 /** @description uhd, the 4K chip: only movies and episodes with a file whose video is at least 3200 wide or 2000 tall, and shows and seasons with such an episode. */
                 resolution?: components["schemas"]["Resolution"];
+                /** @description daily without occasionId is a 400. */
                 sort?: components["schemas"]["ItemSort"];
                 /** @description true lists only kids' content (Item.kidsContent), and does so for an adult with hideKidsContent too. A kid's own ceilings and allow list still apply. Omit it otherwise; false is the same. */
                 kidsContent?: boolean;
