@@ -130,6 +130,22 @@ func (r *Repo) DeleteAt(accountID, itemID uid.ID, at time.Time) error {
 	return err
 }
 
+// DismissAt forgets where to resume as of instant at, taking the item out
+// of progress and keeping the rest, unless the state changed later or is
+// not in progress; one never saved is db.ErrNotFound.
+func (r *Repo) DismissAt(accountID, itemID uid.ID, at time.Time) error {
+	res, err := r.d.Exec(`UPDATE watch_state SET position_ms = 0, changed_at = ?3
+		WHERE account_id = ?1 AND item_id = ?2 AND position_ms > 0 AND changed_at <= ?3`, accountID, itemID, db.Ms(at))
+	if err != nil {
+		return db.Wrap(err)
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		return nil
+	}
+	_, err = r.Get(accountID, itemID)
+	return err
+}
+
 // RecordPlay counts one play of editionID (nil for none) that ended at
 // instant at. The count only adds and the rest goes to the later instant,
 // so plays and SaveAt commute.

@@ -3,6 +3,7 @@ package httpapi_test
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"reflect"
 	"slices"
 	"strings"
@@ -661,5 +662,33 @@ func TestReplayedWritesAreTheActingProfiles(t *testing.T) {
 	must(t, e.db.QueryRow(`SELECT modified_by FROM account WHERE id = ?`, k).Scan(&by))
 	if by != k {
 		t.Fatalf("modified by %s, not the kid %s", by, k)
+	}
+}
+
+// Replayed in queue order, a dismiss takes the title out of progress and a
+// later play puts it back; neither touches whether it was watched.
+func TestReplayOrdersADismissByItsInstant(t *testing.T) {
+	e := newEnv(t)
+	m := e.movie(e.library("movies"), "Heat")
+	me := e.plain.account.ID
+	ws := "/profiles/" + itoa(me) + "/watch-state/" + itoa(m)
+	t0 := time.Now().UTC().Add(-time.Hour)
+	stamp := func(a map[string]any, at time.Time) map[string]any { a["at"] = at; return a }
+	put := func(pos int, at time.Time) map[string]any {
+		return stamp(action("putWatchState", "PUT", ws, me, map[string]any{"watched": false, "positionMs": pos, "at": at}), at)
+	}
+	dismiss := func(at time.Time) map[string]any {
+		return stamp(action("dismissWatchState", "DELETE", ws+"/position?at="+url.QueryEscape(at.Format(time.RFC3339Nano)), me, nil), at)
+	}
+	var w api.WatchState
+	e.accepted(e.plain, put(60000, t0), dismiss(t0.Add(time.Minute)))
+	e.expect(200, "GET", ws, e.plain.token, nil, &w)
+	if w.PositionMs != 0 || w.Watched {
+		t.Fatalf("progress then dismiss: %+v", w)
+	}
+	e.accepted(e.plain, dismiss(t0.Add(2*time.Minute)), put(90000, t0.Add(3*time.Minute)))
+	e.expect(200, "GET", ws, e.plain.token, nil, &w)
+	if w.PositionMs != 90000 {
+		t.Fatalf("dismiss then a later play: %+v", w)
 	}
 }

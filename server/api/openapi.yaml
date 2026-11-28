@@ -1391,6 +1391,33 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /profiles/{profileId}/watch-state/{itemId}/position:
+    parameters:
+      - $ref: "#/components/parameters/ProfileId"
+      - $ref: "#/components/parameters/ItemId"
+    delete:
+      operationId: dismissWatchState
+      tags: [profiles]
+      summary: Dismiss from in progress, forgetting where to resume.
+      description: >-
+        positionMs becomes 0, so the item is no longer in progress anywhere;
+        watched, playCount, lastPlayedAt and editionId stay. Playing it again
+        starts at the beginning. A state not in progress is left as it is.
+      x-replayable: true
+      parameters:
+        - name: at
+          in: query
+          description: >-
+            When it was dismissed, as a device that was offline knows it; a
+            time ahead of the server's is taken as now. A state that changed
+            later stays, and the answer is still 204.
+          schema: { type: string, format: date-time }
+      responses:
+        "204": { description: Dismissed. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /profiles/{profileId}/watch-state/{itemId}/plays:
     parameters:
       - $ref: "#/components/parameters/ProfileId"

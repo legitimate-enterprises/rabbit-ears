@@ -1050,6 +1050,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/profiles/{profileId}/watch-state/{itemId}/position": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                profileId: components["parameters"]["ProfileId"];
+                itemId: components["parameters"]["ItemId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Dismiss from in progress, forgetting where to resume.
+         * @description positionMs becomes 0, so the item is no longer in progress anywhere; watched, playCount, lastPlayedAt and editionId stay. Playing it again starts at the beginning. A state not in progress is left as it is.
+         */
+        delete: operations["dismissWatchState"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/profiles/{profileId}/watch-state/{itemId}/plays": {
         parameters: {
             query?: never;
@@ -9101,6 +9124,33 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Forgotten. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    dismissWatchState: {
+        parameters: {
+            query?: {
+                /** @description When it was dismissed, as a device that was offline knows it; a time ahead of the server's is taken as now. A state that changed later stays, and the answer is still 204. */
+                at?: string;
+            };
+            header?: never;
+            path: {
+                profileId: components["parameters"]["ProfileId"];
+                itemId: components["parameters"]["ItemId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Dismissed. */
             204: {
                 headers: {
                     [name: string]: unknown;

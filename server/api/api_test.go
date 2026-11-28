@@ -49,7 +49,7 @@ func TestEveryOperationHasAnID(t *testing.T) {
 // a method SyncAction allows.
 func TestReplayableOperations(t *testing.T) {
 	want := []string{
-		"putWatchState", "deleteWatchState", "putWatchStates", "putYouTubeChannelWatchState", "recordPlay",
+		"putWatchState", "deleteWatchState", "dismissWatchState", "putWatchStates", "putYouTubeChannelWatchState", "recordPlay",
 		"createPlaylist", "replacePlaylist", "deletePlaylist", "addPlaylistEntry", "addPlaylistEntries", "replacePlaylistEntry",
 		"removePlaylistEntry", "createPlaylistShare", "replacePlaylistShare", "deletePlaylistShare", "createPlaylistHouseholdShare",
 		"replacePlaylistHouseholdShare", "deletePlaylistHouseholdShare",

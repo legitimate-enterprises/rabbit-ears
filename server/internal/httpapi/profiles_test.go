@@ -397,6 +397,48 @@ func TestDeleteWatchStateAt(t *testing.T) {
 	e.expect(404, "DELETE", path+"?at="+url.QueryEscape(minuteAgo.Format(time.RFC3339Nano)), e.plain.token, nil, nil)
 }
 
+// A dismiss forgets only where to resume, in the order instants say, and
+// is heard; it takes an episode's show out of progress.
+func TestDismissWatchState(t *testing.T) {
+	e := newEnv(t)
+	tv := e.library("tv")
+	show, ep := e.show(tv, "Severance", "TV-MA")
+	me := "/profiles/" + itoa(e.plain.account.ID)
+	ws := me + "/watch-state/" + itoa(ep)
+	q := func(at time.Time) string { return "?at=" + url.QueryEscape(at.Format(time.RFC3339Nano)) }
+	e.expect(404, "DELETE", ws+"/position", e.plain.token, nil, nil)
+	hourAgo := time.Now().UTC().Add(-time.Hour)
+	var w api.WatchState
+	e.expect(200, "PUT", ws, e.plain.token, map[string]any{"watched": true, "at": hourAgo}, nil)
+	e.expect(200, "PUT", ws, e.plain.token, map[string]any{"watched": true, "positionMs": 60000, "at": hourAgo.Add(time.Minute)}, &w)
+	played := *w.LastPlayedAt
+
+	e.expect(204, "DELETE", ws+"/position"+q(hourAgo), e.plain.token, nil, nil)
+	e.expect(200, "GET", ws, e.plain.token, nil, &w)
+	if w.PositionMs != 60000 {
+		t.Fatalf("a dismiss older than the progress must lose: %+v", w)
+	}
+	at := e.cursor(e.plain.token)
+	e.expect(204, "DELETE", ws+"/position", e.plain.token, nil, nil)
+	e.expect(200, "GET", ws, e.plain.token, nil, &w)
+	if w.PositionMs != 0 || !w.Watched || w.PlayCount != 1 || !w.LastPlayedAt.Equal(played) {
+		t.Fatalf("a dismiss keeps watched, plays and when last played: %+v", w)
+	}
+	if got := e.heard(e.plain.token, &at); len(got) != 1 || !is(got[0], api.EventKindWatchState, "") || *got[0].ItemId != ep {
+		t.Fatalf("a dismiss is heard: %+v", got)
+	}
+	var p api.ShowProgressPage
+	e.expect(200, "GET", me+"/show-progress", e.plain.token, nil, &p)
+	if len(p.Items) != 1 || p.Items[0].ShowId != show || p.Items[0].InProgress {
+		t.Fatalf("a dismissed episode leaves its show out of progress: %+v", p.Items)
+	}
+	e.expect(204, "DELETE", ws+"/position", e.plain.token, nil, nil)
+
+	k := e.kid(e.plain, "Kid")
+	kid := e.kidDevice(e.plain, k.Id)
+	e.expect(404, "DELETE", "/profiles/"+itoa(k.Id)+"/watch-state/"+itoa(ep)+"/position", kid, nil, nil)
+}
+
 // A show's or season's page reads the states of its own episodes only.
 func TestWatchStatesUnderAShowOrSeason(t *testing.T) {
 	e := newEnv(t)

@@ -109,3 +109,60 @@ func TestListPagesMostRecentFirst(t *testing.T) {
 		t.Fatalf("%v", rest)
 	}
 }
+
+func TestDismissAtForgetsOnlyThePosition(t *testing.T) {
+	r, a, _, eps := setup(t)
+	t0 := time.Now().UTC().Truncate(time.Millisecond).Add(-time.Hour)
+	at := func(m int) time.Time { return t0.Add(time.Duration(m) * time.Minute) }
+	played := at(0)
+	// A second watch in progress: watched, counted once, at 40s.
+	if _, err := r.SaveAt(&watchstate.State{AccountID: a, ItemID: eps[0], PositionMs: 40_000, Watched: true, PlayCount: 1, LastPlayedAt: &played}, at(0)); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.DismissAt(a, eps[0], at(1)); err != nil {
+		t.Fatal(err)
+	}
+	g, _ := r.Get(a, eps[0])
+	if g.PositionMs != 0 || !g.Watched || g.PlayCount != 1 || !g.LastPlayedAt.Equal(played) || !g.ChangedAt.Equal(at(1)) {
+		t.Fatalf("dismiss must keep all but the position: %+v", g)
+	}
+	// Already out of progress: a no-op that keeps changedAt.
+	if err := r.DismissAt(a, eps[0], at(2)); err != nil {
+		t.Fatal(err)
+	}
+	if g, _ := r.Get(a, eps[0]); !g.ChangedAt.Equal(at(1)) {
+		t.Fatalf("a dismiss of nothing in progress must not touch the state: %+v", g)
+	}
+	if err := r.DismissAt(a, eps[1], at(2)); !errors.Is(err, db.ErrNotFound) {
+		t.Fatalf("never played: %v", err)
+	}
+}
+
+func TestDismissAtOrdersByInstant(t *testing.T) {
+	r, a, _, eps := setup(t)
+	t0 := time.Now().UTC().Truncate(time.Millisecond).Add(-time.Hour)
+	at := func(m int) time.Time { return t0.Add(time.Duration(m) * time.Minute) }
+	// Progress later than the dismiss wins: playing again un-dismisses.
+	_, _ = r.SaveAt(&watchstate.State{AccountID: a, ItemID: eps[0], PositionMs: 9000}, at(5))
+	if err := r.DismissAt(a, eps[0], at(4)); err != nil {
+		t.Fatal(err)
+	}
+	if g, _ := r.Get(a, eps[0]); g.PositionMs != 9000 {
+		t.Fatalf("an older dismiss must lose: %+v", g)
+	}
+	// A dismiss later than a mark keeps the mark: never unwatched.
+	_, _ = r.SaveAt(&watchstate.State{AccountID: a, ItemID: eps[1], PositionMs: 9000, Watched: true, PlayCount: 1}, at(1))
+	if err := r.DismissAt(a, eps[1], at(2)); err != nil {
+		t.Fatal(err)
+	}
+	if g, _ := r.Get(a, eps[1]); g.PositionMs != 0 || !g.Watched || g.PlayCount != 1 {
+		t.Fatalf("%+v", g)
+	}
+	// A play the server did not see, later than the dismiss, counts on top of it.
+	_, _ = r.SaveAt(&watchstate.State{AccountID: a, ItemID: eps[2], PositionMs: 9000}, at(1))
+	_ = r.DismissAt(a, eps[2], at(2))
+	g, err := r.RecordPlay(a, eps[2], nil, at(3))
+	if err != nil || !g.Watched || g.PlayCount != 1 || g.PositionMs != 0 {
+		t.Fatalf("%+v %v", g, err)
+	}
+}

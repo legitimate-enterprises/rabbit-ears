@@ -781,6 +781,23 @@ func (s *Server) DeleteWatchState(ctx context.Context, r api.DeleteWatchStateReq
 	return api.DeleteWatchState204Response{}, nil
 }
 
+// DismissWatchState takes an item out of progress, keeping whether it was
+// watched.
+func (s *Server) DismissWatchState(ctx context.Context, r api.DismissWatchStateRequestObject) (api.DismissWatchStateResponseObject, error) {
+	if err := s.watchable(ctx, r.ProfileId, r.ItemId); err != nil {
+		return nil, err
+	}
+	at := time.Now().UTC()
+	if v := watchedAt(r.Params.At); v != nil {
+		at = *v
+	}
+	if err := s.svc.WatchStates.Repo().DismissAt(r.ProfileId, r.ItemId, at); err != nil {
+		return nil, err
+	}
+	s.watchStateChanged(r.ProfileId, r.ItemId)
+	return api.DismissWatchState204Response{}, nil
+}
+
 // Setup is first run.
 func (s *Server) Setup(_ context.Context, r api.SetupRequestObject) (api.SetupResponseObject, error) {
 	b := r.Body
