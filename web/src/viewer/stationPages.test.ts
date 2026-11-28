@@ -475,6 +475,70 @@ describe("Station page", () => {
     await until(() => r.querySelectorAll(`${contents} li`).length === 1);
   });
 
+  it("lets its owner hand what it plays to rules, after saying what that replaces", async () => {
+    const rules = {
+      match: "all",
+      groups: [{ match: "all", conditions: [{ field: "genre", operator: "is", text: "Horror" }] }],
+    };
+    await at(`#/station/${uid(4)}`);
+    const r = root();
+    await boot(r, {
+      fetch: mockFetch({
+        ...base(),
+        ...routes(),
+        [`PUT /profiles/${uid(1)}/playlists/${uid(9)}/rules`]: rules,
+      }),
+    });
+    await until(() => button(r, "Use rules…"));
+    expect(button(r, "Edit rules…")).toBeUndefined();
+    button(r, "Use rules…")!.click();
+    let dlg = document.querySelector<HTMLElement>("[role=dialog]")!;
+    expect(dlg.textContent).toContain("Replaces this station's titles with those the rules match.");
+    button(dlg, "Cancel")!.click();
+    expect(document.querySelector("[role=dialog]")).toBeNull();
+    button(r, "Use rules…")!.click();
+    button(document.querySelector<HTMLElement>("[role=dialog]")!, "Continue")!.click();
+    dlg = document.querySelector<HTMLElement>("[role=dialog]")!;
+    expect(dlg.querySelector("input[name=name]")).toBeNull();
+    const field = dlg.querySelector<HTMLSelectElement>("select[aria-label=Field]")!;
+    // A station's rules read its owner's watch state and favorites, so they are offered.
+    expect(text(field.options)).toContain("Watched");
+    field.value = "genre";
+    field.dispatchEvent(new Event("change"));
+    const v = dlg.querySelector<HTMLInputElement>("input[aria-label=Value]")!;
+    v.value = "Horror";
+    v.dispatchEvent(new Event("input"));
+    dlg.querySelector("form")!.requestSubmit();
+    await until(
+      () => document.querySelector("[role=dialog] h1")?.textContent === "Reschedule now?",
+    );
+    expect(
+      calls.find((c) => c.key === `PUT /profiles/${uid(1)}/playlists/${uid(9)}/rules`)!.body,
+    ).toEqual(rules);
+  });
+
+  it("shows a smart station's contents without editing and offers Edit rules…", async () => {
+    entries = [entry(1, 30, "The Lantern Keeper"), entry(2, 31, "Salt and Ember")];
+    await at(`#/station/${uid(4)}`);
+    const r = root();
+    await boot(r, {
+      fetch: mockFetch({
+        ...base(),
+        ...routes({ smart: true }),
+        [`GET /profiles/${uid(1)}/playlists/${uid(9)}`]: {
+          id: uid(9),
+          kind: "movies",
+          access: "owner",
+          smart: true,
+        },
+      }),
+    });
+    await until(() => r.querySelector("section[aria-label='Contents'] li"));
+    expect(button(r, "Use rules…")).toBeUndefined();
+    expect(button(r, "Edit rules…")).toBeDefined();
+    expect(r.querySelector("section[aria-label='Contents'] [aria-label^='Remove ']")).toBeNull();
+  });
+
   it("shows the rating and offers no Edit to another adult of the household", async () => {
     await at(`#/station/${uid(4)}`);
     const r = root();

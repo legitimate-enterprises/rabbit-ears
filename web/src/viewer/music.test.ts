@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setToken } from "../admin/api";
 import { boot } from "./app";
 import { music, resetMusic } from "./audio";
-import { at, calls, mockFetch, none, root, until } from "./testSupport";
+import { at, calls, json, mockFetch, none, root, until } from "./testSupport";
 import { uid } from "../api/uid";
 
 vi.mock("hls.js", () => ({
@@ -580,6 +580,144 @@ describe("playlists", () => {
       kind: "music",
     });
     expect(r.textContent).toContain("Nothing here yet.");
+  });
+
+  describe("smart", () => {
+    const P = `/profiles/${uid(1)}/playlists`;
+    const rules = {
+      match: "all",
+      groups: [
+        { match: "all", conditions: [{ field: "artist", operator: "is", text: "Radiohead" }] },
+      ],
+    };
+    const fill = (dlg: Element, name: string, artist: string) => {
+      const n = dlg.querySelector<HTMLInputElement>("input[name=name]")!;
+      n.value = name;
+      const f = dlg.querySelector<HTMLSelectElement>("select[aria-label=Field]")!;
+      f.value = "artist";
+      f.dispatchEvent(new Event("change"));
+      const v = dlg.querySelector<HTMLInputElement>("input[aria-label=Value]")!;
+      v.value = artist;
+      v.dispatchEvent(new Event("input"));
+    };
+
+    it("creates a smart playlist, then gives it rules, and opens it", async () => {
+      await at("#/music?view=playlists");
+      const r = root();
+      await boot(r, {
+        fetch: mockFetch({
+          ...base(),
+          [`GET ${P}`]: page([]),
+          [`POST ${P}`]: pl(10, "Only Radiohead"),
+          [`PUT ${P}/${uid(10)}/rules`]: rules,
+          [`GET ${P}/${uid(10)}`]: { ...pl(10, "Only Radiohead"), smart: true },
+          [`GET ${P}/${uid(10)}/entries`]: page([]),
+          [`GET ${P}/${uid(10)}/play-order`]: page([]),
+        }),
+      });
+      await until(() => button(r, "New smart playlist"));
+      button(r, "New smart playlist").click();
+      const dlg = document.querySelector("[role=dialog]")!;
+      expect(dlg.querySelector<HTMLSelectElement>("select[aria-label=Kind]")!.value).toBe("music");
+      fill(dlg, "Only Radiohead", "Radiohead");
+      dlg.querySelector("form")!.requestSubmit();
+      await until(() => r.querySelector("h1")?.textContent?.startsWith("Only Radiohead"));
+      expect(calls.find((c) => c.key === `POST ${P}`)!.body).toEqual({
+        name: "Only Radiohead",
+        kind: "music",
+      });
+      expect(calls.find((c) => c.key === `PUT ${P}/${uid(10)}/rules`)!.body).toEqual(rules);
+    });
+
+    it("deletes the new playlist when its rules are refused and keeps the sheet open", async () => {
+      await at("#/music?view=playlists");
+      const r = root();
+      await boot(r, {
+        fetch: mockFetch({
+          ...base(),
+          [`GET ${P}`]: page([]),
+          [`POST ${P}`]: pl(10, "Only Radiohead"),
+          [`PUT ${P}/${uid(10)}/rules`]: () =>
+            json(
+              {
+                code: "bad_request",
+                message: "bad",
+                fields: [{ field: "groups.0.conditions.0.text", message: "Too long." }],
+              },
+              400,
+            ),
+          [`DELETE ${P}/${uid(10)}`]: none,
+        }),
+      });
+      await until(() => button(r, "New smart playlist"));
+      button(r, "New smart playlist").click();
+      const dlg = document.querySelector("[role=dialog]")!;
+      fill(dlg, "Only Radiohead", "Radiohead");
+      dlg.querySelector("form")!.requestSubmit();
+      await until(() => calls.some((c) => c.key === `DELETE ${P}/${uid(10)}`));
+      await until(() => dlg.querySelector(".rulerow .err:not([hidden])"));
+      expect(dlg.querySelector(".rulerow .err")!.textContent).toBe("Too long.");
+      expect(document.querySelector("[role=dialog]")).toBe(dlg);
+    });
+
+    it("shows a smart playlist with its badge, no drag or remove, and edits its rules", async () => {
+      await at(`#/playlist/${uid(9)}`);
+      const r = root();
+      await boot(r, {
+        fetch: mockFetch({
+          ...base(),
+          [`GET ${P}/${uid(9)}`]: { ...pl(9, "Only Radiohead"), smart: true },
+          [`GET ${P}/${uid(9)}/entries`]: page([entry(1, SONGS[0], 0), entry(2, SONGS[2], 1)]),
+          [`GET ${P}/${uid(9)}/play-order`]: page([]),
+          [`GET ${P}/${uid(9)}/rules`]: rules,
+          [`PUT ${P}/${uid(9)}/rules`]: rules,
+        }),
+      });
+      await until(() => r.querySelector(".tracks"));
+      expect(r.querySelector("h1 [role=img][aria-label=Smart]")).toBeTruthy();
+      expect(r.querySelector("[aria-label^='Remove ']")).toBeNull();
+      expect(r.querySelector("[draggable=true]")).toBeNull();
+      expect(r.textContent).not.toContain("Drag a row");
+      button(r, "Edit rules…").click();
+      await until(() => document.querySelector("[role=dialog]"));
+      const dlg = document.querySelector("[role=dialog]")!;
+      expect(dlg.querySelector<HTMLSelectElement>("select[aria-label=Kind]")!.disabled).toBe(true);
+      expect(dlg.querySelector<HTMLInputElement>("input[aria-label=Value]")!.value).toBe(
+        "Radiohead",
+      );
+      dlg.querySelector("form")!.requestSubmit();
+      await until(() => calls.some((c) => c.key === `PUT ${P}/${uid(9)}/rules`));
+      // The name did not change, so the playlist itself is not written.
+      expect(calls.some((c) => c.key === `PUT ${P}/${uid(9)}`)).toBe(false);
+    });
+
+    it("leaves smart playlists and stations out of Add to playlist and Add to station", async () => {
+      await at(`#/album/${uid(100)}`);
+      const r = root();
+      const station = (id: number, name: string, smart: boolean) => ({
+        id: uid(id),
+        name,
+        kind: "music",
+        ownerId: uid(1),
+        playlistId: uid(id + 50),
+        smart,
+      });
+      await boot(r, {
+        fetch: mockFetch({
+          ...base(),
+          [`GET ${P}`]: page([pl(9, "Road trip"), { ...pl(10, "Only Radiohead"), smart: true }]),
+          "GET /stations": page([station(20, "Hand picked", false), station(21, "Ruled", true)]),
+        }),
+      });
+      await until(() => button(r, "Add to playlist"));
+      button(r, "Add to playlist").click();
+      await until(() => document.querySelector(".choices button"));
+      expect(text(document.querySelectorAll(".choices button"))).toEqual(["Road trip"]);
+      document.body.querySelector(".scrim")!.remove();
+      button(r, "Add to station").click();
+      await until(() => document.querySelector(".choices button"));
+      expect(text(document.querySelectorAll(".choices button"))).toEqual(["Hand picked"]);
+    });
   });
 
   it("plays, reorders, removes, renames and deletes on the playlist page", async () => {

@@ -9,7 +9,8 @@ import { color, epCode, title, type Ctx } from "../data";
 import { askEdition, named, needsEdition } from "../editions";
 import { minutes, plural } from "../format";
 import { artOf, placeholderKind } from "../artwork";
-import { avatar, back, formEnd, icon, refresh } from "../ui";
+import { avatar, back, formEnd, guard, icon, refresh, smartBadge } from "../ui";
+import { createSmart, rulesDialog } from "../rules";
 import { reorder, row } from "./music";
 
 type Kind = Schemas["PlaylistKind"];
@@ -36,9 +37,9 @@ export const hasPlaylists = (ctx: Ctx, kind: Kind) =>
         () => false,
       );
 const sharedBy = (p: Playlist) => (p.ownerName ? `Shared by ${p.ownerName}` : "");
-/** Whether the profile adds, removes and reorders the playlist's entries. */
+/** Whether the profile adds, removes and reorders the playlist's entries; a smart one's follow its rules. */
 export const editable = (ctx: Ctx, p: Playlist) =>
-  ctx.profile.kind === "adult" && p.access !== "read";
+  ctx.profile.kind === "adult" && p.access !== "read" && !p.smart;
 // A shared playlist's artwork carries its Shared badge, so only then is it exposed.
 const cover = (p: Playlist, cls: string) =>
   h(
@@ -122,7 +123,44 @@ export async function playlistTiles(ctx: Ctx, kind: Kind) {
     icon("plus", 16),
     "New playlist",
   );
-  return { tiles, create: make };
+  const smart = h(
+    "button.btn.s",
+    {
+      type: "button",
+      onclick: () =>
+        rulesDialog({
+          heading: "New smart playlist",
+          kind,
+          name: "",
+          kindChoice: "choose",
+          save: async (d) => {
+            const k = d.kind as Kind;
+            const made = await createSmart(
+              () => create(ctx, d.name, k),
+              (playlistId) =>
+                ok(
+                  ctx.api.PUT("/profiles/{profileId}/playlists/{playlistId}/rules", {
+                    params: { path: { ...path(ctx), playlistId } },
+                    body: d.rules,
+                  }),
+                ),
+              (playlistId) =>
+                ok(
+                  ctx.api.DELETE("/profiles/{profileId}/playlists/{playlistId}", {
+                    params: { path: { ...path(ctx), playlistId } },
+                  }),
+                ),
+            );
+            ctx.go(`#/playlist/${made.id}`);
+          },
+        }),
+    },
+    icon("sparkle", 16),
+    "New smart playlist",
+  );
+  const both = document.createDocumentFragment();
+  both.append(make, smart);
+  return { tiles, create: both };
 }
 
 /** Every row of the playlist's play order. */
@@ -324,7 +362,7 @@ export async function playlist(ctx: Ctx, [id]: string[]) {
       cover(pl, "sq240"),
       h(
         "div.info",
-        h("h1.big", pl.name),
+        h("h1.big", pl.name, pl.smart ? smartBadge() : null),
         h(
           "div.meta",
           h("span", count(pl)),
@@ -351,6 +389,43 @@ export async function playlist(ctx: Ctx, [id]: string[]) {
               "button.btn.s",
               { type: "button", onclick: () => void shareDialog(ctx, pl) },
               "Share",
+            ),
+          owner &&
+            pl.smart &&
+            h(
+              "button.btn.s",
+              {
+                type: "button",
+                onclick: guard(async () => {
+                  const rules = await ok(
+                    ctx.api.GET("/profiles/{profileId}/playlists/{playlistId}/rules", p),
+                  );
+                  rulesDialog({
+                    heading: "Edit rules",
+                    kind: pl.kind,
+                    name: pl.name,
+                    kindChoice: "locked",
+                    rules,
+                    save: async (d) => {
+                      await ok(
+                        ctx.api.PUT("/profiles/{profileId}/playlists/{playlistId}/rules", {
+                          ...p,
+                          body: d.rules,
+                        }),
+                      );
+                      if (d.name !== pl.name)
+                        await ok(
+                          ctx.api.PUT("/profiles/{profileId}/playlists/{playlistId}", {
+                            ...p,
+                            body: { name: d.name, kind: pl.kind },
+                          }),
+                        );
+                      refresh();
+                    },
+                  });
+                }),
+              },
+              "Edit rules…",
             ),
           owner &&
             h(
@@ -530,7 +605,7 @@ const playlistButton = (ctx: Ctx, kind: Kind, put: (playlistId: string) => Promi
     ctx,
     "Add to playlist",
     "New playlist",
-    async () => (await list(ctx, kind)).filter((p) => p.access !== "read"),
+    async () => (await list(ctx, kind)).filter((p) => p.access !== "read" && !p.smart),
     (name) => create(ctx, name, kind),
     (pl) => put(pl.id),
   );
@@ -568,7 +643,7 @@ const ownStations = async (ctx: Ctx, kind: Kind) =>
     await paged((offset) =>
       ok(ctx.api.GET("/stations", { params: { query: { kind, limit: 200, offset } } })),
     )
-  ).filter((s) => s.ownerId === ctx.profile.id);
+  ).filter((s) => s.ownerId === ctx.profile.id && !s.smart);
 const createStation = (ctx: Ctx, name: string, kind: Kind) =>
   ok(ctx.api.POST("/stations", { body: { name, kind, order: "playlist" } }));
 

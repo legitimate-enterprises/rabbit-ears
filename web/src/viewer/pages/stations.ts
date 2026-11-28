@@ -2,7 +2,7 @@
 // order and what is on; these pages show onAir as given and play what tuning
 // in hands back.
 import { ApiError, ok, paged } from "../../admin/api";
-import { errorLine, h, input, showError } from "../../admin/dom";
+import { dialog, errorLine, h, input, showError } from "../../admin/dom";
 import type { Schemas } from "../../api/client";
 import { music as engine } from "../audio";
 import { imageButtons, imageKey } from "../coverImage";
@@ -27,7 +27,8 @@ import {
   type Station,
   type Weekday,
 } from "../stations";
-import { back, bar, brand, playmark, chip, icon, logo, refresh, section } from "../ui";
+import { back, bar, brand, playmark, chip, guard, icon, logo, refresh, section } from "../ui";
+import { rulesDialog } from "../rules";
 import { cannotPlay, player } from "./player";
 import { askReschedule, confirmDelete, editable, entryRows } from "./playlists";
 
@@ -151,23 +152,64 @@ export async function stationPage(ctx: Ctx, [id]: string[]) {
       );
   // Only the owner reads the station's playlist: it lives under their profile, theirs or shared
   // with them, and they edit it as that playlist allows.
-  const contents =
+  const own = { params: { path: { profileId: ctx.profile.id, playlistId: s.playlistId } } };
+  const pl =
     s.ownerId === ctx.profile.id
-      ? await entryRows(
-          ctx,
-          s.playlistId,
-          (_e, href) => href && ctx.go(href),
-          editable(
-            ctx,
-            await ok(
-              ctx.api.GET("/profiles/{profileId}/playlists/{playlistId}", {
-                params: { path: { profileId: ctx.profile.id, playlistId: s.playlistId } },
-              }),
-            ),
-          ),
-          () => askReschedule(ctx, s.id, refresh),
-        )
+      ? await ok(ctx.api.GET("/profiles/{profileId}/playlists/{playlistId}", own))
       : undefined;
+  const contents = pl
+    ? await entryRows(
+        ctx,
+        s.playlistId,
+        (_e, href) => href && ctx.go(href),
+        editable(ctx, pl),
+        () => askReschedule(ctx, s.id, refresh),
+      )
+    : undefined;
+  // Rules belong to the playlist's owner, so a station on a playlist shared with its owner has none to set.
+  const rules = (current?: Schemas["SmartRules"]) =>
+    rulesDialog({
+      heading: "Station rules",
+      kind: s.kind,
+      rules: current,
+      save: async (d) => {
+        await ok(
+          ctx.api.PUT("/profiles/{profileId}/playlists/{playlistId}/rules", {
+            ...own,
+            body: d.rules,
+          }),
+        );
+        askReschedule(ctx, s.id, refresh);
+      },
+    });
+  const useRules = () => {
+    const d = dialog(
+      "Use rules?",
+      h("p.sub", "Replaces this station's titles with those the rules match."),
+      h(
+        "div.end",
+        h("button.btn.s", { type: "button", onclick: () => d.close() }, "Cancel"),
+        h("button.btn.p", { type: "button", onclick: () => (d.close(), rules()) }, "Continue"),
+      ),
+    );
+  };
+  const rulesButton =
+    pl?.access !== "owner"
+      ? null
+      : s.smart
+        ? h(
+            "button.btn.s",
+            {
+              type: "button",
+              onclick: guard(async () =>
+                rules(
+                  await ok(ctx.api.GET("/profiles/{profileId}/playlists/{playlistId}/rules", own)),
+                ),
+              ),
+            },
+            "Edit rules…",
+          )
+        : h("button.btn.s", { type: "button", onclick: useRules }, "Use rules…");
   const on = s.onAir.now;
   const rows = programs.map((p) => {
     const current = !!on && p.startsAt === on.startsAt && p.itemId === on.itemId;
@@ -200,6 +242,7 @@ export async function stationPage(ctx: Ctx, [id]: string[]) {
           s.ownerId === ctx.profile.id
             ? h("a.btn.s", { href: `#/station-edit/${s.id}` }, "Edit station")
             : null,
+          rulesButton,
           ...(s.ownerId === ctx.profile.id
             ? imageButtons(
                 ctx.api,
