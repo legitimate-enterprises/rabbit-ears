@@ -34,6 +34,11 @@ const (
 	PurgeKind     = "sync_purge" // kind of the Purge sync history task
 	purgeName     = "Purge sync history"
 	purgeEvery    = 24 * time.Hour
+
+	// SmartKind is the kind of the on-demand Smart lists task, which a
+	// migration's triggers make due by its kind on any change a rule reads.
+	SmartKind = "smart"
+	smartName = "Smart lists"
 )
 
 // Runner owns the scan and metadata tasks: it keeps their rows in step with
@@ -53,6 +58,9 @@ type Runner struct {
 	// Purge, when set, is the daily Purge sync history task, and reports
 	// what it purged.
 	Purge func(context.Context) (string, error)
+	// Smart, when set, is the on-demand Smart lists task: it applies every
+	// smart list's rules again and reports what changed.
+	Smart func(context.Context) (string, error)
 	// Events, when set, hears of each scan that changed its library.
 	Events *live.Hub
 	wake   chan struct{}
@@ -80,8 +88,9 @@ func ScanKind(libraryID uid.ID) string { return scanKindPrefix + libraryID.Strin
 // Sync creates a nightly scan task for each library (due at once, so a new
 // library scans promptly), the hourly metadata task, the on-demand Seek
 // previews and Local metadata tasks, with Stations set the hourly Schedule
-// stations task and with Purge set the daily Purge sync history task, and
-// removes the scan tasks of deleted libraries.
+// stations task, with Purge set the daily Purge sync history task and with
+// Smart set the on-demand Smart lists task, and removes the scan tasks of
+// deleted libraries.
 func (r *Runner) Sync() error {
 	libs, err := r.S.Libraries.List()
 	if err != nil {
@@ -102,7 +111,11 @@ func (r *Runner) Sync() error {
 			return err
 		}
 	}
-	for _, k := range [][2]string{{PreviewsKind, previewsName}, {LocalKind, localName}} {
+	onDemand := [][2]string{{PreviewsKind, previewsName}, {LocalKind, localName}}
+	if r.Smart != nil {
+		onDemand = append(onDemand, [2]string{SmartKind, smartName})
+	}
+	for _, k := range onDemand {
 		if byKind[k[0]] == nil {
 			if err := r.Tasks.Create(&task.Task{Name: k[1], Kind: k[0], Enabled: true, NextRunAt: &now}); err != nil {
 				return err
@@ -186,17 +199,19 @@ func (r *Runner) makeDue(kind string) error {
 }
 
 // phase orders the tasks a tick runs: every library scan, with the quick
-// scheduled tasks, before any metadata, remote metadata before local, and
-// local before thumbnails and seek previews. A task gives way to one of an
-// earlier phase that is waiting.
+// scheduled tasks, before any metadata, remote metadata before local, local
+// before smart lists, which read it, and those before thumbnails and seek
+// previews. A task gives way to one of an earlier phase that is waiting.
 func phase(kind string) int {
 	switch kind {
 	case MetadataKind:
 		return 1
 	case LocalKind:
 		return 2
-	case PreviewsKind:
+	case SmartKind:
 		return 3
+	case PreviewsKind:
+		return 4
 	}
 	return 0
 }
@@ -295,6 +310,8 @@ func (r *Runner) work(ctx context.Context, t *task.Task, progress func(float64))
 		return r.Stations(ctx)
 	case t.Kind == PurgeKind && r.Purge != nil:
 		return r.Purge(ctx)
+	case t.Kind == SmartKind && r.Smart != nil:
+		return r.Smart(ctx)
 	case t.Kind == MetadataKind || t.Kind == PreviewsKind || t.Kind == LocalKind:
 		makeAll := r.S.MakePreviews
 		switch t.Kind {

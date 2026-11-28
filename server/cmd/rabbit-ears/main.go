@@ -99,7 +99,8 @@ func dataDir(dbFile string) string {
 // call no provider. The scheduler also runs stations, the hourly Schedule
 // stations task, and the daily purge of sync history, and tells events of
 // each scan that changed its library.
-func startScanning(ctx context.Context, wg *sync.WaitGroup, d *sql.DB, client *tmdb.Client, data string, stations func(context.Context) (string, error), events *live.Hub) error {
+func startScanning(ctx context.Context, wg *sync.WaitGroup, d *sql.DB, client *tmdb.Client, data string, stations, smart func(context.Context) (string, error),
+	events *live.Hub) error {
 	if !client.Enabled() {
 		logstore.Log("server").Info("No TMDB key is set; no metadata will be fetched from TMDB until one is saved in Settings")
 	}
@@ -111,7 +112,7 @@ func startScanning(ctx context.Context, wg *sync.WaitGroup, d *sql.DB, client *t
 		Previews: seekpreview.New(d), PreviewDir: filepath.Join(data, "previews"), YouTube: youtube.New(d),
 		Avatars: youtube.NewAvatars(filepath.Join(data, "cache", "youtube")), Settings: info, Reviews: review.New(d)})
 	runner := scan.NewRunner(sc, task.New(d))
-	runner.Stations, runner.Events = stations, events
+	runner.Stations, runner.Smart, runner.Events = stations, smart, events
 	runner.Purge = func(context.Context) (string, error) { return replica.Purge(d, time.Now()) }
 	runner.Paused = func() bool {
 		i, err := info.Get()
@@ -388,7 +389,7 @@ func run() error {
 	go func() { defer bg.Done(); expire(ctx, svc.Friends) }()
 	go func() { defer bg.Done(); air(ctx, svc.Stations) }()
 	go func() { defer bg.Done(); svc.Downloads.Run(ctx) }()
-	if err := startScanning(ctx, &bg, d, client, data, svc.Channels.Schedule, svc.Events); err != nil {
+	if err := startScanning(ctx, &bg, d, client, data, svc.Channels.Schedule, svc.Smart.Run, svc.Events); err != nil {
 		stop()
 		bg.Wait()
 		return err

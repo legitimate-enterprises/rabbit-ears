@@ -267,3 +267,44 @@ func TestAWatchedFileIsLookedUpNextThenThumbnailed(t *testing.T) {
 		t.Fatalf("matched %d, chapters %+v", e.matched(m), chs)
 	}
 }
+
+// The Smart lists task runs after the local metadata its rules read and
+// before thumbnails; a change a rule reads makes it due again, under any
+// clock, and a failed run is recorded with its summary.
+func TestSmartListsRunAfterMetadataAndWhenTheLibraryChanges(t *testing.T) {
+	e := newEnv(t, library.Movies, "")
+	r, tasks := newRunner(t, e)
+	runs := 0
+	r.Smart = func(context.Context) (string, error) {
+		if runs++; runs == 2 {
+			return "0 of 2 smart lists changed", errors.New("1 smart lists failed: boom")
+		}
+		return "0 of 2 smart lists changed", nil
+	}
+	must(t, r.Sync())
+	sm, err := tasks.ByName("Smart lists")
+	if err != nil || sm.Kind != SmartKind || sm.IntervalSeconds != nil || sm.NextRunAt == nil || !sm.Enabled {
+		t.Fatalf("%+v %v", sm, err)
+	}
+	must(t, r.Tick(context.Background()))
+	if got, want := runOrder(t, tasks), []string{"scan", MetadataKind, LocalKind, SmartKind, PreviewsKind}; !slices.Equal(got, want) {
+		t.Fatalf("ran %v, want %v", got, want)
+	}
+	if sm, _ = tasks.ByName("Smart lists"); sm.NextRunAt != nil {
+		t.Fatalf("an on-demand task waits for a change: %v", sm.NextRunAt)
+	}
+
+	must(t, e.items.Create(&item.Item{LibraryID: e.lib.ID, Kind: item.Movie, ParsedTitle: "New"}))
+	must(t, r.Tick(context.Background()))
+	if runs != 2 {
+		t.Fatalf("%d runs", runs)
+	}
+	last, err := tasks.LastRun(sm.ID)
+	if err != nil || last.Status != task.Failed || last.Error != "1 smart lists failed: boom" || last.Summary != "0 of 2 smart lists changed" {
+		t.Fatalf("%+v %v", last, err)
+	}
+	must(t, r.Tick(context.Background()))
+	if runs != 2 {
+		t.Fatalf("a failed run is not retried until something changes: %d runs", runs)
+	}
+}
