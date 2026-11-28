@@ -29,7 +29,7 @@ func channelURL(id string) string {
 func toYouTubeChannel(v *youtube.ChannelView) api.YouTubeChannel {
 	out := api.YouTubeChannel{Id: v.ID, LibraryId: v.LibraryID, Title: v.Title, Overview: optStr(v.Overview), ForKids: &v.ForKids, VideoCount: v.VideoCount,
 		UnwatchedCount: v.UnwatchedCount, LastVideoOn: optDate(v.LastVideoAt), ExternalId: optStr(v.ExternalID),
-		AddedAt: v.AddedAt}
+		AddedAt: v.AddedAt, PosterUrl: optStr(v.PosterURL)}
 	if v.ExternalID != "" {
 		out.SourceUrl = optStr(channelURL(v.ExternalID))
 	}
@@ -40,7 +40,7 @@ func toYouTubeVideo(v *youtube.VideoView) api.YouTubeVideo {
 	out := api.YouTubeVideo{Id: v.ID, LibraryId: v.LibraryID, ChannelId: v.ChannelID, ChannelTitle: v.ChannelTitle, Title: v.Title,
 		Overview: optStr(v.Overview), DurationMs: v.DurationMs, PublishedOn: optDate(v.PublishedAt), Height: v.Height, Watched: v.Watched,
 		PositionMs: v.PositionMs, LastPlayedAt: v.LastPlayedAt, ExternalId: optStr(v.ExternalID), AddedAt: v.AddedAt,
-		Unavailable: optTrue(v.Unavailable)}
+		Unavailable: optTrue(v.Unavailable), PosterUrl: optStr(v.PosterURL), ChannelPosterUrl: optStr(v.ChannelPosterURL)}
 	if v.ExternalID != "" {
 		out.SourceUrl = optStr("https://www.youtube.com/watch?v=" + url.QueryEscape(v.ExternalID))
 	}

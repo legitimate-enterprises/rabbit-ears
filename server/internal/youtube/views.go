@@ -40,7 +40,11 @@ type ChannelView struct {
 	UnwatchedCount int
 	LastVideoAt    *time.Time
 	AddedAt        time.Time
+	PosterURL      string
 }
+
+// posterURL is item t's poster URL, "" for none.
+func posterURL(t string) string { return `COALESCE(` + item.URLOf(item.PosterOf(t, "0")) + `, '')` }
 
 // limitOf is a filter's Limit as SQL binds it.
 func limitOf(n int) int {
@@ -65,7 +69,8 @@ func (r *Repo) Channels(f ChannelFilter) ([]*ChannelView, error) {
 			(SELECT COUNT(*) FROM item v WHERE v.parent_id = c.id),
 			(SELECT COUNT(*) FROM item v WHERE v.parent_id = c.id
 				AND NOT EXISTS (SELECT 1 FROM watch_state w WHERE w.item_id = v.id AND w.account_id = ?4 AND w.watched = 1)),
-			(SELECT MAX(vm.published_at) FROM item v JOIN item_metadata vm ON vm.item_id = v.id AND vm.source = 'local' WHERE v.parent_id = c.id) AS last
+			(SELECT MAX(vm.published_at) FROM item v JOIN item_metadata vm ON vm.item_id = v.id AND vm.source = 'local' WHERE v.parent_id = c.id) AS last,
+			`+posterURL("c")+`
 		FROM item c
 		WHERE c.kind = 'channel' AND (?1 IS NULL OR c.library_id = ?1) AND (?3 = '' OR instr(lower(c.parsed_title), lower(?3)) > 0)
 			AND (?2 IS NULL AND EXISTS (SELECT 1 FROM item v WHERE v.parent_id = c.id) OR c.id = ?2) AND `+item.VisibleOf("c")+`
@@ -75,7 +80,7 @@ func (r *Repo) Channels(f ChannelFilter) ([]*ChannelView, error) {
 		var overview, external sql.NullString
 		var last sql.NullInt64
 		var added int64
-		if err := s.Scan(&v.ID, &v.LibraryID, &v.Title, &overview, &external, &v.ForKids, &added, &v.VideoCount, &v.UnwatchedCount, &last); err != nil {
+		if err := s.Scan(&v.ID, &v.LibraryID, &v.Title, &overview, &external, &v.ForKids, &added, &v.VideoCount, &v.UnwatchedCount, &last, &v.PosterURL); err != nil {
 			return nil, db.Wrap(err)
 		}
 		v.Overview, v.ExternalID, v.AddedAt, v.LastVideoAt = overview.String, external.String, db.FromMs(added), db.FromNullMs(last)
@@ -119,6 +124,9 @@ type VideoView struct {
 	LastPlayedAt *time.Time
 	AddedAt      time.Time
 	Unavailable  bool // it has files, all marked missing
+	// PosterURL is its thumbnail's, else its channel's; ChannelPosterURL
+	// its channel's.
+	PosterURL, ChannelPosterURL string
 }
 
 const newest = `COALESCE(m.published_at, 0) DESC, v.added_at DESC, v.id DESC`
@@ -150,7 +158,8 @@ func (r *Repo) Videos(f VideoFilter) ([]*VideoView, error) {
 			v.added_at, (SELECT f.duration_ms FROM item_file x JOIN media_file f ON f.id = x.media_file_id WHERE x.item_id = v.id ORDER BY f.id LIMIT 1) AS dur,
 			(SELECT t.height FROM item_file x JOIN track t ON t.media_file_id = x.media_file_id WHERE x.item_id = v.id AND t.kind = 'video'
 				ORDER BY x.media_file_id, t.stream_index LIMIT 1),
-			COALESCE(w.watched, 0), COALESCE(w.position_ms, 0), w.last_played_at, `+mediafile.UnavailableOf("v.id")+`
+			COALESCE(w.watched, 0), COALESCE(w.position_ms, 0), w.last_played_at, `+mediafile.UnavailableOf("v.id")+`,
+			`+posterURL("v")+`, `+posterURL("c")+`
 		FROM item v JOIN item c ON c.id = v.parent_id LEFT JOIN item_metadata m ON m.item_id = v.id AND m.source = 'local'
 			LEFT JOIN watch_state w ON w.item_id = v.id AND w.account_id = ?5
 		WHERE v.kind = 'video' AND (?1 IS NULL OR v.library_id = ?1) AND (?2 IS NULL OR v.parent_id = ?2)
@@ -165,7 +174,7 @@ func (r *Repo) Videos(f VideoFilter) ([]*VideoView, error) {
 		var published, dur, height, played sql.NullInt64
 		var added int64
 		if err := s.Scan(&v.ID, &v.LibraryID, &v.ChannelID, &v.ChannelTitle, &v.Title, &overview, &published, &external, &added, &dur, &height,
-			&v.Watched, &v.PositionMs, &played, &v.Unavailable); err != nil {
+			&v.Watched, &v.PositionMs, &played, &v.Unavailable, &v.PosterURL, &v.ChannelPosterURL); err != nil {
 			return nil, db.Wrap(err)
 		}
 		v.Overview, v.PublishedAt, v.ExternalID, v.AddedAt = overview.String, db.FromNullMs(published), external.String, db.FromMs(added)

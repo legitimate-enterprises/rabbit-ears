@@ -124,10 +124,10 @@ func (s *Server) GetPersonArtwork(ctx context.Context, r api.GetPersonArtworkReq
 	}
 	f, size, tag, err := openArtwork(path, r.Params.IfNoneMatch)
 	if err != nil || f == nil {
-		return api.GetPersonArtwork304Response{Headers: api.GetPersonArtwork304ResponseHeaders{CacheControl: artworkCacheFor(r.Params.V), ETag: tag}}, err
+		return api.GetPersonArtwork304Response{Headers: api.GetPersonArtwork304ResponseHeaders{CacheControl: artworkCache, ETag: tag}}, err
 	}
 	return api.GetPersonArtwork200ImageResponse{Body: f, ContentType: mime.TypeByExtension(filepath.Ext(path)), ContentLength: size,
-		Headers: api.GetPersonArtwork200ResponseHeaders{CacheControl: artworkCacheFor(r.Params.V), ETag: tag}}, nil
+		Headers: api.GetPersonArtwork200ResponseHeaders{CacheControl: artworkCache, ETag: tag}}, nil
 }
 
 // GetItemCredits returns the cast and key crew of an item the active profile may see.

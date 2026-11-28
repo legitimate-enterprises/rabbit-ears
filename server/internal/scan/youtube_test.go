@@ -1,6 +1,7 @@
 package scan
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -98,7 +99,7 @@ func TestScanYouTubeFolder(t *testing.T) {
 	if clock.Title != "Clockwork Corner" || clock.Overview != "Gears, one at a time." || clock.ExternalID != "PLclockworkcorner00000b" || clock.VideoCount != 1 {
 		t.Errorf("clock %+v", clock)
 	}
-	if m, err := e.items.Metadata(bench.ID); err != nil || m.PosterPath != filepath.Join(e.root, "Workbench Weekly", "poster.jpg") || m.PosterFrom != item.Local {
+	if m, err := e.items.Metadata(bench.ID); err != nil || !e.copied(m.PosterPath, filepath.Join(e.root, "Workbench Weekly", "poster.jpg")) || m.PosterFrom != item.Local {
 		t.Errorf("bench art %+v %v", m, err)
 	}
 	if m, err := e.items.Metadata(clock.ID); err != nil || m.PosterPath != "" {
@@ -115,7 +116,7 @@ func TestScanYouTubeFolder(t *testing.T) {
 		!bb.PublishedAt.Equal(time.Date(2019, 8, 2, 14, 0, 0, 0, time.UTC)) || bb.Height == nil || *bb.Height != 180 {
 		t.Fatalf("bench video %+v", bb)
 	}
-	if m, _ := e.items.Metadata(bb.ID); m.PosterPath != filepath.Join(e.root, "Workbench Weekly", "Season 2019", "s2019e080200 - Building a Bench-thumb.jpg") {
+	if m, _ := e.items.Metadata(bb.ID); !e.copied(m.PosterPath, filepath.Join(e.root, "Workbench Weekly", "Season 2019", "s2019e080200 - Building a Bench-thumb.jpg")) {
 		t.Errorf("thumbnail %q", m.PosterPath)
 	}
 	if got := e.chapters(bb.ID); !slices.Equal(got, []string{"Intro 0-500", "Sponsor 500-1500", "Build 1500-3000"}) {
@@ -153,11 +154,23 @@ func TestScanYouTubeFolder(t *testing.T) {
 		!gt.PublishedAt.Equal(time.Unix(1700000000, 0)) {
 		t.Fatalf("gears after sidecars %+v", gt)
 	}
-	if m, _ := e.items.Metadata(gt.ID); m.PosterPath != base+"-thumb.jpg" {
-		t.Errorf("late thumbnail %q", m.PosterPath)
+	late, _ := e.items.Metadata(gt.ID)
+	if !e.copied(late.PosterPath, base+"-thumb.jpg") {
+		t.Errorf("late thumbnail %q", late.PosterPath)
 	}
 	if got := e.chapters(gt.ID); !slices.Equal(got, []string{"Spur 0-2000", "Helical 2000-3000"}) {
 		t.Errorf("late chapters %v", got)
+	}
+
+	// A thumbnail replaced under its name is stored under a new one.
+	must(t, os.WriteFile(base+"-thumb.jpg", []byte("another picture"), 0o600))
+	later := time.Now().Add(time.Hour)
+	must(t, os.Chtimes(base+"-thumb.jpg", later, later))
+	if sum, err = e.s.Scan(context.Background(), e.lib, nil); err != nil || sum.String() != "1 video updated" {
+		t.Fatalf("after a new thumbnail %q %v", sum, err)
+	}
+	if m, _ := e.items.Metadata(gt.ID); m.PosterPath == late.PosterPath || !e.copied(m.PosterPath, base+"-thumb.jpg") {
+		t.Errorf("replaced thumbnail %q, was %q", m.PosterPath, late.PosterPath)
 	}
 
 	// A channel folder gone from disk keeps the channel, what its sidecars
@@ -278,4 +291,11 @@ func TestAProbedFileWithNoItemIsFiledWithItsSidecars(t *testing.T) {
 	if sum, err := e.s.Scan(context.Background(), e.lib, nil); err != nil || *e.probes != 2 || sum.String() != "No changes; 3 videos checked" {
 		t.Fatalf("rescan %q %v", sum, err)
 	}
+}
+
+// copied reports p a copy of src the scanner stored under ThumbDir/local.
+func (e *env) copied(p, src string) bool {
+	a, err := os.ReadFile(p)    //nolint:gosec // the test's temp dir
+	b, err2 := os.ReadFile(src) //nolint:gosec // the test's fixtures
+	return err == nil && err2 == nil && filepath.Dir(p) == filepath.Join(e.s.ThumbDir, "local") && bytes.Equal(a, b)
 }

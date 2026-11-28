@@ -48,6 +48,7 @@ const base = (active = 1) => ({
 });
 const col = (id: number, name: string, source = "custom", movieCount = 2, customOrder = false) => ({
   id: uid(id),
+  posterUrl: `/api/v2/artwork/w500/${uid(id)}.jpg`,
   source,
   name,
   movieCount,
@@ -114,7 +115,7 @@ describe("Collections view", () => {
       `#/collection/${uid(7)}`,
     );
     expect(r.querySelector(".grid .art")!.getAttribute("data-art")).toBe(
-      `collection/${uid(7)}/poster`,
+      `art:/api/v2/artwork/w500/${uid(7)}.jpg`,
     );
 
     button(r, "New collection").click();
@@ -436,7 +437,7 @@ describe("playlist with a collection", () => {
     const first = r.querySelector(".tracks .qrow")!;
     expect(first.querySelector("b")!.textContent).toBe("Date night2 movies");
     expect(first.querySelector(".art")!.getAttribute("data-art")).toBe(
-      `collection/${uid(8)}/poster`,
+      `art:/api/v2/artwork/w500/${uid(8)}.jpg`,
     );
     first
       .querySelector(".tr")!

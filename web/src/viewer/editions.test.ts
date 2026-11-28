@@ -66,6 +66,8 @@ const EXTENDED = {
 };
 const movie = (editions: unknown[]) => ({
   id: uid(30),
+  posterUrl: `/api/v2/artwork/w500/${uid(30)}.jpg`,
+  backdropUrl: `/api/v2/artwork/w1280/${uid(30)}.jpg`,
   libraryId: uid(1),
   kind: "movie",
   parsedTitle: "Lantern Coast",
@@ -319,6 +321,8 @@ describe("movie details with editions", () => {
 describe("resuming from the watch state", () => {
   const ep = (id: number, n: number) => ({
     id: uid(id),
+    posterUrl: `/api/v2/artwork/w500/${uid(id)}.jpg`,
+    backdropUrl: `/api/v2/artwork/w1280/${uid(id)}.jpg`,
     libraryId: uid(2),
     kind: "episode",
     parentId: uid(11),
@@ -374,7 +378,9 @@ describe("resuming from the watch state", () => {
       }),
     });
     await until(() => r.querySelector(".hero"));
-    expect(r.querySelector(".hero-tile")!.getAttribute("data-art")).toBe(`${uid(30)}/backdrop`);
+    expect(r.querySelector(".hero-tile")!.getAttribute("data-art")).toBe(
+      `art:/api/v2/artwork/w1280/${uid(30)}.jpg`,
+    );
     expect(button(r, "Resume").getAttribute("href")).toBe(`#/play/${uid(30)}?edition=${uid(402)}`);
     const also = [...r.querySelectorAll(".also a")].map((a) => a.getAttribute("href"));
     expect(also).toEqual([`#/play/${uid(31)}`, `#/play/${uid(21)}?edition=${uid(501)}`]);
@@ -401,7 +407,9 @@ describe("resuming from the watch state", () => {
       }),
     });
     await until(() => r.querySelector(".hero"));
-    expect(r.querySelector(".hero-tile")!.getAttribute("data-art")).toBe(`${uid(10)}/backdrop`);
+    expect(r.querySelector(".hero-tile")!.getAttribute("data-art")).toBe(
+      `art:/api/v2/artwork/w1280/${uid(10)}.jpg`,
+    );
   });
 });
 

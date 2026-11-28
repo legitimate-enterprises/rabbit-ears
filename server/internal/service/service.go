@@ -3,10 +3,12 @@
 package service
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/account"
@@ -86,13 +88,10 @@ type Services struct {
 	EventHold time.Duration
 	// Sync serves native clients' replicas; its long poll holds for
 	// EventHold too.
-	Sync *replica.Sync
-	// ArtworkSettle is how long images must have stopped changing before
-	// clients are told of the change.
-	ArtworkSettle time.Duration
-	Server        *serverinfo.Repo
-	Logs          *logstore.Repo
-	Sampler       sysinfo.Sampler
+	Sync    *replica.Sync
+	Server  *serverinfo.Repo
+	Logs    *logstore.Repo
+	Sampler sysinfo.Sampler
 	// DataDir holds caches, artwork and thumbnails; its volume is the one
 	// whose storage the admin sees.
 	DataDir string
@@ -114,48 +113,47 @@ func New(d *sql.DB) *Services {
 	watching := NewWatchTogetherService(together.New(d), item.New(d), account.New(d))
 	playback.Events, stations.Events, watching.Events = events, events, events
 	s := &Services{
-		Events:        events,
-		EventHold:     Hold,
-		Sync:          replica.New(d),
-		ArtworkSettle: 10 * time.Second,
-		Libraries:     NewLibraryService(library.New(d), task.New(d)),
-		Items:         items,
-		Genres:        NewGenreService(genre.New(d)),
-		Occasions:     NewOccasionService(occasion.New(d), item.New(d)),
-		People:        NewPersonService(person.New(d)),
-		MediaFiles:    NewMediaFileService(mediafile.New(d)),
-		Editions:      NewEditionService(edition.New(d)),
-		Previews:      NewSeekPreviewService(seekpreview.New(d)),
-		Reviews:       NewReviewService(review.New(d)),
-		Accounts:      NewAccountService(account.New(d), d),
-		Households:    NewHouseholdService(household.New(d), d),
-		Devices:       NewDeviceService(device.New(d), account.New(d)),
-		JoinCodes:     NewJoinCodeService(joincode.New(d)),
-		DeviceLinks:   NewDeviceLinkService(d),
-		AdultLinks:    NewAdultLinkService(d),
-		Offers:        NewOfferService(d),
-		Sessions:      NewSessionService(session.New(d)),
-		Playback:      playback,
-		WatchStates:   NewWatchStateService(watchstate.New(d)),
-		Tasks:         NewTaskService(task.New(d)),
-		Auth:          NewAuthService(d),
-		SSO:           NewSSOService(d),
-		Music:         NewMusicService(item.New(d)),
-		YouTube:       NewYouTubeService(youtube.New(d)),
-		Playlists:     NewPlaylistService(playlist.New(d), edition.New(d), station.New(d), account.New(d)),
-		Collections:   NewCollectionService(collection.New(d), items),
-		Stations:      stations,
-		Covers:        NewCoverService(cover.New(d), playlist.New(d), item.New(d)),
-		Together:      watching,
-		Local:         NewLocalCheckService(),
-		Downloads:     NewDownloadService(download.New(d), edition.New(d), mediafile.New(d), watchstate.New(d), playback),
-		UpNext:        NewUpNextService(item.New(d), collection.New(d), youtube.New(d), playlist.New(d), mediafile.New(d)),
-		Related:       NewRelatedService(item.New(d), collection.New(d)),
-		Server:        serverinfo.New(d),
-		Logs:          logstore.New(d),
-		Sampler:       sysinfo.New(),
-		DataDir:       os.TempDir(),
-		TMDB:          NewTMDBService(serverinfo.New(d)),
+		Events:      events,
+		EventHold:   Hold,
+		Sync:        replica.New(d),
+		Libraries:   NewLibraryService(library.New(d), task.New(d)),
+		Items:       items,
+		Genres:      NewGenreService(genre.New(d)),
+		Occasions:   NewOccasionService(occasion.New(d), item.New(d)),
+		People:      NewPersonService(person.New(d)),
+		MediaFiles:  NewMediaFileService(mediafile.New(d)),
+		Editions:    NewEditionService(edition.New(d)),
+		Previews:    NewSeekPreviewService(seekpreview.New(d)),
+		Reviews:     NewReviewService(review.New(d)),
+		Accounts:    NewAccountService(account.New(d), d),
+		Households:  NewHouseholdService(household.New(d), d),
+		Devices:     NewDeviceService(device.New(d), account.New(d)),
+		JoinCodes:   NewJoinCodeService(joincode.New(d)),
+		DeviceLinks: NewDeviceLinkService(d),
+		AdultLinks:  NewAdultLinkService(d),
+		Offers:      NewOfferService(d),
+		Sessions:    NewSessionService(session.New(d)),
+		Playback:    playback,
+		WatchStates: NewWatchStateService(watchstate.New(d)),
+		Tasks:       NewTaskService(task.New(d)),
+		Auth:        NewAuthService(d),
+		SSO:         NewSSOService(d),
+		Music:       NewMusicService(item.New(d)),
+		YouTube:     NewYouTubeService(youtube.New(d)),
+		Playlists:   NewPlaylistService(playlist.New(d), edition.New(d), station.New(d), account.New(d)),
+		Collections: NewCollectionService(collection.New(d), items),
+		Stations:    stations,
+		Covers:      NewCoverService(cover.New(d), playlist.New(d), item.New(d)),
+		Together:    watching,
+		Local:       NewLocalCheckService(),
+		Downloads:   NewDownloadService(download.New(d), edition.New(d), mediafile.New(d), watchstate.New(d), playback),
+		UpNext:      NewUpNextService(item.New(d), collection.New(d), youtube.New(d), playlist.New(d), mediafile.New(d)),
+		Related:     NewRelatedService(item.New(d), collection.New(d)),
+		Server:      serverinfo.New(d),
+		Logs:        logstore.New(d),
+		Sampler:     sysinfo.New(),
+		DataDir:     os.TempDir(),
+		TMDB:        NewTMDBService(serverinfo.New(d)),
 	}
 	s.Channels = NewChannelService(s.Stations, s.Playback, playlist.New(d), item.New(d), mediafile.New(d), session.New(d))
 	return s
@@ -287,6 +285,34 @@ func (s *ItemService) Artwork(ctx context.Context, it *item.Item, a item.Audienc
 			return "", err
 		}
 	}
+}
+
+// Stored is the file of the image at the address store/name, a TMDB one
+// downloaded on first use while the data shows it; db.ErrNotFound
+// otherwise.
+func (s *ItemService) Stored(ctx context.Context, store, name string) (string, error) {
+	var p string
+	tmdb := store == "w185" || store == "w500" || store == "w1280"
+	switch {
+	case (tmdb || store == "caa") && s.ImageDir != "":
+		p = filepath.Join(s.ImageDir, store, name)
+	case store == "local" || store == "music":
+		p = db.DataAbs(filepath.Join("thumbnails", store, name))
+	case store == "youtube":
+		p = db.DataAbs(filepath.Join("cache", "youtube", name))
+	default:
+		return "", db.ErrNotFound
+	}
+	if _, err := os.Stat(p); err == nil {
+		return p, nil
+	}
+	if !tmdb || s.Images == nil {
+		return "", db.ErrNotFound
+	}
+	if shown, err := s.repo.NamesTMDB(store, "/"+name); err != nil || !shown {
+		return "", cmp.Or(err, db.ErrNotFound)
+	}
+	return s.Images.CacheImage(ctx, s.ImageDir, store, "/"+name)
 }
 
 // artistArt finds an artist's newest album with art; artists have no

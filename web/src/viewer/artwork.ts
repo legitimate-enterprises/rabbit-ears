@@ -1,11 +1,10 @@
-// Paints artwork into tiles marked data-art="<itemId>/<kind>",
-// "collection/<collectionId>/<kind>", "person/<personId>", "profile/<profileId>" or
-// "image:<imageUrl>" as they come near the viewport. Images need the device token, so they arrive
+// Paints artwork into tiles marked data-art="art:<posterUrl or another artwork URL>",
+// "<itemId>/<kind>", "collection/<collectionId>/<kind>", "person/<personId>",
+// "profile/<profileId>" or "image:<imageUrl>" as they come near the viewport. Images need the device token, so they arrive
 // as blobs rather than through <img src>; a tile without artwork keeps its color. A tile marked
 // data-ph="<kind>" shows that kind's placeholder until its image has loaded, and for good when it
 // has none.
-import type { Middleware } from "openapi-fetch";
-import type { Api } from "../api/client";
+import { API_BASE, type Api, type Schemas } from "../api/client";
 import { fetchImage } from "./coverImage";
 
 type Kind = "poster" | "backdrop";
@@ -52,8 +51,6 @@ let live:
       observer: MutationObserver;
       near?: IntersectionObserver;
       urls: Map<string, Promise<string | undefined>>;
-      api: Api;
-      generations: Middleware;
     }
   | undefined;
 
@@ -66,14 +63,11 @@ export function watchArt(
   if (live) {
     live.observer.disconnect();
     live.near?.disconnect();
-    live.api.eject(live.generations);
     for (const u of live.urls.values()) void u.then((v) => v && URL.revokeObjectURL(v));
   }
   const urls = new Map<string, Promise<string | undefined>>();
   // Keys whose image is in memory, so a tile asking again is painted at once, without a fade.
   const ready = new Set<string>();
-  // The server's artwork generation, from the latest response; images are kept under it.
-  let generation: number | undefined;
   // Object URLs still alive, least recently painted first.
   const held = new Map<string, string>();
   const evict = () => {
@@ -87,52 +81,36 @@ export function watchArt(
       ready.delete(k);
     }
   };
-  // A new generation means some image changed: what is held is asked for again. Tiles in
-  // the page keep the image they show, so their blobs are left to the page.
-  const generations: Middleware = {
-    onResponse({ request, response }) {
-      // An image the browser cache answers carries the generation it was stored under.
-      if (/\/(artwork|avatar|image)\b/.test(new URL(request.url, location.href).pathname)) return;
-      const g = Number(response.headers.get("Artwork-Generation"));
-      if (!(g > 0) || g === generation) return;
-      const first = generation === undefined;
-      generation = g;
-      if (first) return;
-      const inUse = new Set(
-        Array.from(root.querySelectorAll<HTMLElement>("[data-art]"), (e) => e.dataset.art!),
-      );
-      for (const [k, u] of held) if (!inUse.has(k)) URL.revokeObjectURL(u);
-      held.clear();
-      urls.clear();
-      ready.clear();
-    },
-  };
-  api.use(generations);
   const load = (key: string) => {
     if (!urls.has(key)) {
       const [itemId, kind, last] = key.split("/");
-      const query = generation === undefined ? undefined : { v: generation };
-      const get = key.startsWith("image:")
-        ? fetchImage(api, key.slice("image:".length))
-        : itemId === "profile"
-          ? api.GET("/profiles/{profileId}/avatar", {
-              params: { path: { profileId: kind } },
-              parseAs: "blob",
-            })
-          : itemId === "person"
-            ? api.GET("/people/{personId}/artwork", {
-                params: { path: { personId: kind }, query },
+      const address = ADDRESS.exec(key);
+      const get = address
+        ? api.GET("/artwork/{store}/{name}", {
+            params: { path: { store: address[1] as Schemas["ArtworkStore"], name: address[2] } },
+            parseAs: "blob",
+          })
+        : key.startsWith("image:")
+          ? fetchImage(api, key.slice("image:".length))
+          : itemId === "profile"
+            ? api.GET("/profiles/{profileId}/avatar", {
+                params: { path: { profileId: kind } },
                 parseAs: "blob",
               })
-            : itemId === "collection"
-              ? api.GET("/collections/{collectionId}/artwork/{kind}", {
-                  params: { path: { collectionId: kind, kind: last as Kind }, query },
+            : itemId === "person"
+              ? api.GET("/people/{personId}/artwork", {
+                  params: { path: { personId: kind } },
                   parseAs: "blob",
                 })
-              : api.GET("/items/{itemId}/artwork/{kind}", {
-                  params: { path: { itemId, kind: kind as Kind }, query },
-                  parseAs: "blob",
-                });
+              : itemId === "collection"
+                ? api.GET("/collections/{collectionId}/artwork/{kind}", {
+                    params: { path: { collectionId: kind, kind: last as Kind } },
+                    parseAs: "blob",
+                  })
+                : api.GET("/items/{itemId}/artwork/{kind}", {
+                    params: { path: { itemId, kind: kind as Kind } },
+                    parseAs: "blob",
+                  });
       urls.set(
         key,
         get.then(
@@ -226,10 +204,17 @@ export function watchArt(
     }),
   );
   observer.observe(root, { childList: true, subtree: true });
-  live = { observer, near, urls, api, generations };
+  live = { observer, near, urls };
   scan(root);
 }
 
+const ADDRESS = new RegExp(`^art:${API_BASE}/artwork/([^/]+)/([^/]+)$`);
+
+/** The data-art key of an artwork URL the data carries; none for no image. */
+export const artOf = (url: string | undefined) => (url ? `art:${url}` : undefined);
+
 /** The data-art key for item i: wide tiles show a movie's or show's backdrop, an episode's still. */
-export const artKey = (i: { id: string; kind: string }, wide = false): string =>
-  `${i.id}/${wide && i.kind !== "episode" ? "backdrop" : "poster"}`;
+export const artKey = (
+  i: { kind: string; posterUrl?: string; backdropUrl?: string },
+  wide = false,
+): string | undefined => artOf(wide && i.kind !== "episode" ? i.backdropUrl : i.posterUrl);

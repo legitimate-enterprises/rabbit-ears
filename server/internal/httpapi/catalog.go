@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"context"
-	"errors"
 	"mime"
 	"os"
 	"path/filepath"
@@ -11,7 +10,6 @@ import (
 	"time"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/api"
-	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/library"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/mediafile"
@@ -222,22 +220,8 @@ func (s *Server) RemoveLibraryFolder(_ context.Context, r api.RemoveLibraryFolde
 	return nil, errNotFound
 }
 
-func (s *Server) item(it *item.Item, admin bool) (api.Item, error) {
-	m, err := s.svc.Items.Repo().Metadata(it.ID)
-	if errors.Is(err, db.ErrNotFound) {
-		m, err = nil, nil
-	}
-	if err != nil {
-		return api.Item{}, err
-	}
-	genres, err := s.svc.Genres.Repo().ForItem(it.ID)
-	if err != nil {
-		return api.Item{}, err
-	}
-	gone, err := s.svc.MediaFiles.Repo().Unavailable([]uid.ID{it.ID})
-	out, gs := toItem(it, m, admin), mapAll(genres, toGenre)
-	out.Genres, out.Unavailable = &gs, optTrue(gone[it.ID])
-	return out, err
+func (s *Server) item(ctx context.Context, it *item.Item, admin bool) (api.Item, error) {
+	return one(s.items(ctx, []*item.Item{it}, admin))
 }
 
 // itemFrom copies the input after checking the tree rule the schema cannot
@@ -269,13 +253,13 @@ func (s *Server) ListItems(ctx context.Context, r api.ListItemsRequestObject) (a
 	}
 	out := api.ListItems200JSONResponse{}
 	rows, out.NextOffset = window(rows, limit, offset)
-	out.Items, err = s.items(rows, caller(ctx).asAdmin())
+	out.Items, err = s.items(ctx, rows, caller(ctx).asAdmin())
 	return out, err
 }
 
 // items converts a page of catalog items with their metadata, genres and
 // whether they are unavailable.
-func (s *Server) items(rows []*item.Item, admin bool) ([]api.Item, error) {
+func (s *Server) items(ctx context.Context, rows []*item.Item, admin bool) ([]api.Item, error) {
 	ids := make([]uid.ID, len(rows))
 	for i, it := range rows {
 		ids[i] = it.ID
@@ -292,10 +276,15 @@ func (s *Server) items(rows []*item.Item, admin bool) ([]api.Item, error) {
 	if err != nil {
 		return nil, err
 	}
+	art, err := s.svc.Items.Repo().Art(ids, audience(ctx).Kid)
+	if err != nil {
+		return nil, err
+	}
 	out := []api.Item{}
 	for _, it := range rows {
 		v, gs := toItem(it, metas[it.ID], admin), mapAll(genres[it.ID], toGenre)
 		v.Genres, v.Unavailable = &gs, optTrue(gone[it.ID])
+		v.PosterUrl, v.BackdropUrl = optStr(art[it.ID].Poster), optStr(art[it.ID].Backdrop)
 		out = append(out, v)
 	}
 	return out, nil
@@ -319,7 +308,7 @@ func (s *Server) GetItem(ctx context.Context, r api.GetItemRequestObject) (api.G
 	if err != nil {
 		return nil, err
 	}
-	v, err := s.item(it, caller(ctx).asAdmin())
+	v, err := s.item(ctx, it, caller(ctx).asAdmin())
 	if err == nil && it.Kind == item.Movie {
 		v.Collections, err = s.movieCollections(ctx, it.ID)
 	}
@@ -363,23 +352,13 @@ func (s *Server) GetItemArtwork(ctx context.Context, r api.GetItemArtworkRequest
 	}
 	f, size, tag, err := openArtwork(path, r.Params.IfNoneMatch)
 	if err != nil || f == nil {
-		return api.GetItemArtwork304Response{Headers: api.GetItemArtwork304ResponseHeaders{CacheControl: artworkCacheFor(r.Params.V), ETag: tag}}, err
+		return api.GetItemArtwork304Response{Headers: api.GetItemArtwork304ResponseHeaders{CacheControl: artworkCache, ETag: tag}}, err
 	}
 	return api.GetItemArtwork200ImageResponse{Body: f, ContentType: mime.TypeByExtension(filepath.Ext(path)), ContentLength: size,
-		Headers: api.GetItemArtwork200ResponseHeaders{CacheControl: artworkCacheFor(r.Params.V), ETag: tag}}, nil
+		Headers: api.GetItemArtwork200ResponseHeaders{CacheControl: artworkCache, ETag: tag}}, nil
 }
 
 const artworkCache = "private, max-age=86400"
-
-// artworkCacheFor keeps an image asked for under a generation until the
-// generation moves, which is when the client asks under another address;
-// one asked for without is revalidated daily.
-func artworkCacheFor(generation *api.ArtworkGeneration) string {
-	if generation == nil {
-		return artworkCache
-	}
-	return "private, max-age=31536000, immutable"
-}
 
 // openArtwork opens a cached provider image. The provider names each image
 // uniquely, so size and name are a strong validator; a new image after a
@@ -402,7 +381,7 @@ func openArtwork(path string, ifNoneMatch *string) (f *os.File, size int64, tag 
 }
 
 // ReplaceItem rewrites an item's file-derived fields.
-func (s *Server) ReplaceItem(_ context.Context, r api.ReplaceItemRequestObject) (api.ReplaceItemResponseObject, error) {
+func (s *Server) ReplaceItem(ctx context.Context, r api.ReplaceItemRequestObject) (api.ReplaceItemResponseObject, error) {
 	it, err := catalogItem(s.svc.Items.Repo().Get(r.ItemId))
 	if err != nil {
 		return nil, err
@@ -418,7 +397,7 @@ func (s *Server) ReplaceItem(_ context.Context, r api.ReplaceItemRequestObject) 
 	if err := s.svc.Items.Repo().Update(it); err != nil {
 		return nil, err
 	}
-	v, err := s.item(it, true)
+	v, err := s.item(ctx, it, true)
 	return api.ReplaceItem200JSONResponse(v), err
 }
 
@@ -432,7 +411,7 @@ func (s *Server) DeleteItem(_ context.Context, r api.DeleteItemRequestObject) (a
 
 // PutItemMetadata stores a manual match as the item's remote row and
 // returns the item as the metadata settings show it.
-func (s *Server) PutItemMetadata(_ context.Context, r api.PutItemMetadataRequestObject) (api.PutItemMetadataResponseObject, error) {
+func (s *Server) PutItemMetadata(ctx context.Context, r api.PutItemMetadataRequestObject) (api.PutItemMetadataResponseObject, error) {
 	it, err := catalogItem(s.svc.Items.Repo().Get(r.ItemId))
 	if err != nil {
 		return nil, err
@@ -461,7 +440,7 @@ func (s *Server) PutItemMetadata(_ context.Context, r api.PutItemMetadataRequest
 	if it, err = s.svc.Items.Repo().Get(it.ID); err != nil {
 		return nil, err
 	}
-	v, err := s.item(it, true)
+	v, err := s.item(ctx, it, true)
 	return api.PutItemMetadata200JSONResponse(v), err
 }
 

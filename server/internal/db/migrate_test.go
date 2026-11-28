@@ -123,7 +123,7 @@ var (
 		"item_metadata", "item_genre", "household_member", "adult_link", "playlist_household_share",
 		"item_keyword", "occasion_keyword", "occasion_item", "occasion_exclusion", "occasion_phrase",
 		"song_release"}
-	bookTables = []string{"server_info", "artwork_generation", "occasion_seed", "sync_clock",
+	bookTables = []string{"server_info", "occasion_seed", "sync_clock",
 		"sync_tombstone", "sync_action", "schema_migration"}
 	syncedTables = []string{"account", "account_allow", "adult_link", "chapter", "collection",
 		"collection_movie", "cover", "credit", "download", "edition", "edition_file", "genre", "household",
@@ -143,7 +143,7 @@ var (
 		"sso_provider.client_id": "TEXT", "sync_action.uuid": "TEXT", "item_metadata.external_id": "TEXT",
 		"identity_evidence.external_id": "TEXT", "song_release.release_id": "TEXT",
 		"song_release.release_group_id": "TEXT", "server_info.id": "INTEGER",
-		"artwork_generation.id": "INTEGER", "sync_clock.id": "INTEGER"}
+		"sync_clock.id": "INTEGER"}
 )
 
 type column struct {
@@ -306,24 +306,21 @@ func TestBaselineFollowsTheTableRules(t *testing.T) {
 		t.Errorf("views %v", got)
 	}
 	// Sync triggers are installed by internal/replica, never by a migration.
-	if got := names(t, d, "trigger"); !slices.Equal(got, []string{"collection_art_insert", "collection_art_update",
-		"collection_tmdb_empty", "edition_file_orphan", "item_metadata_art_delete", "item_metadata_art_insert",
-		"item_metadata_art_update", "item_sort_insert", "item_sort_metadata_delete", "item_sort_metadata_insert",
-		"item_sort_metadata_update", "item_sort_setting_update", "item_sort_update", "metadata_setting_art_update", "person_art_insert",
-		"person_art_update"}) {
+	if got := names(t, d, "trigger"); !slices.Equal(got, []string{"collection_tmdb_empty", "edition_file_orphan",
+		"item_sort_insert", "item_sort_metadata_delete", "item_sort_metadata_insert", "item_sort_metadata_update",
+		"item_sort_setting_update", "item_sort_update"}) {
 		t.Errorf("triggers %v", got)
 	}
 }
 
 func TestBaselineSeedsItsRows(t *testing.T) {
 	d := migrated(t)
-	var art, clock string
-	if err := d.QueryRow(`SELECT (SELECT id || generation || settled || changed_at FROM artwork_generation),
-		(SELECT id || version || scope_version || purged_version || '[' || release || ']' FROM sync_clock)`).Scan(&art, &clock); err != nil {
+	var clock string
+	if err := d.QueryRow(`SELECT id || version || scope_version || purged_version || '[' || release || ']' FROM sync_clock`).Scan(&clock); err != nil {
 		t.Fatal(err)
 	}
-	if art != "1110" || clock != "1000[]" {
-		t.Fatalf("artwork_generation %s sync_clock %s", art, clock)
+	if clock != "1000[]" {
+		t.Fatalf("sync_clock %s", clock)
 	}
 	rows, err := d.Query(`SELECT o.id, o.name || ':' || o.holiday || ':' || o.days_before || ':' || o.days_after || ':' ||
 			o.created_at || ':' || o.modified_at || ':' || COALESCE(o.created_by, o.modified_by, '-') || ':' ||

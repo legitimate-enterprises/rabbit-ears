@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/account"
+	"github.com/legitimate-enterprises/rabbit-ears/server/internal/collection"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/db"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
 	"github.com/legitimate-enterprises/rabbit-ears/server/internal/playlist"
@@ -60,6 +61,15 @@ var generated = []string{
 	WHERE ` + item.VisibleTo("item", audience("browse_mode")),
 	`CREATE VIEW profile_item_open AS SELECT a.account_id, item.id AS item_id FROM profile_audience a CROSS JOIN item
 	WHERE ` + item.VisibleTo("item", audience("mode")),
+	// What each item and collection shows each profile, as the server's
+	// responses carry it.
+	`CREATE VIEW profile_art AS SELECT a.account_id, i.id AS item_id, ` + item.URLOf(item.PosterOf("i", "a.mode")) + ` AS poster_url,
+		` + item.URLOf(item.BackdropOf("i")) + ` AS backdrop_url
+	FROM profile_audience a CROSS JOIN item i`,
+	`CREATE VIEW profile_collection_art AS SELECT a.account_id, c.id AS collection_id,
+		` + item.URLOf(collection.ArtOf("c", item.VisibleTo("item", audience("browse_mode")), false)) + ` AS poster_url,
+		` + item.URLOf(collection.ArtOf("c", item.VisibleTo("item", audience("browse_mode")), true)) + ` AS backdrop_url
+	FROM profile_audience a CROSS JOIN collection c`,
 	`CREATE VIEW kids_item AS SELECT id AS item_id FROM item WHERE ` + item.KidsContentOf("item"),
 	`CREATE VIEW occasion_member AS SELECT o.id AS occasion_id, m.id AS item_id FROM occasion o CROSS JOIN item m
 	WHERE m.id IN (` + item.OccasionMembersOf("o.id") + `)`,

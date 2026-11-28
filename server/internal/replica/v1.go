@@ -3,6 +3,8 @@
 // up from any version it holds.
 package replica
 
+import "github.com/legitimate-enterprises/rabbit-ears/server/internal/item"
+
 // Schema is one version of the projection. The triggers, and the diffs and
 // snapshots clients read, all derive from it.
 type Schema struct {
@@ -72,9 +74,11 @@ func fileName(c string) string {
 }
 
 // artPath is a metadata image as a member sees it: TMDB's path whole, since
-// it names TMDB's image, and any other, a file on the server, by its name.
+// it names TMDB's image; one in a store as its address there, "store/name";
+// any other, a file on the server, by its name.
 func artPath(c string) Col {
-	return Col{Name: c, Expr: `CASE WHEN source = 'remote' AND provider = 'tmdb' THEN ` + c + ` ELSE ` + fileName(c) + ` END`,
+	return Col{Name: c, Expr: `CASE WHEN source = 'remote' AND provider = 'tmdb' THEN ` + c + ` WHEN ` + item.StoreRef(c) + ` <> '' THEN ` +
+		item.StoreRef(c) + ` ELSE ` + fileName(c) + ` END`,
 		Watch: []string{c, "source", "provider"}}
 }
 
@@ -142,7 +146,9 @@ var V1 = Schema{
 			Col{Name: "fetched_at", Expr: "NULL"}, Col{Name: "retry_at", Expr: "NULL"})},
 		{Name: "item_genre", Source: "item_genre", Key: []string{"item_id", "genre_id", "source"}, Cols: plain("item_id", "genre_id", "source")},
 		{Name: "genre", Source: "genre", Key: []string{"id"}, Cols: plain("id", "name", "tmdb_id")},
-		{Name: "person", Source: "person", Key: []string{"id"}, Cols: plain("id", "tmdb_id", "name", "profile_path")},
+		{Name: "person", Source: "person", Key: []string{"id"}, Cols: append(plain("id", "tmdb_id", "name", "profile_path"),
+			Col{Name: "headshot_url", Expr: `CASE WHEN COALESCE(profile_path, '') <> '' THEN '` + item.ArtURL + `w185' || profile_path END`,
+				Watch: []string{"profile_path"}, Type: "TEXT"})},
 		{Name: "credit", Source: "credit", Key: []string{"id"}, Cols: plain("id", "item_id", "person_id", "kind", "character", "job",
 			"department", "position")},
 		{Name: "item_keyword", Source: "item_keyword", Key: []string{"item_id", "keyword_id"}, Cols: plain("item_id", "keyword_id")},
@@ -166,7 +172,7 @@ var V1 = Schema{
 		{Name: "server_info", Source: "server_info", Key: []string{"id"}, Cols: plain("id", "name", "metadata_source", "metadata_mode")},
 
 		{Name: "collection", Source: "collection", Key: []string{"id"}, Cols: plain("id", "source", "household_id", "tmdb_id", "name",
-			"overview", "created_at", "modified_at", "created_by", "modified_by"), Scope: collections},
+			"overview", "poster_path", "backdrop_path", "created_at", "modified_at", "created_by", "modified_by"), Scope: collections},
 		{Name: "collection_movie", Source: "collection_movie", Key: []string{"collection_id", "item_id"},
 			Cols: plain("collection_id", "item_id", "position"), Scope: `collection_id IN (SELECT id FROM collection WHERE ` + collections + `)`,
 			TombScope: `k1 IN (SELECT id FROM collection WHERE ` + collections + `) OR ` + gone("k1", "collection")},
@@ -250,7 +256,6 @@ var V1 = Schema{
 		"station_program": {"created_at", "modified_at"},
 		"server_info": {"created_at", "modified_at", "tasks_paused", "tmdb_key", "gravatar", "read_ahead_seconds", "max_transcodes",
 			"transcode_cache_cap_bytes"},
-		"collection":       {"poster_path", "backdrop_path"},
 		"account":          {"pin_failures", "pin_locked_until"},
 		"household_member": {"created_at"},
 		// A station's time range and a cover show no audit field in a
@@ -272,7 +277,7 @@ var V1 = Schema{
 		"device":                   {Update: []string{"household_id"}},
 	},
 	NotSynced: []string{
-		"account_identity", "artwork_generation", "conversion", "device_link", "identity_evidence", "identity_review", "join_code",
+		"account_identity", "conversion", "device_link", "identity_evidence", "identity_review", "join_code",
 		"library_folder", "log_entry", "occasion_seed", "playback_session", "seek_preview", "session_plan_entry", "song_release",
 		"sso_provider", "task", "task_run", "throughput_sample", "watch_together", "watch_together_member",
 		"schema_migration", "sync_clock", "sync_tombstone", "sync_action",

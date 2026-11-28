@@ -28,7 +28,7 @@ func (s *Server) Search(ctx context.Context, r api.SearchRequestObject) (api.Sea
 		if err != nil {
 			return nil, err
 		}
-		if *dst, err = s.items(rows, admin); err != nil {
+		if *dst, err = s.items(ctx, rows, admin); err != nil {
 			return nil, err
 		}
 	}

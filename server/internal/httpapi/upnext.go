@@ -54,13 +54,13 @@ func (s *Server) GetUpNext(ctx context.Context, r api.GetUpNextRequestObject) (a
 		out.Video, out.Title = &video, v.Title
 		return api.GetUpNext200JSONResponse(out), nil
 	}
-	v, err := s.item(next, false)
+	v, err := s.item(ctx, next, false)
 	if err != nil {
 		return nil, err
 	}
 	out.Item, out.Title = &v, titleOf(v)
 	if next.Kind == item.Episode {
-		if out.Title, err = s.episodeTitle(next, out.Title); err != nil {
+		if out.Title, err = s.episodeTitle(ctx, next, out.Title); err != nil {
 			return nil, err
 		}
 	}
@@ -85,7 +85,7 @@ func titleOf(v api.Item) string {
 }
 
 // episodeTitle names an episode as `Show · S1 E2 · Title`.
-func (s *Server) episodeTitle(ep *item.Item, own string) (string, error) {
+func (s *Server) episodeTitle(ctx context.Context, ep *item.Item, own string) (string, error) {
 	season, err := s.svc.Items.Repo().Get(*ep.ParentID)
 	if err != nil {
 		return "", err
@@ -94,7 +94,7 @@ func (s *Server) episodeTitle(ep *item.Item, own string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	v, err := s.item(show, false)
+	v, err := s.item(ctx, show, false)
 	code := func(n *int) int {
 		if n == nil {
 			return 0

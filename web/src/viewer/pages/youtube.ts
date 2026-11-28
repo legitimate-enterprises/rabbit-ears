@@ -1,6 +1,7 @@
 // The YouTube section: Videos and Channels behind view tabs, and a
 // Channel page. A kid sees the channels the server lets them.
 import "../youtube.css";
+import { artOf } from "../artwork";
 import { errorLine, h } from "../../admin/dom";
 import { saveSwitch } from "../../admin/common";
 import { ok, paged } from "../../admin/api";
@@ -61,7 +62,7 @@ export const videoTile = (v: Video, withChannel: boolean) =>
         {
           "aria-hidden": "true",
           style: `background:${color(v.id)}`,
-          "data-art": `${v.id}/poster`,
+          "data-art": artOf(v.posterUrl),
           "data-ph": "video",
         },
         v.watched ? null : h("span.dot", { role: "img", "aria-label": "Unwatched" }),

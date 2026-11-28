@@ -138,19 +138,6 @@ func (e *env) renameProfile(u user, name string) {
 	must(e.t, e.svc.Accounts.Repo().Update(u.account, nil))
 }
 
-func TestSyncResponsesNameTheArtworkGeneration(t *testing.T) {
-	e := synced(t)
-	e.svc.EventHold = 10 * time.Millisecond
-	for _, path := range []string{"/sync/changes?schema=1", "/sync/snapshot?schema=1", "/sync/version?after=0", "/sync/changes"} {
-		res := e.syncGet(path, e.plain.token)
-		_, _ = io.Copy(io.Discard, res.Body)
-		_ = res.Body.Close()
-		if res.Header.Get("Artwork-Generation") == "" {
-			t.Errorf("%s (%d) has no Artwork-Generation", path, res.StatusCode)
-		}
-	}
-}
-
 // wait asks the doorbell after v, timing the answer.
 func (e *env) wait(token string, v int64) (bool, time.Duration) {
 	e.t.Helper()

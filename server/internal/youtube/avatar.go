@@ -1,7 +1,6 @@
 package youtube
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -9,8 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -42,7 +39,7 @@ var (
 )
 
 // Fetch downloads the channel's avatar, its page's og:image, and returns
-// the path it was written to, replacing any earlier copy.
+// the path it was stored at, named by its content.
 func (a *Avatars) Fetch(ctx context.Context, id string) (string, error) {
 	if !channelID.MatchString(id) {
 		return "", ErrNotFound
@@ -68,11 +65,7 @@ func (a *Avatars) Fetch(ctx context.Context, id string) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("youtube: avatar of %s is %q, not an image", id, kind)
 	}
-	if err := os.MkdirAll(a.Dir, 0o750); err != nil {
-		return "", err
-	}
-	p := filepath.Join(a.Dir, id+ext)
-	return p, atomicfile.Write(p, bytes.NewReader(img))
+	return atomicfile.Hashed(a.Dir, ext, img)
 }
 
 // get reads at most limit bytes of u, with its content type.

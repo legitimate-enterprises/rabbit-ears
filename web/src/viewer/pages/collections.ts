@@ -9,6 +9,7 @@ import { back, icon, refresh, section } from "../ui";
 import { addButton, addToPlaylist, addToStation, confirmDelete, nameDialog } from "./playlists";
 import { reorder, row } from "./music";
 import { shuffleButton } from "../shuffle";
+import { artOf } from "../artwork";
 
 type Collection = Schemas["Collection"];
 
@@ -21,7 +22,7 @@ const cover = (c: Collection, cls: string, marked = false) =>
     {
       "aria-hidden": marked && c.customOrder ? undefined : "true",
       style: `background:${color(c.id)}`,
-      "data-art": `collection/${c.id}/poster`,
+      "data-art": artOf(c.posterUrl),
       "data-ph": "collection",
     },
     marked &&
@@ -137,7 +138,7 @@ export async function collection(ctx: Ctx, [id]: string[]) {
         art: h("div.art.sq36", {
           "aria-hidden": "true",
           style: `background:${color(m.id)}`,
-          "data-art": `${m.id}/poster`,
+          "data-art": artOf(m.posterUrl),
           "data-ph": "movie",
         }),
         title: title(m),

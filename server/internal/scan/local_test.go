@@ -135,13 +135,9 @@ func TestLocalMetadataTask(t *testing.T) {
 	_, err = e.s.Scan(context.Background(), tv, nil)
 	must(t, err)
 
-	before := e.generation(time.Minute)
 	sum, more, err := e.s.MakeLocal(context.Background(), nil, nil)
 	if err != nil || more || sum != "8 titles" {
 		t.Fatalf("%q %v %v", sum, more, err)
-	}
-	if g := e.generation(2 * time.Minute); g <= before {
-		t.Errorf("local art keeps the artwork generation at %d", g)
 	}
 	local := func(it *item.Item) *item.Metadata {
 		t.Helper()

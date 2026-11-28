@@ -260,9 +260,7 @@ func (s *Scanner) describeVideo(f *mediafile.File, modified time.Time, side side
 	now := s.Now().UTC()
 	m := &item.Metadata{ItemID: it.ID, Status: item.Matched, Title: it.ParsedTitle,
 		Overview: cmp.Or(strings.TrimSpace(n.Plot), strings.TrimSpace(in.Description)), ExternalID: cmp.Or(n.youtubeID(), in.ID), FetchedAt: &now}
-	if fileExists(side.thumb) {
-		m.PosterPath = side.thumb
-	}
+	m.PosterPath = s.stored(side.thumb)
 	if err := s.Items.SetLocal(m); err != nil {
 		return err
 	}
@@ -299,9 +297,7 @@ func (s *Scanner) describeChannels(ctx context.Context, lib *library.Library, av
 		n := readNFO(filepath.Join(ch.Path, "tvshow.nfo"))
 		l := &item.Metadata{ItemID: ch.ID, Status: item.Matched, Title: ch.ParsedTitle, Overview: strings.TrimSpace(n.Plot), ExternalID: n.youtubeID()}
 		poster := filepath.Join(ch.Path, "poster.jpg")
-		if fileExists(poster) {
-			l.PosterPath = poster
-		}
+		l.PosterPath = s.stored(poster)
 		if err := s.putIfChanged(l, s.Items.LocalRow, s.Items.SetLocal); err != nil {
 			return r.failed, false, err
 		}
@@ -324,6 +320,20 @@ func (s *Scanner) describeChannels(ctx context.Context, lib *library.Library, av
 		}
 	}
 	return r.failed, false, nil
+}
+
+// stored is a copy of the library image p under ThumbDir/local, named by
+// its content, so a picture replaced under its name gets a new one; "" for
+// none or one not copied.
+func (s *Scanner) stored(p string) string {
+	if s.ThumbDir == "" || !fileExists(p) {
+		return ""
+	}
+	dest, err := storeByHash(p, filepath.Join(s.ThumbDir, "local"))
+	if err != nil {
+		logstore.Log("scan").Warn("YouTube art not stored", "path", p, "err", err)
+	}
+	return dest
 }
 
 // putIfChanged writes m with put, stamped now, unless get finds the row

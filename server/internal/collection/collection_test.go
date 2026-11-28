@@ -328,3 +328,37 @@ func TestMovieOrderLooksUpEachMovie(t *testing.T) {
 		t.Error(p.Plans[0])
 	}
 }
+
+// A collection shows its own TMDB image, else that of its first movie the
+// reader may see, in Order.
+func TestCollectionArtIsItsOwnElseItsFirstSeenMovies(t *testing.T) {
+	f := setup(t)
+	kids, grown := f.movie(t, "Paper Kite", "2004-01-01", "G"), f.movie(t, "Iron Kite", "1999-01-01", "R")
+	must(t, f.items.SetMetadata(&item.Metadata{ItemID: kids, Status: item.Matched, ContentRating: "G", PosterPath: "/kite.jpg"}))
+	must(t, f.items.SetMetadata(&item.Metadata{ItemID: grown, Status: item.Matched, ContentRating: "R", PosterPath: "/iron.jpg",
+		BackdropPath: "/iron-wide.jpg"}))
+	c := &collection.Collection{TMDBID: ptr(90), Name: "Kites"}
+	must(t, f.r.PutTMDB(c))
+	must(t, f.r.SetTMDBMovie(kids, &c.ID))
+	must(t, f.r.SetTMDBMovie(grown, &c.ID))
+	art := func(a item.Audience) item.Art {
+		t.Helper()
+		v, err := f.r.Seen(f.home, c.ID, a)
+		must(t, err)
+		if got, err := f.r.Art(c.ID, a); err != nil || got != v.Art {
+			t.Fatalf("Art %+v %v, the view %+v", got, err, v.Art)
+		}
+		return v.Art
+	}
+	if got := art(item.Audience{}); got.Poster != item.ArtURL+"w500/iron.jpg" || got.Backdrop != item.ArtURL+"w1280/iron-wide.jpg" {
+		t.Errorf("an adult sees the first movie's: %+v", got)
+	}
+	if got := art(f.kidPG); got.Poster != item.ArtURL+"w500/kite.jpg" || got.Backdrop != "" {
+		t.Errorf("a kid sees the first movie they may: %+v", got)
+	}
+	c.PosterPath = "/own.jpg"
+	must(t, f.r.PutTMDB(c))
+	if got := art(f.kidPG); got.Poster != item.ArtURL+"w500/own.jpg" {
+		t.Errorf("its own: %+v", got)
+	}
+}

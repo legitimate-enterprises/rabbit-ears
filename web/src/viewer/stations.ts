@@ -2,7 +2,7 @@
 // schedule and what is on; nothing here computes any of it.
 import { ApiError, ok } from "../admin/api";
 import type { Api, Schemas } from "../api/client";
-import { artKey } from "./artwork";
+import { artKey, artOf } from "./artwork";
 import type { Snapshot } from "./capabilities";
 import { imageKey } from "./coverImage";
 import { epCode, title } from "./data";
@@ -66,7 +66,7 @@ export function onNowFraction(a: OnAir): number | undefined {
 /** The data-art key of what is on, else of what is next; none shows the station's own tile. */
 export function artFor(a: OnAir): string | undefined {
   const p = a.now ?? a.next;
-  if (p?.song) return `${p.song.albumId}/poster`;
+  if (p?.song) return artOf(p.song.posterUrl);
   return p?.item ? artKey(p.item, true) : undefined;
 }
 

@@ -1220,6 +1220,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/artwork/{store}/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                store: components["schemas"]["ArtworkStore"];
+                name: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * The image a posterUrl, backdropUrl or headshotUrl names.
+         * @description An address names one image and never another, so the answer is cached for a year, immutable; when what a title, collection or person shows changes, the data carries a new address. Clients never build one. Any device of the server may fetch any address; which profile is shown an address is decided by the data that carries it.
+         */
+        get: operations["getArtwork"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/items/{itemId}/artwork/{kind}": {
         parameters: {
             query?: never;
@@ -1230,7 +1253,11 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** The item's image, or its nearest ancestor's when it has none. */
+        /**
+         * The item's image, or its nearest ancestor's when it has none.
+         * @deprecated
+         * @description The image Item.posterUrl or backdropUrl names, cached for a day and revalidated; kept because released clients use it.
+         */
         get: operations["getItemArtwork"];
         put?: never;
         post?: never;
@@ -1545,7 +1572,11 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** The person's headshot. */
+        /**
+         * The person's headshot.
+         * @deprecated
+         * @description The image Person.headshotUrl names, cached for a day and revalidated; kept because released clients use it.
+         */
         get: operations["getPersonArtwork"];
         put?: never;
         post?: never;
@@ -2424,7 +2455,7 @@ export interface paths {
         };
         /**
          * Artists of Music libraries A to Z by sort name, as the Artists view and CarPlay's Artists tab list them.
-         * @description An artist's image is `/items/{id}/artwork/poster`. While a kid is
+         * @description An artist's image is its posterUrl. While a kid is
          *     active an artist with no song but explicit ones is left out, and
          *     its counts leave out explicit songs and the albums holding only them.
          */
@@ -2471,7 +2502,7 @@ export interface paths {
         /**
          * Albums of Music libraries, for the Albums view, Artist details, More by and CarPlay's Albums tab.
          * @description Recently added (Home and CarPlay's Recent tab) is `sort=added`. An
-         *     album's art is `/items/{id}/artwork/poster`. While a kid is active
+         *     album's art is its posterUrl. While a kid is active
          *     an album whose every song is explicit is left out, and the counts,
          *     duration and lossless of the rest cover only their clean songs.
          */
@@ -2628,7 +2659,7 @@ export interface paths {
         /**
          * Channels of YouTube libraries, for the Channels view and the Channel select.
          * @description Every channel folder with videos in the library. A channel's avatar
-         *     is `/items/{id}/artwork/poster`. While a kid is active only the
+         *     is its posterUrl. While a kid is active only the
          *     channels the kid may see are listed: under rating ceilings those
          *     forKids, on a manual allow list those on it. An adult with
          *     hideKidsContent is not listed channels forKids.
@@ -2695,7 +2726,7 @@ export interface paths {
          * @description Home's New from your channels is `sort=newest` with
          *     `unwatched=true`; its Continue watching takes
          *     `inProgress=true` with `sort=played`. A video's thumbnail is
-         *     `/items/{id}/artwork/poster`. Only videos of the channels
+         *     its posterUrl. Only videos of the channels
          *     listYouTubeChannels lists to the active profile are listed.
          */
         get: operations["listYouTubeVideos"];
@@ -3277,10 +3308,13 @@ export interface paths {
         };
         /**
          * The collection's image.
+         * @deprecated
          * @description A TMDB collection's own poster or backdrop. A custom collection, or
          *     a TMDB one without that image, shows its first movie's, in
          *     listCollectionMovies order for the active profile. 404 when none
-         *     has one.
+         *     has one. The image Collection.posterUrl or backdropUrl names,
+         *     cached for a day and revalidated; kept because released clients
+         *     use it.
          */
         get: operations["getCollectionArtwork"];
         put?: never;
@@ -4821,6 +4855,10 @@ export interface components {
             kidsContent?: boolean;
             /** @description Movies and shows only. An adult's setKidsContent; absent when none is set and the rating decides. */
             kidsContentOverride?: boolean;
+            /** @description Server-relative URL of the poster the item shows, served by getArtwork; it changes exactly when the image does. It is the item's own under the metadata settings, else its nearest ancestor's: a season's or episode's show, a song's album, a video's channel. An artist's is its newest album's that the active profile may hear. Absent when there is none. */
+            posterUrl?: string;
+            /** @description Server-relative URL of the backdrop the item shows, served by getArtwork, chosen as posterUrl is; an artist has none. Absent when there is none. */
+            backdropUrl?: string;
         };
         WatchStateBatchInput: {
             itemIds: components["schemas"]["Id"][];
@@ -5023,6 +5061,8 @@ export interface components {
             tmdbId?: number;
             /** @description Provider headshot name; present when the artwork endpoint has an image. */
             profilePath?: string;
+            /** @description Server-relative URL of the person's headshot, served by getArtwork; it changes exactly when the image does. Absent when there is none. */
+            headshotUrl?: string;
         };
         PersonInput: {
             name: string;
@@ -5038,6 +5078,8 @@ export interface components {
             personId: components["schemas"]["Id"];
             name: string;
             profilePath?: string;
+            /** @description Server-relative URL of the person's headshot, served by getArtwork; it changes exactly when the image does. Absent when there is none. */
+            headshotUrl?: string;
             /** @description Cast only. */
             character?: string;
             /** @description Crew only: Director, Writer, Screenplay or Creator. */
@@ -5228,6 +5270,11 @@ export interface components {
          * @enum {string}
          */
         ArtworkKind: "poster" | "backdrop";
+        /**
+         * @description Part of an address getArtwork serves; clients take addresses whole from the data.
+         * @enum {string}
+         */
+        ArtworkStore: "w185" | "w500" | "w1280" | "caa" | "local" | "music" | "youtube";
         /** @enum {string} */
         HdrFormat: "hdr10" | "hdr10plus" | "dolby_vision" | "hlg";
         Track: {
@@ -5887,6 +5934,8 @@ export interface components {
             musicBrainzId?: string;
             /** Format: date-time */
             addedAt: string;
+            /** @description Server-relative URL of the artist's image, served by getArtwork; it changes exactly when the image does. It is its newest album's that the active profile may hear. Absent when there is none. */
+            posterUrl?: string;
         };
         MusicArtistPage: {
             items: components["schemas"]["MusicArtist"][];
@@ -5921,6 +5970,8 @@ export interface components {
             lastPlayedAt?: string;
             /** Format: date-time */
             addedAt: string;
+            /** @description Server-relative URL of the album's cover, served by getArtwork; it changes exactly when the image does. Absent when there is none. */
+            posterUrl?: string;
         };
         MusicAlbumPage: {
             items: components["schemas"]["MusicAlbum"][];
@@ -5956,6 +6007,8 @@ export interface components {
             lossless: boolean;
             /** @description Its file is marked missing (MediaFile.missingAt); startPlayback answers 409. Absent means false. */
             unavailable?: boolean;
+            /** @description Server-relative URL of the song's art, its album's, served by getArtwork; it changes exactly when the image does. Absent when there is none. */
+            posterUrl?: string;
         };
         MusicSongPage: {
             items: components["schemas"]["MusicSong"][];
@@ -6034,6 +6087,8 @@ export interface components {
             forKids?: boolean;
             /** Format: date-time */
             addedAt: string;
+            /** @description Server-relative URL of the channel's avatar, served by getArtwork; it changes exactly when the image does. Absent when there is none. */
+            posterUrl?: string;
         };
         YouTubeChannelForKidsInput: {
             forKids: boolean;
@@ -6080,6 +6135,10 @@ export interface components {
             addedAt: string;
             /** @description Its file is marked missing (MediaFile.missingAt); startPlayback answers 409. Absent means false. */
             unavailable?: boolean;
+            /** @description Server-relative URL of the video's thumbnail, else its channel's avatar, served by getArtwork; it changes exactly when the image does. Absent when there is none. */
+            posterUrl?: string;
+            /** @description Server-relative URL of the channel's poster, as that channel's posterUrl, served by getArtwork; it changes exactly when the image does. Absent when there is none. */
+            channelPosterUrl?: string;
         };
         YouTubeVideoPage: {
             items: components["schemas"]["YouTubeVideo"][];
@@ -6128,6 +6187,8 @@ export interface components {
              * @description When playback last started with this playlistId.
              */
             lastPlayedAt?: string;
+            /** @description Server-relative URL of artItemId's poster, as that item's posterUrl, served by getArtwork; it changes exactly when the image does. Absent when there is none. */
+            posterUrl?: string;
             /** @description Server-relative URL of the custom image the owner set, served by getPlaylistImage with the device token like artwork; it changes whenever the image does. Absent while none is set, and while getPlaylistImage would not find it; the client then shows artItemId's poster. */
             imageUrl?: string;
             /** Format: date-time */
@@ -6247,10 +6308,8 @@ export interface components {
          *     with show for a season or episode; artist, album or song for music;
          *     collection for a collection. The row's title is
          *     item.metadata.title else item.parsedTitle, artist.name,
-         *     album.title, song.title or collection.name; its art is
-         *     /items/{itemId}/artwork/poster, a song's
-         *     /items/{song.albumId}/artwork/poster, a collection's
-         *     /collections/{collectionId}/artwork/poster.
+         *     album.title, song.title or collection.name; its art is that
+         *     object's posterUrl.
          */
         PlaylistEntry: {
             id: components["schemas"]["Id"];
@@ -6360,6 +6419,10 @@ export interface components {
             movieCount: number;
             /** @description True while a custom collection's movies are in a hand order, set by replaceCollectionMoviePosition; false for release order, and always for TMDB. Always sent; optional so a copy a client stored before the field existed still reads. */
             customOrder?: boolean;
+            /** @description Server-relative URL of the collection's poster: its own TMDB image, else its first movie's in listCollectionMovies order for the active profile, served by getArtwork; it changes exactly when the image does. Absent when there is none. */
+            posterUrl?: string;
+            /** @description Server-relative URL of the collection's backdrop, as posterUrl, served by getArtwork; it changes exactly when the image does. Absent when there is none. */
+            backdropUrl?: string;
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
@@ -7185,8 +7248,6 @@ export interface components {
         };
     };
     parameters: {
-        /** @description The `Artwork-Generation` of the latest response the client has seen. An image asked for with it is the same until the generation moves, which it does once any image has been added, replaced or removed and changes have stopped for a few seconds, so the answer is cached for a year, immutable, and the client asks again only under a new generation. Without it the answer is cached for a day and revalidated. Any value is served the current image. */
-        ArtworkGeneration: number;
         /** @description Minimum level; entries at or above it match. */
         LogLevel: components["schemas"]["LogLevel"];
         LogSource: string;
@@ -9304,12 +9365,48 @@ export interface operations {
             404: components["responses"]["NotFound"];
         };
     };
+    getArtwork: {
+        parameters: {
+            query?: never;
+            header?: {
+                "If-None-Match"?: string;
+            };
+            path: {
+                store: components["schemas"]["ArtworkStore"];
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Image bytes. */
+            200: {
+                headers: {
+                    ETag: string;
+                    "Cache-Control": string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/*": string;
+                };
+            };
+            /** @description The client's copy, named by If-None-Match, is current. */
+            304: {
+                headers: {
+                    ETag: string;
+                    "Cache-Control": string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
     getItemArtwork: {
         parameters: {
-            query?: {
-                /** @description The `Artwork-Generation` of the latest response the client has seen. An image asked for with it is the same until the generation moves, which it does once any image has been added, replaced or removed and changes have stopped for a few seconds, so the answer is cached for a year, immutable, and the client asks again only under a new generation. Without it the answer is cached for a day and revalidated. Any value is served the current image. */
-                v?: components["parameters"]["ArtworkGeneration"];
-            };
+            query?: never;
             header?: {
                 "If-None-Match"?: string;
             };
@@ -10063,10 +10160,7 @@ export interface operations {
     };
     getPersonArtwork: {
         parameters: {
-            query?: {
-                /** @description The `Artwork-Generation` of the latest response the client has seen. An image asked for with it is the same until the generation moves, which it does once any image has been added, replaced or removed and changes have stopped for a few seconds, so the answer is cached for a year, immutable, and the client asks again only under a new generation. Without it the answer is cached for a day and revalidated. Any value is served the current image. */
-                v?: components["parameters"]["ArtworkGeneration"];
-            };
+            query?: never;
             header?: {
                 "If-None-Match"?: string;
             };
@@ -13463,10 +13557,7 @@ export interface operations {
     };
     getCollectionArtwork: {
         parameters: {
-            query?: {
-                /** @description The `Artwork-Generation` of the latest response the client has seen. An image asked for with it is the same until the generation moves, which it does once any image has been added, replaced or removed and changes have stopped for a few seconds, so the answer is cached for a year, immutable, and the client asks again only under a new generation. Without it the answer is cached for a day and revalidated. Any value is served the current image. */
-                v?: components["parameters"]["ArtworkGeneration"];
-            };
+            query?: never;
             header?: {
                 "If-None-Match"?: string;
             };

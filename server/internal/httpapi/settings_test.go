@@ -182,22 +182,22 @@ func TestSettingsMetadataSources(t *testing.T) {
 	must(t, e.svc.Server.SetSources(serverinfo.Default))
 	var got api.Settings
 	e.expect(200, "GET", "/settings", e.admin.token, nil, &got)
-	if *got.Metadata.Source != api.Local || *got.Metadata.Mode != api.Only {
+	if *got.Metadata.Source != api.MetadataSourceLocal || *got.Metadata.Mode != api.Only {
 		t.Fatalf("starts Local only: %+v", got.Metadata)
 	}
 	e.expect(200, "PUT", "/settings", e.admin.token, map[string]any{"serverName": "Den", "metadataSource": "remote"}, &got)
-	if *got.Metadata.Source != api.Remote || *got.Metadata.Mode != api.Only {
+	if *got.Metadata.Source != api.MetadataSourceRemote || *got.Metadata.Mode != api.Only {
 		t.Fatalf("source alone: %+v", got.Metadata)
 	}
 	e.expect(200, "PUT", "/settings", e.admin.token, map[string]any{"serverName": "Den", "metadataMode": "preferred"}, &got)
-	if *got.Metadata.Source != api.Remote || *got.Metadata.Mode != api.Preferred {
+	if *got.Metadata.Source != api.MetadataSourceRemote || *got.Metadata.Mode != api.Preferred {
 		t.Fatalf("mode alone: %+v", got.Metadata)
 	}
 	e.expect(400, "PUT", "/settings", e.admin.token, map[string]any{"serverName": "Den", "metadataSource": "web"}, nil)
 	e.expect(400, "PUT", "/settings", e.admin.token, map[string]any{"serverName": "Den", "metadataMode": "mostly"}, nil)
 	for _, key := range []string{"good", ""} {
 		e.expect(200, "PUT", "/settings", e.admin.token, map[string]any{"serverName": "Den", "tmdbKey": key}, &got)
-		if *got.Metadata.Source != api.Remote || *got.Metadata.Mode != api.Preferred {
+		if *got.Metadata.Source != api.MetadataSourceRemote || *got.Metadata.Mode != api.Preferred {
 			t.Fatalf("the key %q changed the settings: %+v", key, got.Metadata)
 		}
 	}

@@ -38,7 +38,7 @@ import {
   tile,
   withWatched,
 } from "../ui";
-import { artKey } from "../artwork";
+import { artKey, artOf } from "../artwork";
 import { watchTogether } from "../together";
 import { markWatched } from "../select";
 import { shuffleButton } from "../shuffle";
@@ -671,7 +671,7 @@ export async function video(ctx: Ctx, [id]: string[]): Promise<HTMLElement[]> {
         h("div.art.v480", {
           "aria-hidden": "true",
           style: `background:var(--c${tint(v.id, 10)})`,
-          "data-art": `${v.id}/poster`,
+          "data-art": artOf(v.posterUrl),
           "data-ph": "video",
         }),
         resumeFraction(v, v.durationMs),
@@ -684,7 +684,7 @@ export async function video(ctx: Ctx, [id]: string[]): Promise<HTMLElement[]> {
           h("div.art", {
             "aria-hidden": "true",
             style: `background:var(--c${tint(v.channelId, 10)})`,
-            "data-art": `${v.channelId}/poster`,
+            "data-art": artOf(v.channelPosterUrl),
             "data-ph": "channel",
           }),
           v.channelTitle,

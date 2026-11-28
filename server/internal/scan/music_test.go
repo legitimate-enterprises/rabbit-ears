@@ -292,7 +292,7 @@ func TestRetaggedPerformerIsPruned(t *testing.T) {
 }
 
 // A song file replaced by one with another embedded picture gives its album
-// that picture, which moves the artwork generation; a song added beside it
+// that picture under a new name; a song added beside it
 // leaves the album's art be.
 func TestAlbumArtFollowsAReplacedSong(t *testing.T) {
 	e, _ := musicEnv(t)
@@ -302,7 +302,6 @@ func TestAlbumArtFollowsAReplacedSong(t *testing.T) {
 	album := e.list(item.Album)[0]
 	old, err := e.items.LocalRow(album.ID)
 	must(t, err)
-	before := e.generation(time.Minute)
 
 	dir := filepath.Join(e.root, "The Example Band", "First Light (2024)")
 	opening := filepath.Join(dir, "01 Opening.flac")
@@ -335,9 +334,6 @@ func TestAlbumArtFollowsAReplacedSong(t *testing.T) {
 	}
 	if _, err := os.Stat(now.PosterPath); err != nil {
 		t.Fatal(err)
-	}
-	if g := e.generation(2 * time.Minute); g <= before {
-		t.Errorf("the generation stays at %d", g)
 	}
 }
 

@@ -54,7 +54,7 @@ func (s *Server) musicArtists(rows []*item.ArtistView) ([]api.MusicArtist, error
 		m := metas[v.ID]
 		return api.MusicArtist{Id: v.ID, LibraryId: v.LibraryID, Name: v.ParsedTitle, SortName: cmp.Or(v.SortTitle, v.ParsedTitle),
 			AlbumCount: v.AlbumCount, SongCount: v.SongCount, Overview: overview(m), Genres: mapAll(genres[v.ID], toGenre),
-			MusicBrainzId: mbid(m), AddedAt: v.AddedAt}
+			MusicBrainzId: mbid(m), AddedAt: v.AddedAt, PosterUrl: optStr(v.PosterURL)}
 	}), nil
 }
 
@@ -67,14 +67,16 @@ func (s *Server) musicAlbums(rows []*item.AlbumView) ([]api.MusicAlbum, error) {
 		m := metas[v.ID]
 		return api.MusicAlbum{Id: v.ID, LibraryId: v.LibraryID, ArtistId: *v.ParentID, ArtistName: v.ArtistName, Title: v.ParsedTitle,
 			Year: v.ParsedYear, SongCount: v.SongCount, DurationMs: v.DurationMs, Lossless: v.Lossless, Overview: overview(m),
-			Genres: mapAll(genres[v.ID], toGenre), MusicBrainzId: mbid(m), LastPlayedAt: v.LastPlayedAt, AddedAt: v.AddedAt}
+			Genres: mapAll(genres[v.ID], toGenre), MusicBrainzId: mbid(m), LastPlayedAt: v.LastPlayedAt, AddedAt: v.AddedAt,
+			PosterUrl: optStr(v.PosterURL)}
 	}), nil
 }
 
 func toSong(v *item.SongView) api.MusicSong {
 	return api.MusicSong{Id: v.ID, LibraryId: v.LibraryID, AlbumId: *v.ParentID, AlbumTitle: v.AlbumTitle, AlbumArtistId: v.AlbumArtistID,
 		ArtistId: v.PerformerID, ArtistName: v.ArtistName, Title: v.ParsedTitle, DiscNumber: v.DiscNumber, TrackNumber: v.TrackNumber,
-		DurationMs: v.DurationMs, Year: v.Year, Codec: optStr(v.Codec), Lossless: v.Lossless, Unavailable: optTrue(v.Unavailable)}
+		DurationMs: v.DurationMs, Year: v.Year, Codec: optStr(v.Codec), Lossless: v.Lossless, Unavailable: optTrue(v.Unavailable),
+		PosterUrl: optStr(v.PosterURL)}
 }
 
 // one returns the single row a by-id view found, or not found.

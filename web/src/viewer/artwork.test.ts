@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createApi } from "../admin/api";
-import { releasable, watchArt } from "./artwork";
+import { artKey, artOf, releasable, watchArt } from "./artwork";
 import { uid } from "../api/uid";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -145,4 +145,34 @@ it("keeps the image of a tile still in the document when artwork is released", a
   expect(revoked.length).toBeGreaterThan(0);
   expect(revoked).not.toContain("blob:1");
   expect(kept.style.backgroundImage).toBe(`url("blob:1")`);
+});
+
+it("fetches a tile's image at the address its data carries, once for every tile", async () => {
+  URL.createObjectURL = () => "blob:address";
+  const seen: string[] = [];
+  const fetch = async (req: Request) => {
+    seen.push(`${new URL(req.url, "http://x").pathname} ${req.headers.get("authorization")}`);
+    return new Response(new Blob(["jpg"]), { headers: { "content-type": "image/jpeg" } });
+  };
+  const root = document.body.appendChild(document.createElement("div"));
+  watchArt(root, createApi({ token: "t", fetch }));
+  const tiles = [1, 2].map(() => {
+    const el = document.createElement("div");
+    el.dataset.art = artOf("/api/v2/artwork/local/0123abcd.jpg");
+    return root.appendChild(el);
+  });
+  for (const el of tiles)
+    await vi.waitFor(() => expect(el.style.backgroundImage).toBe(`url("blob:address")`));
+  expect(seen).toEqual(["/api/v2/artwork/local/0123abcd.jpg Bearer t"]);
+  expect(artOf(undefined)).toBeUndefined();
+});
+
+it("keys an item's tile by the URL it carries: a wide one by its backdrop, an episode's by its still", () => {
+  const poster = "/api/v2/artwork/w500/p.jpg";
+  const backdrop = "/api/v2/artwork/w1280/b.jpg";
+  const movie = { id: uid(1), kind: "movie", posterUrl: poster, backdropUrl: backdrop };
+  expect(artKey(movie)).toBe(artOf(poster));
+  expect(artKey(movie, true)).toBe(artOf(backdrop));
+  expect(artKey({ ...movie, kind: "episode" }, true)).toBe(artOf(poster));
+  expect(artKey({ kind: "movie" })).toBeUndefined();
 });

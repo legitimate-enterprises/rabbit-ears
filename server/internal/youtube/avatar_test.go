@@ -57,7 +57,7 @@ func TestAvatarFromChannelPage(t *testing.T) {
 		t.Fatal(err)
 	}
 	b, err := os.ReadFile(p) //nolint:gosec // the test's temp dir
-	if err != nil || string(b) != "jpeg" || filepath.Base(p) != "UCo0-VCHchPIG3JtJlIQnFew.jpg" {
+	if err != nil || string(b) != "jpeg" || filepath.Base(p) != "41e5787e9f28562d.jpg" {
 		t.Fatalf("avatar %s %q %v", p, b, err)
 	}
 	for _, id := range []string{"UCmissing", "UCbare", "../etc", ""} {

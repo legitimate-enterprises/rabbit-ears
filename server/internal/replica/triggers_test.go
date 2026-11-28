@@ -292,11 +292,6 @@ func TestHandWrittenTriggersStillBehave(t *testing.T) {
 	mustExec(t, d, `INSERT INTO media_file (id, path, size_bytes, file_modified_at, created_at, modified_at) VALUES (uid(1), '/m/1/a.mp4', 1, 0, 0, 0)`)
 	mustExec(t, d, `INSERT INTO edition (id, item_id, created_at, modified_at) VALUES (uid(1), uid(1), 0, 0)`)
 	mustExec(t, d, `INSERT INTO edition_file (edition_id, media_file_id) VALUES (uid(1), uid(1))`)
-	art := stamp(t, d, `SELECT generation FROM artwork_generation`)
-	mustExec(t, d, `INSERT INTO item_metadata (item_id, source, poster_path) VALUES (uid(1), 'remote', '/p.jpg')`)
-	if got := stamp(t, d, `SELECT generation FROM artwork_generation`); got != art+1 {
-		t.Errorf("artwork generation %d, was %d", got, art)
-	}
 	before, _ := clock(t, d)
 	mustExec(t, d, `DELETE FROM collection_movie`)
 	mustExec(t, d, `DELETE FROM edition_file`)

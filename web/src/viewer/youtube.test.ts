@@ -36,6 +36,7 @@ const me = (active: number) => ({
 const page = (items: unknown[]) => ({ items });
 const channel = (id: number, title: string, extra = {}) => ({
   id: uid(id),
+  posterUrl: `/api/v2/artwork/w500/${uid(id)}.jpg`,
   libraryId: uid(5),
   title,
   videoCount: 214,
@@ -46,6 +47,7 @@ const channel = (id: number, title: string, extra = {}) => ({
 });
 const video = (id: number, title: string, extra = {}) => ({
   id: uid(id),
+  posterUrl: `/api/v2/artwork/w500/${uid(id)}.jpg`,
   libraryId: uid(5),
   channelId: uid(40),
   channelTitle: "Workbench Weekly",
@@ -92,7 +94,9 @@ describe("YouTube section", () => {
     expect(tile.getAttribute("href")).toBe(`#/video/${uid(60)}`);
     expect(tile.textContent).toBe("The dishwasher videoWorkbench Weekly · 42m · today");
     expect(tile.querySelector(".dot")).toBeTruthy();
-    expect(tile.querySelector("[data-art]")!.getAttribute("data-art")).toBe(`${uid(60)}/poster`);
+    expect(tile.querySelector("[data-art]")!.getAttribute("data-art")).toBe(
+      `art:/api/v2/artwork/w500/${uid(60)}.jpg`,
+    );
     const q = calls.find((c) => c.key === "GET /youtube/videos")!.query;
     expect(q).toContain("sort=newest");
     expect(r.querySelector("nav a[aria-current=page]")!.textContent).toBe("YouTube");

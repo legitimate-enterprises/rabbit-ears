@@ -10,6 +10,7 @@ import { back, btn, empty, icon, logo, meta, sel, viewTabs } from "../ui";
 import { addToPlaylist, addToStation, hasPlaylists, playlistTiles } from "./playlists";
 import { stationTiles } from "./stations";
 import { selection } from "../select";
+import { artOf } from "../artwork";
 
 type Album = Schemas["MusicAlbum"];
 type Artist = Schemas["MusicArtist"];
@@ -31,7 +32,7 @@ export const artistTile = (a: Artist) =>
     h("div.art.sq.round", {
       "aria-hidden": "true",
       style: `background:${color(a.id)}`,
-      "data-art": `${a.id}/poster`,
+      "data-art": artOf(a.posterUrl),
       "data-ph": "artist",
     }),
     h("b", a.name),
@@ -298,7 +299,7 @@ export async function artist(ctx: Ctx, [id]: string[]) {
       h("div.art.face200", {
         "aria-hidden": "true",
         style: `background:${color(a.id)}`,
-        "data-art": `${a.id}/poster`,
+        "data-art": artOf(a.posterUrl),
         "data-ph": "artist",
       }),
       h(

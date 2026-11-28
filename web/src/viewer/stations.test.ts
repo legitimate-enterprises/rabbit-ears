@@ -33,6 +33,8 @@ const movie = (id: number, name: string, startsAt: string, extra = {}) => ({
   durationMs: 6_000_000,
   item: {
     id: uid(id),
+    posterUrl: `/api/v2/artwork/w500/${uid(id)}.jpg`,
+    backdropUrl: `/api/v2/artwork/w1280/${uid(id)}.jpg`,
     libraryId: uid(1),
     kind: "movie" as const,
     parsedTitle: name,
@@ -51,6 +53,7 @@ const episode = (id: number, show: string, s: number, e: number, startsAt: strin
   durationMs: 1_800_000,
   item: {
     id: uid(id),
+    posterUrl: `/api/v2/artwork/w500/${uid(id)}.jpg`,
     libraryId: uid(1),
     kind: "episode" as const,
     parsedTitle: "Pilot",
@@ -79,6 +82,7 @@ const song = (id: number, title: string, startsAt: string) => ({
   durationMs: 200_000,
   song: {
     id: uid(id),
+    posterUrl: `/api/v2/artwork/w500/${uid(5)}.jpg`,
     title,
     artistId: uid(4),
     artistName: "The Hollow Pines",
@@ -202,18 +206,20 @@ describe("artFor", () => {
   it("is the art of what is on, else what is next, else none", () => {
     const next = movie(2, "Next", ts);
     expect(artFor({ status: "on_air", now: movie(1, "On", ts), next, upNext: [next] })).toBe(
-      `${uid(1)}/backdrop`,
+      `art:/api/v2/artwork/w1280/${uid(1)}.jpg`,
     );
-    expect(artFor({ status: "between_programs", next, upNext: [next] })).toBe(`${uid(2)}/backdrop`);
+    expect(artFor({ status: "between_programs", next, upNext: [next] })).toBe(
+      `art:/api/v2/artwork/w1280/${uid(2)}.jpg`,
+    );
     expect(
       artFor({
         status: "between_programs",
         next: episode(7, "S", 1, 1, ts),
         upNext: [episode(7, "S", 1, 1, ts)],
       }),
-    ).toBe(`${uid(7)}/poster`);
+    ).toBe(`art:/api/v2/artwork/w500/${uid(7)}.jpg`);
     expect(artFor({ status: "on_air", now: song(1, "Song", ts), upNext: [] })).toBe(
-      `${uid(5)}/poster`,
+      `art:/api/v2/artwork/w500/${uid(5)}.jpg`,
     );
     expect(artFor({ status: "off_schedule", upNext: [] })).toBeUndefined();
   });
@@ -222,7 +228,7 @@ describe("artFor", () => {
     expect(stationKey({ onAir, imageUrl: `/api/v2/stations/${uid(3)}/image?v=4` })).toBe(
       `image:/api/v2/stations/${uid(3)}/image?v=4`,
     );
-    expect(stationKey({ onAir })).toBe(`${uid(1)}/backdrop`);
+    expect(stationKey({ onAir })).toBe(`art:/api/v2/artwork/w1280/${uid(1)}.jpg`);
   });
 });
 

@@ -47,7 +47,7 @@ func NewHandler(version string, svc *service.Services) (http.Handler, error) {
 	inner := api.HandlerWithOptions(strict, api.StdHTTPServerOptions{BaseURL: BasePath, ErrorHandlerFunc: badRequest})
 	s.replay = g.wrap(inner)
 	mux := http.NewServeMux()
-	mux.Handle("/", s.announceArtwork(gzipJSON(s.replay)))
+	mux.Handle("/", gzipJSON(s.replay))
 	(&streams{svc}).register(mux)
 	(&downloadFiles{svc}).register(mux)
 	return mux, nil

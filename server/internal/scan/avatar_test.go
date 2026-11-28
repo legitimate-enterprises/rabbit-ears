@@ -50,7 +50,7 @@ func TestChannelAvatarForAPlaylistFolder(t *testing.T) {
 	avatars := youtube.NewAvatars(t.TempDir())
 	avatars.Base = srv.URL
 	e.s.Avatars = avatars
-	avatar := filepath.Join(avatars.Dir, "UCclockworkcorner0000000.jpg")
+	avatar := filepath.Join(avatars.Dir, "87bbe879c7a5f578.jpg") // named by its bytes, "avatar"
 
 	art := func(title string) *item.Metadata {
 		t.Helper()
@@ -73,10 +73,10 @@ func TestChannelAvatarForAPlaylistFolder(t *testing.T) {
 		t.Fatalf("lookup during an outage: %d failed, %v", failed, err)
 	}
 	m := art("Clockwork Corner")
-	if m.PosterPath != filepath.Join(clock, "poster.jpg") || m.RetryAt == nil || !m.RetryAt.Equal(e.clock.Add(RetryDelay)) {
+	if !e.copied(m.PosterPath, filepath.Join(clock, "poster.jpg")) || m.RetryAt == nil || !m.RetryAt.Equal(e.clock.Add(RetryDelay)) {
 		t.Fatalf("during the outage %+v", m)
 	}
-	if m := art("Workbench Weekly"); m.PosterPath != filepath.Join(e.root, "Workbench Weekly", "poster.jpg") || m.RetryAt != nil {
+	if m := art("Workbench Weekly"); !e.copied(m.PosterPath, filepath.Join(e.root, "Workbench Weekly", "poster.jpg")) || m.RetryAt != nil {
 		t.Fatalf("square poster %+v", m)
 	}
 

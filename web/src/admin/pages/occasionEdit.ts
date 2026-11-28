@@ -1,5 +1,5 @@
 import type { Api, Schemas } from "../../api/client";
-import { watchArt } from "../../viewer/artwork";
+import { artOf, watchArt } from "../../viewer/artwork";
 import type { Ctx } from "../api";
 import { ok, paged } from "../api";
 import { confirming, table } from "../common";
@@ -36,7 +36,7 @@ const put = (el: HTMLElement, ...kids: Child[]) =>
 const nameOf = (i: Item) => i.metadata?.title || i.parsedTitle;
 const kindOf = (i: Item) => (i.kind === "show" ? "Show" : "Movie");
 const yearOf = (i: Item) => i.metadata?.releaseDate?.slice(0, 4) ?? String(i.parsedYear ?? "");
-const thumb = (i: Item) => h("i.th", { "data-art": `${i.id}/poster`, "aria-hidden": "true" });
+const thumb = (i: Item) => h("i.th", { "data-art": artOf(i.posterUrl), "aria-hidden": "true" });
 // A leap year, so February 29 is a day of February.
 const dayOfMonth = (month: number, day: number) =>
   new Date(2028, month - 1, day).getMonth() === month - 1;

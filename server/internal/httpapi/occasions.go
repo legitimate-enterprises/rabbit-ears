@@ -137,7 +137,7 @@ func (s *Server) DeleteOccasion(_ context.Context, r api.DeleteOccasionRequestOb
 
 // ListOccasionMembers pages every member of an occasion by title, with
 // whether a keyword brings it.
-func (s *Server) ListOccasionMembers(_ context.Context, r api.ListOccasionMembersRequestObject) (api.ListOccasionMembersResponseObject, error) {
+func (s *Server) ListOccasionMembers(ctx context.Context, r api.ListOccasionMembersRequestObject) (api.ListOccasionMembersResponseObject, error) {
 	if _, err := s.svc.Occasions.Repo().Get(r.OccasionId); err != nil {
 		return nil, err
 	}
@@ -156,7 +156,7 @@ func (s *Server) ListOccasionMembers(_ context.Context, r api.ListOccasionMember
 	if err != nil {
 		return nil, err
 	}
-	items, err := s.items(rows, true)
+	items, err := s.items(ctx, rows, true)
 	if err != nil {
 		return nil, err
 	}

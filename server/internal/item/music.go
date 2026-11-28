@@ -104,7 +104,12 @@ type ArtistView struct {
 	*Item
 	AlbumCount int // albums whose album artist this is
 	SongCount  int // songs on those albums or performed by the artist
+	PosterURL  string
 }
+
+// posterURL is item t's poster URL, "" for none, an artist's of clean
+// albums while clean holds.
+func posterURL(t, clean string) string { return `COALESCE(` + URLOf(PosterOf(t, clean)) + `, '')` }
 
 // artistsFrom is the rows Artists pages and CountArtists counts.
 func artistsFrom(f MusicFilter) string {
@@ -162,11 +167,11 @@ func ArtistSongsOf(a, clean string) string {
 
 // Artists pages artists A to Z by sort name.
 func (r *Repo) Artists(f MusicFilter) ([]*ArtistView, error) {
-	rows, err := r.d.Query(`SELECT `+prefixed("a")+`, `+ArtistAlbumsOf("a", "?11")+`, `+ArtistSongsOf("a", "?11")+`
+	rows, err := r.d.Query(`SELECT `+prefixed("a")+`, `+ArtistAlbumsOf("a", "?11")+`, `+ArtistSongsOf("a", "?11")+`, `+posterURL("a", "?11")+`
 		`+artistsFrom(f)+order(f, "a", sortKey("a")+`, a.id`), f.args()...)
 	return db.Collect(rows, err, func(s db.Scanner) (*ArtistView, error) {
 		v := &ArtistView{Item: &Item{}}
-		return v, scanWith(s, v.Item, &v.AlbumCount, &v.SongCount)
+		return v, scanWith(s, v.Item, &v.AlbumCount, &v.SongCount, &v.PosterURL)
 	})
 }
 
@@ -178,6 +183,7 @@ type AlbumView struct {
 	DurationMs   int64
 	Lossless     bool // every song has a lossless audio track
 	LastPlayedAt *time.Time
+	PosterURL    string
 }
 
 // AlbumSongsOf is how many songs album al holds, only those not explicit
@@ -213,12 +219,13 @@ func (r *Repo) Albums(f MusicFilter) ([]*AlbumView, error) {
 	}
 	rows, err := r.d.Query(`SELECT `+prefixed("al")+`, ar.parsed_title, `+AlbumSongsOf("al", "?11")+`, `+AlbumDurationOf("al", "?11")+`,
 			`+AlbumLosslessOf("al")+`,
-			(SELECT MAX(p.started_at) FROM playback_session p JOIN item s ON s.id = p.item_id WHERE s.parent_id = al.id AND p.account_id = ?8 AND p.station = 0)
+			(SELECT MAX(p.started_at) FROM playback_session p JOIN item s ON s.id = p.item_id WHERE s.parent_id = al.id AND p.account_id = ?8 AND p.station = 0),
+			`+posterURL("al", "0")+`
 		`+albumsFrom(f)+order(f, "al", by), f.args()...)
 	return db.Collect(rows, err, func(s db.Scanner) (*AlbumView, error) {
 		v := &AlbumView{Item: &Item{}}
 		var played sql.NullInt64
-		err := scanWith(s, v.Item, &v.ArtistName, &v.SongCount, &v.DurationMs, &v.Lossless, &played)
+		err := scanWith(s, v.Item, &v.ArtistName, &v.SongCount, &v.DurationMs, &v.Lossless, &played, &v.PosterURL)
 		v.LastPlayedAt = db.FromNullMs(played)
 		return v, err
 	})
@@ -236,6 +243,7 @@ type SongView struct {
 	Codec         string
 	Lossless      bool
 	Unavailable   bool // it has files, all marked missing
+	PosterURL     string
 }
 
 // SongColumns are what SongView adds to a song, over SongRows.
@@ -265,13 +273,13 @@ func (r *Repo) Songs(f MusicFilter) ([]*SongView, error) {
 	default:
 		by = sortKey("s") + `, s.id`
 	}
-	rows, err := r.d.Query(`SELECT `+prefixed("s")+`, `+SongColumns+`
+	rows, err := r.d.Query(`SELECT `+prefixed("s")+`, `+SongColumns+`, `+posterURL("s", "0")+`
 		`+songsFrom(f)+order(f, "s", by), f.args()...)
 	return db.Collect(rows, err, func(sc db.Scanner) (*SongView, error) {
 		v := &SongView{Item: &Item{}}
 		var dur, year sql.NullInt64
 		var codec sql.NullString
-		err := scanWith(sc, v.Item, &v.AlbumTitle, &v.AlbumArtistID, &v.PerformerID, &v.ArtistName, &dur, &year, &codec, &v.Unavailable)
+		err := scanWith(sc, v.Item, &v.AlbumTitle, &v.AlbumArtistID, &v.PerformerID, &v.ArtistName, &dur, &year, &codec, &v.Unavailable, &v.PosterURL)
 		v.DurationMs, v.Year, v.Codec = ptr64(dur), db.FromNullInt(year), codec.String
 		v.Lossless = mediafile.Lossless(v.Codec)
 		return v, err

@@ -148,7 +148,7 @@ func (s *Server) stationFrom(ctx context.Context, in *api.StationInput, st *stat
 
 // programs fills each program's item, show or song as a play-order row is,
 // reading metadata, genres and songs for all of them at once.
-func (s *Server) programs(ps []*station.Program, admin bool) ([]api.StationProgram, error) {
+func (s *Server) programs(ctx context.Context, ps []*station.Program, admin bool) ([]api.StationProgram, error) {
 	out := make([]api.StationProgram, len(ps))
 	var its, shows []*item.Item
 	var songs []uid.ID
@@ -194,11 +194,11 @@ func (s *Server) programs(ps []*station.Program, admin bool) ([]api.StationProgr
 			films = append(films, it)
 		}
 	}
-	vs, err := s.items(films, admin)
+	vs, err := s.items(ctx, films, admin)
 	if err != nil {
 		return nil, err
 	}
-	ups, err := s.items(shows, admin)
+	ups, err := s.items(ctx, shows, admin)
 	if err != nil {
 		return nil, err
 	}
@@ -219,13 +219,13 @@ func (s *Server) programs(ps []*station.Program, admin bool) ([]api.StationProgr
 	return out, nil
 }
 
-func (s *Server) onAir(a service.Airing, admin bool) (api.StationOnAir, error) {
+func (s *Server) onAir(ctx context.Context, a service.Airing, admin bool) (api.StationOnAir, error) {
 	out := api.StationOnAir{Status: api.StationStatus(a.Status), UpNext: []api.StationProgram{}}
 	ps := a.UpNext
 	if a.Now != nil {
 		ps = append([]*station.Program{a.Now}, ps...)
 	}
-	vs, err := s.programs(ps, admin)
+	vs, err := s.programs(ctx, ps, admin)
 	if err != nil {
 		return out, err
 	}
@@ -267,7 +267,7 @@ func (s *Server) toStation(ctx context.Context, st *station.Station) (api.Statio
 	if err != nil {
 		return out, err
 	}
-	out.OnAir, err = s.onAir(a, caller(ctx).asAdmin())
+	out.OnAir, err = s.onAir(ctx, a, caller(ctx).asAdmin())
 	return out, err
 }
 
@@ -374,7 +374,7 @@ func (s *Server) ListStationSchedule(ctx context.Context, r api.ListStationSched
 	}
 	out := api.ListStationSchedule200JSONResponse{Items: []api.StationProgram{}}
 	rows, out.NextOffset = window(rows, limit, offset)
-	vs, err := s.programs(rows, caller(ctx).asAdmin())
+	vs, err := s.programs(ctx, rows, caller(ctx).asAdmin())
 	out.Items = append(out.Items, vs...)
 	return out, err
 }
@@ -438,7 +438,7 @@ func (s *Server) StartStationPlayback(ctx context.Context, r api.StartStationPla
 	if err != nil {
 		return nil, err
 	}
-	out.OnAir, err = s.onAir(a, caller(ctx).asAdmin())
+	out.OnAir, err = s.onAir(ctx, a, caller(ctx).asAdmin())
 	return out, err
 }
 

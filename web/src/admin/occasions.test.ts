@@ -129,6 +129,7 @@ const six = [
 ];
 const title = (id: number, name: string, kind = "movie", year = 2020) => ({
   id: uid(id),
+  posterUrl: `/api/v2/artwork/w500/${uid(id)}.jpg`,
   libraryId: uid(1),
   kind,
   parsedTitle: name.toLowerCase(),
@@ -618,7 +619,9 @@ describe("edit occasion", () => {
       ["Tinsel Street", "Show", "2023", "Keyword", "×"],
       ["A Lantern for December", "Movie", "2022", "Added", "×"],
     ]);
-    expect(sec.querySelector("tbody tr i")!.getAttribute("data-art")).toBe(`${uid(11)}/poster`);
+    expect(sec.querySelector("tbody tr i")!.getAttribute("data-art")).toBe(
+      `art:/api/v2/artwork/w500/${uid(11)}.jpg`,
+    );
     expect(byText("button", "Show all 3")).toBeUndefined();
   });
 

@@ -257,13 +257,21 @@ func toRun(r *task.Run) api.TaskRun {
 func toGenre(g *genre.Genre) api.Genre { return api.Genre{Id: g.ID, Name: g.Name, TmdbId: g.TMDBID} }
 
 func toPerson(p *person.Person) api.Person {
-	return api.Person{Id: p.ID, Name: p.Name, TmdbId: p.TMDBID, ProfilePath: optStr(p.ProfilePath)}
+	return api.Person{Id: p.ID, Name: p.Name, TmdbId: p.TMDBID, ProfilePath: optStr(p.ProfilePath), HeadshotUrl: headshot(p.ProfilePath)}
+}
+
+// headshot is the URL of TMDB's headshot path, nil for none.
+func headshot(path string) *string {
+	if path == "" {
+		return nil
+	}
+	return optStr(item.ArtURL + "w185" + path)
 }
 
 func toCredits(cs []*person.Credit) api.ItemCredits {
 	out := api.ItemCredits{Cast: []api.Credit{}, Crew: []api.Credit{}}
 	for _, c := range cs {
-		v := api.Credit{PersonId: c.PersonID, Name: c.Name, ProfilePath: optStr(c.ProfilePath), Character: optStr(c.Character),
+		v := api.Credit{PersonId: c.PersonID, Name: c.Name, ProfilePath: optStr(c.ProfilePath), HeadshotUrl: headshot(c.ProfilePath), Character: optStr(c.Character),
 			Job: optStr(c.Job), Department: optStr(c.Department)}
 		if c.Kind == person.Cast {
 			out.Cast = append(out.Cast, v)

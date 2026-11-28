@@ -21,7 +21,7 @@ import {
 import { left, plural, runtime } from "../format";
 import { art, empty, playmark, section, watched } from "../ui";
 import { resumeHref } from "../editions";
-import { artKey, placeholderKind, type PlaceholderKind } from "../artwork";
+import { artKey, artOf, placeholderKind, type PlaceholderKind } from "../artwork";
 import { videoTile } from "./youtube";
 import { onNowTiles } from "./stations";
 
@@ -36,9 +36,9 @@ type Card = {
   line: string;
   play: string;
   detail: string;
-  hero: string;
+  hero?: string;
   id: string;
-  thumb: string;
+  thumb?: string;
   ph: PlaceholderKind;
   done?: number;
 };
@@ -190,9 +190,9 @@ export async function home(ctx: Ctx): Promise<HTMLElement[]> {
       .join(" - "),
     play: `#/play/${v.id}`,
     detail: `#/video/${v.id}`,
-    hero: `${v.id}/poster`,
+    hero: artOf(v.posterUrl),
     id: v.id,
-    thumb: `${v.id}/poster`,
+    thumb: artOf(v.posterUrl),
     ph: "video",
     done: resumeFraction(v, v.durationMs),
   });

@@ -31,6 +31,13 @@ func (s *Server) toPlaylist(ctx context.Context, p *playlist.Playlist, profileID
 	if err != nil {
 		return out, err
 	}
+	if first != nil {
+		art, err := s.svc.Items.Repo().Art([]uid.ID{*first}, audience(ctx).Kid)
+		if err != nil {
+			return out, err
+		}
+		out.PosterUrl = optStr(art[*first].Poster)
+	}
 	c, err := s.svc.Covers.Shown(playlistCover(p), p.ID, browse(ctx))
 	out.ImageUrl = coverURL(playlistBase(profileID, p), c)
 	if err != nil || access == service.Owner {

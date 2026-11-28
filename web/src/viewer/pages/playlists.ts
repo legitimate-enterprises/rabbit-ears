@@ -8,7 +8,7 @@ import { imageButtons, imageKey } from "../coverImage";
 import { color, epCode, title, type Ctx } from "../data";
 import { askEdition, named, needsEdition } from "../editions";
 import { minutes, plural } from "../format";
-import { placeholderKind } from "../artwork";
+import { artOf, placeholderKind } from "../artwork";
 import { avatar, back, formEnd, icon, refresh } from "../ui";
 import { reorder, row } from "./music";
 
@@ -46,11 +46,7 @@ const cover = (p: Playlist, cls: string) =>
     {
       "aria-hidden": p.shared ? undefined : "true",
       style: `background:${color(p.id)}`,
-      "data-art": p.imageUrl
-        ? imageKey(p.imageUrl)
-        : p.artItemId
-          ? `${p.artItemId}/poster`
-          : undefined,
+      "data-art": p.imageUrl ? imageKey(p.imageUrl) : artOf(p.posterUrl),
       "data-ph": "playlist",
     },
     p.shared &&
@@ -155,7 +151,7 @@ function describe(e: Entry): { title: string; sub: string; art: HTMLElement; hre
       art: h("div.art.sq36", {
         "aria-hidden": "true",
         style: `background:${color(e.collection.id)}`,
-        "data-art": `collection/${e.collection.id}/poster`,
+        "data-art": artOf(e.collection.posterUrl),
         "data-ph": "collection",
       }),
       href: `#/collection/${e.collection.id}`,

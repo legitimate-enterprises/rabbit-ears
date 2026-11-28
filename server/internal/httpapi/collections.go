@@ -54,7 +54,7 @@ func collectionError(err error) error {
 func toCollection(v *collection.View) api.Collection {
 	return api.Collection{Id: v.ID, Source: api.CollectionSource(v.Source), Name: v.Name, Overview: optStr(v.Overview),
 		HouseholdId: v.HouseholdID, TmdbId: v.TMDBID, MovieCount: v.MovieCount, CustomOrder: &v.CustomOrder, CreatedAt: v.CreatedAt, ModifiedAt: v.ModifiedAt,
-		CreatedBy: v.CreatedBy, ModifiedBy: v.ModifiedBy}
+		CreatedBy: v.CreatedBy, ModifiedBy: v.ModifiedBy, PosterUrl: optStr(v.Art.Poster), BackdropUrl: optStr(v.Art.Backdrop)}
 }
 
 // ListCollections pages by name the collections the active profile may see.
@@ -147,7 +147,7 @@ func (s *Server) ListCollectionMovies(ctx context.Context, r api.ListCollectionM
 			return nil, err
 		}
 	}
-	out.Items, err = s.items(rows, caller(ctx).asAdmin())
+	out.Items, err = s.items(ctx, rows, caller(ctx).asAdmin())
 	return out, err
 }
 
@@ -216,10 +216,10 @@ func (s *Server) GetCollectionArtwork(ctx context.Context, r api.GetCollectionAr
 	}
 	f, size, tag, err := openArtwork(path, r.Params.IfNoneMatch)
 	if err != nil || f == nil {
-		return api.GetCollectionArtwork304Response{Headers: api.GetCollectionArtwork304ResponseHeaders{CacheControl: artworkCacheFor(r.Params.V), ETag: tag}}, err
+		return api.GetCollectionArtwork304Response{Headers: api.GetCollectionArtwork304ResponseHeaders{CacheControl: artworkCache, ETag: tag}}, err
 	}
 	return api.GetCollectionArtwork200ImageResponse{Body: f, ContentType: mime.TypeByExtension(filepath.Ext(path)), ContentLength: size,
-		Headers: api.GetCollectionArtwork200ResponseHeaders{CacheControl: artworkCacheFor(r.Params.V), ETag: tag}}, nil
+		Headers: api.GetCollectionArtwork200ResponseHeaders{CacheControl: artworkCache, ETag: tag}}, nil
 }
 
 // movieCollections names the collections a movie is in that the active

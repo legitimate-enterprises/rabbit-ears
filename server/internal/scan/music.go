@@ -1,11 +1,8 @@
 package scan
 
 import (
-	"bytes"
 	"cmp"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
@@ -444,15 +441,7 @@ func storeByHash(src, dir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	h := sha256.Sum256(b)
-	dest := filepath.Join(dir, hex.EncodeToString(h[:8])+strings.ToLower(filepath.Ext(src)))
-	if _, err := os.Stat(dest); err == nil { //nolint:gosec // dest is dir plus a hex hash
-		return dest, nil
-	}
-	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return "", err
-	}
-	return dest, atomicfile.Write(dest, bytes.NewReader(b))
+	return atomicfile.Hashed(dir, strings.ToLower(filepath.Ext(src)), b)
 }
 
 // pruneArtists removes the performer a song had, before it left them or

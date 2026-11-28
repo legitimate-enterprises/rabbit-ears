@@ -163,8 +163,9 @@ func TestNothingSecretIsProjected(t *testing.T) {
 }
 
 // Server paths reach a replica as a member sees them in a response: a
-// TMDB image path whole, any other by its file name.
-func TestImagePathsAreFileNames(t *testing.T) {
+// TMDB image path whole, one in a store as its address, any other by its
+// file name.
+func TestImagePathsAreAddressesOrFileNames(t *testing.T) {
 	d := dbtest.Open(t)
 	mustExec(t, d, `INSERT INTO library (id, name, kind, created_at, modified_at) VALUES (uid(1), 'L', 'movies', 0, 0)`)
 	mustExec(t, d, `INSERT INTO item (id, library_id, kind, parsed_title, added_at, created_at, modified_at) VALUES (uid(1), uid(1), 'movie', 'M', 0, 0, 0)`)
@@ -191,7 +192,7 @@ func TestImagePathsAreFileNames(t *testing.T) {
 		}
 		got[source] = p
 	}
-	if r, l := got["remote"], got["local"]; r[0].String != "/abc.jpg" || r[1].Valid || l[0].String != "poster.jpg" || l[1].String != "7.jpg" {
+	if r, l := got["remote"], got["local"]; r[0].String != "/abc.jpg" || r[1].Valid || l[0].String != "poster.jpg" || l[1].String != "local/7.jpg" {
 		t.Errorf("remote %v, local %v", r, l)
 	}
 }

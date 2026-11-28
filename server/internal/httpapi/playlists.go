@@ -87,8 +87,8 @@ func playlistError(err error) error {
 
 // withShow is a catalog item with its show beside a season or episode, with
 // paths as the caller sees them.
-func (s *Server) withShow(it *item.Item, admin bool) (api.Item, *api.Item, error) {
-	v, err := s.item(it, admin)
+func (s *Server) withShow(ctx context.Context, it *item.Item, admin bool) (api.Item, *api.Item, error) {
+	v, err := s.item(ctx, it, admin)
 	if err != nil || it.Kind != item.Season && it.Kind != item.Episode {
 		return v, nil, err
 	}
@@ -99,7 +99,7 @@ func (s *Server) withShow(it *item.Item, admin bool) (api.Item, *api.Item, error
 	if err != nil {
 		return v, nil, err
 	}
-	show, err := s.item(up, admin)
+	show, err := s.item(ctx, up, admin)
 	return v, &show, err
 }
 
@@ -123,7 +123,11 @@ func (s *Server) entryWith(ctx context.Context, e *playlist.Entry, t playlist.To
 		if err != nil {
 			return out, err
 		}
-		v := toCollection(&collection.View{Collection: *c, MovieCount: out.ItemCount})
+		art, err := s.svc.Collections.Repo().Art(c.ID, browse(ctx))
+		if err != nil {
+			return out, err
+		}
+		v := toCollection(&collection.View{Collection: *c, MovieCount: out.ItemCount, Art: art})
 		out.Kind, out.CollectionId, out.Collection = api.PlaylistEntryKindCollection, e.CollectionID, &v
 		return out, nil
 	}
@@ -165,7 +169,7 @@ func (s *Server) entryWith(ctx context.Context, e *playlist.Entry, t playlist.To
 		out.Artist = &v
 		return out, err
 	default:
-		v, show, err := s.withShow(it, caller(ctx).asAdmin())
+		v, show, err := s.withShow(ctx, it, caller(ctx).asAdmin())
 		out.Item, out.Show = &v, show
 		return out, err
 	}
@@ -336,7 +340,7 @@ func (s *Server) ListPlaylistPlayOrder(ctx context.Context, r api.ListPlaylistPl
 			if err != nil {
 				return nil, err
 			}
-			got, show, err := s.withShow(it, caller(ctx).asAdmin())
+			got, show, err := s.withShow(ctx, it, caller(ctx).asAdmin())
 			if err != nil {
 				return nil, err
 			}

@@ -44,7 +44,24 @@ type View struct {
 	MovieCount int
 	// CustomOrder is whether a custom collection's movies carry positions.
 	CustomOrder bool
+	// Art is what it shows the reader, as ArtOf finds it.
+	Art item.Art
 }
+
+// ArtOf is the address of collection c's poster, or backdrop when
+// backdrop, ” for none: its own TMDB image, else its first movie's in
+// Order that visible, a WHERE fragment over item, lets the reader see.
+func ArtOf(c, visible string, backdrop bool) string {
+	col, size, movie := "poster_path", "w500", item.PosterOf("item", "0")
+	if backdrop {
+		col, size, movie = "backdrop_path", "w1280", item.BackdropOf("item")
+	}
+	return `COALESCE('` + size + `' || NULLIF(` + c + `.` + col + `, ''), (SELECT ` + movie + ` FROM collection_movie cm JOIN item ON item.id = cm.item_id
+		WHERE cm.collection_id = ` + c + `.id AND ` + visible + ` ORDER BY ` + Order + ` LIMIT 1), '')`
+}
+
+// art is the URLs of collection c's art as the audience at ?6 to ?10 sees it.
+var art = `COALESCE(` + item.URLOf(ArtOf("c", item.VisibleWhere, false)) + `, ''), COALESCE(` + item.URLOf(ArtOf("c", item.VisibleWhere, true)) + `, '')`
 
 // Date and Title order a collection's movies, over a table named item: by
 // release date, a bare parsed year before the full dates of that year,
@@ -160,15 +177,24 @@ func (r *Repo) Count(householdID uid.ID, a item.Audience) (n int, err error) {
 }
 
 func (r *Repo) views(householdID uid.ID, id, movieID *uid.ID, a item.Audience, limit, offset int) ([]*View, error) {
-	rows, err := r.d.Query(`SELECT `+cols+`, `+visibleCount+`, c.source = 'custom' AND `+handOrdered+` FROM collection c WHERE `+seen+`
+	rows, err := r.d.Query(`SELECT `+cols+`, `+visibleCount+`, c.source = 'custom' AND `+handOrdered+`, `+art+` FROM collection c WHERE `+seen+`
 		ORDER BY c.name COLLATE NOCASE, c.id LIMIT ?3 OFFSET ?4`, append([]any{householdID, id, limit, offset, movieID}, a.Args()...)...)
 	return db.Collect(rows, err, func(s db.Scanner) (*View, error) {
 		var v View
-		if err := scanInto(rows, &v.Collection, &v.MovieCount, &v.CustomOrder); err != nil {
+		if err := scanInto(rows, &v.Collection, &v.MovieCount, &v.CustomOrder, &v.Art.Poster, &v.Art.Backdrop); err != nil {
 			return nil, err
 		}
 		return &v, nil
 	})
+}
+
+// Art is collection id's art as the audience sees it, whoever may see the
+// collection.
+func (r *Repo) Art(id uid.ID, a item.Audience) (item.Art, error) {
+	var out item.Art
+	err := r.d.QueryRow(`SELECT `+art+` FROM collection c WHERE c.id = ?1`, append([]any{id, nil, nil, nil, nil}, a.Args()...)...).
+		Scan(&out.Poster, &out.Backdrop)
+	return out, db.Wrap(err)
 }
 
 // List pages by name the collections the household and audience may see.

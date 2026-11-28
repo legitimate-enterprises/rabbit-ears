@@ -36,7 +36,7 @@ func (s *Server) SetKidsContent(ctx context.Context, r api.SetKidsContentRequest
 	if err := s.svc.Items.Repo().SetKidsContent(it.ID, it.KidsContent); err != nil {
 		return nil, err
 	}
-	v, err := s.item(it, caller(ctx).asAdmin())
+	v, err := s.item(ctx, it, caller(ctx).asAdmin())
 	return api.SetKidsContent200JSONResponse(v), err
 }
 

@@ -21,25 +21,25 @@ func (s *Server) GetItemRelated(ctx context.Context, r api.GetItemRelatedRequest
 	admin := caller(ctx).asAdmin()
 	out := api.GetItemRelated200JSONResponse{Collections: []api.RelatedCollection{}, Similar: []api.Item{}}
 	for _, c := range rel.Collections {
-		movies, err := s.items(c.Movies, admin)
+		movies, err := s.items(ctx, c.Movies, admin)
 		if err != nil {
 			return nil, err
 		}
 		out.Collections = append(out.Collections, api.RelatedCollection{Collection: toCollection(c.View), Items: movies})
 	}
-	if out.Previous, err = s.neighbor(rel.Previous, admin); err != nil {
+	if out.Previous, err = s.neighbor(ctx, rel.Previous, admin); err != nil {
 		return nil, err
 	}
-	out.Next, err = s.neighbor(rel.Next, admin)
+	out.Next, err = s.neighbor(ctx, rel.Next, admin)
 	return out, err
 }
 
 // neighbor is it as the list operations give it, nil for nil.
-func (s *Server) neighbor(it *item.Item, admin bool) (*api.Item, error) {
+func (s *Server) neighbor(ctx context.Context, it *item.Item, admin bool) (*api.Item, error) {
 	if it == nil {
 		return nil, nil
 	}
-	v, err := s.items([]*item.Item{it}, admin)
+	v, err := s.items(ctx, []*item.Item{it}, admin)
 	if err != nil {
 		return nil, err
 	}

@@ -57,6 +57,8 @@ const base = (active = 1) => ({
 const later = (min: number) => new Date(Date.now() + min * 60000).toISOString();
 const item = (id: number, name: string) => ({
   id: uid(id),
+  posterUrl: `/api/v2/artwork/w500/${uid(id)}.jpg`,
+  backdropUrl: `/api/v2/artwork/w1280/${uid(id)}.jpg`,
   libraryId: uid(1),
   kind: "movie",
   parsedTitle: name,
@@ -75,6 +77,7 @@ const program = (id: number, name: string, startsAt: string, endsAt = later(60))
 });
 const tune = (id: number, title: string, albumId = 5) => ({
   id: uid(id),
+  posterUrl: `/api/v2/artwork/w500/${uid(albumId)}.jpg`,
   title,
   artistId: uid(4),
   artistName: "The Hollow Pines",
@@ -216,9 +219,13 @@ describe("Stations lists", () => {
     ]);
     const tiles = [...r.querySelectorAll(".grid .wide")];
     expect(tiles[0].getAttribute("href")).toBe(`#/station/${uid(4)}`);
-    expect(tiles[0].querySelector(".art")!.getAttribute("data-art")).toBe(`${uid(30)}/backdrop`);
+    expect(tiles[0].querySelector(".art")!.getAttribute("data-art")).toBe(
+      `art:/api/v2/artwork/w1280/${uid(30)}.jpg`,
+    );
     expect(text(tiles[0].querySelectorAll(".sub"))[0]).toBe("On now: The Lantern Keeper");
-    expect(tiles[1].querySelector(".art")!.getAttribute("data-art")).toBe(`${uid(32)}/backdrop`);
+    expect(tiles[1].querySelector(".art")!.getAttribute("data-art")).toBe(
+      `art:/api/v2/artwork/w1280/${uid(32)}.jpg`,
+    );
     expect(text(tiles[1].querySelectorAll(".sub"))[0]).toMatch(/^Up next at .+: Moon Pie$/);
     // Nothing on or next: the station's own tile, carrying its name.
     expect(tiles[2].querySelector(".art")!.hasAttribute("data-art")).toBe(false);
@@ -259,7 +266,9 @@ describe("Stations lists", () => {
       "Playlists",
       "Stations",
     ]);
-    expect(r.querySelector(".grid .art.sq")!.getAttribute("data-art")).toBe(`${uid(5)}/poster`);
+    expect(r.querySelector(".grid .art.sq")!.getAttribute("data-art")).toBe(
+      `art:/api/v2/artwork/w500/${uid(5)}.jpg`,
+    );
     expect(text(r.querySelectorAll(".grid .poster .sub"))).toEqual([
       "On now: Paper Lanterns",
       "Next: Slow Tide",

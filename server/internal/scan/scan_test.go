@@ -48,17 +48,6 @@ type env struct {
 	d      *sql.DB
 }
 
-// generation is the artwork generation clients would be told after,
-// past the time changes settle.
-func (e *env) generation(after time.Duration) int64 {
-	e.t.Helper()
-	g, err := serverinfo.New(e.d).ArtworkGeneration(time.Now().UTC().Add(after), 10*time.Second)
-	if err != nil {
-		e.t.Fatal(err)
-	}
-	return g
-}
-
 func fixtureCopy(t *testing.T, name, dest string) {
 	t.Helper()
 	src, _ := filepath.Abs(filepath.Join("..", "..", "..", "fixtures", name))
