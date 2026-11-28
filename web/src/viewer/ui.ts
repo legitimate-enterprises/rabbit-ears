@@ -48,6 +48,8 @@ const PATHS: Record<string, string> = {
   grip: "M5 9h14M5 15h14",
   person: "M12 4a4 4 0 1 0 0 8 4 4 0 1 0 0-8zM4 20c0-4 4-6 8-6s8 2 8 6",
   house: "M3 11 12 4l9 7v9H3z",
+  sparkle:
+    "M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8zM19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z",
   star: "M12 3l2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-2.9-5.6 2.9 1.1-6.2L3 9.6l6.2-.9z",
 };
 export function icon(name: string, size = 20): SVGElement {
@@ -353,6 +355,10 @@ export function sel(label: string, options: string[], value: string, on: (v: str
   for (const o of options) s.append(h("option", { value: o, selected: o === value }, o));
   return h("label.sel", label, s);
 }
+
+/** The mark beside a smart list's name. */
+export const smartBadge = () =>
+  h("span.smart", { role: "img", "aria-label": "Smart", title: "Smart" }, icon("sparkle", 18));
 
 export const section = (label: string, ...kids: (Node | string)[]) =>
   h("section", { "aria-label": label }, ...kids);
