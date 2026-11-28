@@ -1643,6 +1643,67 @@ describe("logs", () => {
     expect(root.textContent).toContain("No entries match.");
   });
 
+  const reported = {
+    id: uid(4),
+    at: "2026-03-01T12:03:00Z",
+    level: "error",
+    source: "client",
+    message: "<img src=x onerror=alert(1)> Home failed",
+    client: {
+      platform: "ios",
+      appVersion: "1.4.7",
+      osVersion: "iOS 27.1",
+      context: "home",
+      detail: "TypeError: x is undefined\n  at render",
+      deviceId: uid(9),
+      deviceName: "Kitchen iPad",
+      profileId: uid(5),
+      profileName: "Kid",
+    },
+  };
+
+  it("shows a client's entry by platform, with where it came from in its details, as text", async () => {
+    await boot_({ "GET /logs": page([reported, ...entries]) });
+    const row = root.querySelector("tbody tr")!;
+    expect(row.children[2].textContent).toBe("iOS app");
+    expect(row.textContent).toContain("<img src=x onerror=alert(1)> Home failed");
+    expect(root.querySelector("tbody img")).toBeNull();
+    click(byText("button", "Show details"));
+    const detail = root.querySelector("tr.detail")!;
+    expect(detail.textContent).toContain("Rabbit Ears 1.4.7 on iOS 27.1");
+    expect(detail.textContent).toContain("Kitchen iPad");
+    expect(detail.textContent).toContain("Kid");
+    expect(detail.textContent).toContain("home");
+    expect(detail.querySelector("pre")?.textContent).toBe("TypeError: x is undefined\n  at render");
+  });
+
+  it("says a client's device and profile are gone once they are", async () => {
+    const { platform, appVersion, osVersion, context } = reported.client;
+    await boot_({
+      "GET /logs": page([{ ...reported, client: { platform, appVersion, osVersion, context } }]),
+    });
+    click(byText("button", "Show details"));
+    const detail = root.querySelector("tr.detail")!;
+    expect(detail.textContent).toContain("Device: removed");
+    expect(detail.textContent).toContain("Profile: removed");
+    expect(detail.querySelector("pre")).toBeNull();
+  });
+
+  it("filters to clients' entries and to one platform", async () => {
+    let query = new URL("http://x");
+    await boot_({
+      "GET /logs": (_b: unknown, url: URL) => ((query = url), page([reported])),
+    });
+    select("Source", "client");
+    select("Platform", "android");
+    await settle();
+    expect(query.searchParams.get("source")).toBe("client");
+    expect(query.searchParams.get("platform")).toBe("android");
+    select("Platform", "");
+    await settle();
+    expect(query.searchParams.has("platform")).toBe(false);
+  });
+
   it("a slow answer for an older filter never replaces the newer one", async () => {
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));

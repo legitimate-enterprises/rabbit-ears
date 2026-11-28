@@ -23,7 +23,18 @@ const SOURCES: [string, string][] = [
   ["auth", "Auth"],
   ["http", "HTTP"],
   ["server", "Server"],
+  ["client", "Clients"],
 ];
+const PLATFORMS: [string, string][] = [
+  ["", "All platforms"],
+  ["web", "Web"],
+  ["ios", "iOS"],
+  ["macos", "macOS"],
+  ["tvos", "Apple TV"],
+  ["android", "Android"],
+  ["roku", "Roku"],
+];
+const platformName = (p: string) => PLATFORMS.find(([v]) => v === p)?.[1] ?? p;
 const WINDOWS: [string, string, number][] = [
   ["today", "Today", 0],
   ["hour", "Last hour", 3600e3],
@@ -49,6 +60,7 @@ export async function logs(ctx: Ctx): Promise<HTMLElement[]> {
   const { api } = ctx;
   const level = select("Level", LEVELS, () => void reload());
   const source = select("Source", SOURCES, () => void reload());
+  const platform = select("Platform", PLATFORMS, () => void reload());
   const time = select(
     "Time",
     WINDOWS.map(([v, t]) => [v, t]),
@@ -71,6 +83,7 @@ export async function logs(ctx: Ctx): Promise<HTMLElement[]> {
     return {
       ...(level.value && { level: level.value as Schemas["LogLevel"] }),
       ...(source.value && { source: source.value }),
+      ...(platform.value && { platform: platform.value as Schemas["Platform"] }),
       since: since.toISOString(),
       ...(q.value.trim() && { q: q.value.trim() }),
     };
@@ -85,7 +98,8 @@ export async function logs(ctx: Ctx): Promise<HTMLElement[]> {
 
   const row = (e: Entry) => {
     const [label, kind] = LEVEL_TAG[e.level] ?? [e.level, ""];
-    const detail = !!(e.ffmpegCommand || e.transcodeReason);
+    const c = e.client;
+    const detail = !!(e.ffmpegCommand || e.transcodeReason || c);
     const expanded = open.has(e.id);
     const toggle = h(
       "button.ib",
@@ -109,7 +123,7 @@ export async function logs(ctx: Ctx): Promise<HTMLElement[]> {
             : local(e.at),
         ),
         h("td", tag(label, kind)),
-        h("td", e.source),
+        h("td", c ? `${platformName(c.platform)} app` : e.source),
         h("td", e.message, detail ? " " : null, detail ? toggle : null),
       ),
       ...(detail && expanded
@@ -121,6 +135,16 @@ export async function logs(ctx: Ctx): Promise<HTMLElement[]> {
                 { colSpan: 4 },
                 e.ffmpegCommand ? h("pre", e.ffmpegCommand) : null,
                 e.transcodeReason ? h("p.sub", e.transcodeReason) : null,
+                ...(c
+                  ? [
+                      h("p.sub", `Rabbit Ears ${c.appVersion} on ${c.osVersion} · In ${c.context}`),
+                      h(
+                        "p.sub",
+                        `Device: ${c.deviceName ?? "removed"} · Profile: ${c.profileName ?? "removed"}`,
+                      ),
+                      c.detail ? h("pre", c.detail) : null,
+                    ]
+                  : []),
               ),
             ),
           ]
@@ -177,6 +201,6 @@ export async function logs(ctx: Ctx): Promise<HTMLElement[]> {
 
   return [
     header("Logs", "", h("button.ib", { onclick: () => void download() }, "Download")),
-    card("Log entries", h("div.filters", level, source, time, q, caption), body),
+    card("Log entries", h("div.filters", level, source, platform, time, q, caption), body),
   ];
 }
