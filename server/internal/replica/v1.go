@@ -232,6 +232,10 @@ var V1 = Schema{
 			"created_at", "modified_at", "created_by", "modified_by", "station_owned"), Scope: `id IN (` + playlists + ` UNION ` + aired + `)`},
 		{Name: "playlist_entry", Source: "playlist_entry", Key: []string{"id"}, Cols: plain("id", "playlist_id", "item_id",
 			"collection_id", "rank", "added_at", "edition_id", "created_at", "modified_at", "created_by", "modified_by"), Scope: `playlist_id IN (` + playlists + ` UNION ` + aired + `)`},
+		// A smart list's rules are not synced: clients read which lists are
+		// smart, and their titles from playlist_entry and collection_movie.
+		{Name: "smart_list", Source: "smart_list", Key: []string{"id"}, Cols: plain("id", "playlist_id", "collection_id", "created_at"),
+			Scope: `playlist_id IN (` + playlists + ` UNION ` + aired + `) OR collection_id IN (SELECT id FROM collection WHERE ` + collections + `)`},
 		{Name: "playlist_share", Source: "playlist_share", Key: []string{"playlist_id", "account_id"},
 			Cols:      plain("playlist_id", "account_id", "access", "created_at"),
 			Scope:     `account_id IN (` + members + `) OR playlist_id IN (` + owned + `)`,
@@ -290,6 +294,8 @@ var V1 = Schema{
 		"download":     {"conversion_id"},
 		// A request is never edited; who made it is its sender.
 		"friend_request": {"modified_at", "created_by", "modified_by"},
+		// Editing the rules changes no synced row.
+		"smart_list": {"match", "modified_at", "created_by", "modified_by"},
 	},
 	Defines: map[string]Defines{
 		"household_member":         {Rows: true},
@@ -309,7 +315,7 @@ var V1 = Schema{
 		"account_identity", "conversion", "device_link", "identity_evidence", "identity_review", "join_code",
 		"library_folder", "log_entry", "occasion_seed", "playback_session", "seek_preview", "session_plan_entry", "song_release",
 		"sso_provider", "task", "task_run", "throughput_sample", "watch_together", "watch_together_member",
-		"schema_migration", "sync_clock", "sync_tombstone", "sync_action",
+		"schema_migration", "sync_clock", "sync_tombstone", "sync_action", "smart_group", "smart_condition",
 	},
 }
 

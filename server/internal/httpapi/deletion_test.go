@@ -409,6 +409,7 @@ func TestDeletingOwnAccountLeavesNoOrphans(t *testing.T) {
 		{`INSERT INTO household_member (household_id, account_id, created_at) VALUES (?,?,0)`, e.admin.household.ID, owner},
 		{`INSERT INTO playlist_household_share (playlist_id, household_id, access, created_at) VALUES (?,?,'read',0)`, given.Id, e.plain.household.ID},
 		{`INSERT INTO favorite (account_id, item_id, created_at) VALUES (?,?,0)`, owner, m},
+		{`INSERT INTO smart_list (id, playlist_id, match, created_at, modified_at) VALUES (?,?,'all',0,0)`, uid.New(), pl.Id},
 	} {
 		_, err := e.db.Exec(q.sql, q.a, q.b)
 		must(t, err)

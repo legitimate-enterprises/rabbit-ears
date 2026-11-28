@@ -1200,7 +1200,7 @@ export interface paths {
         put?: never;
         /**
          * Add many to a playlist, appended in order.
-         * @description Each entry is checked as `addPlaylistEntry` checks it, and its position and rank are ignored: the entries take the ranks of generateNKeysBetween after the last entry's; a title of several editions without an editionId takes its default edition. A station's own playlist is written through its owner's profile, as `addPlaylistEntry` writes it. Nothing is added unless every entry may be.
+         * @description Each entry is checked as `addPlaylistEntry` checks it, and its position and rank are ignored: the entries take the ranks of generateNKeysBetween after the last entry's; a title of several editions without an editionId takes its default edition. A station's own playlist is written through its owner's profile, as `addPlaylistEntry` writes it. Nothing is added unless every entry may be; a smart playlist answers 409.
          */
         post: operations["addPlaylistEntries"];
         delete?: never;
@@ -2993,7 +2993,7 @@ export interface paths {
         };
         /** @description A playlist neither the profile's own nor shared with it is not found. */
         get: operations["getPlaylist"];
-        /** Renames a playlist. Changing the kind of one that has entries answers 409; anyone but its owner answers 403. */
+        /** Renames a playlist. Changing the kind of one that has entries, or of a smart one, answers 409; anyone but its owner answers 403. */
         put: operations["replacePlaylist"];
         post?: never;
         /** Deletes a playlist with its entries and shares, and the stations of those it was shared with that play it. One the owner's own station plays answers 409; delete the station, or give it another playlist, first. Anyone but its owner answers 403. */
@@ -3031,6 +3031,9 @@ export interface paths {
          *     editionId. An editionId of another item, or on a show, season,
          *     album, artist or collection, answers 400. The entry keeps its
          *     edition when the title gains another.
+         *
+         *     A smart playlist's entries follow its rules: adding, moving and
+         *     removing one answers 409.
          */
         post: operations["addPlaylistEntry"];
         delete?: never;
@@ -3089,12 +3092,48 @@ export interface paths {
         get: operations["getPlaylistEntry"];
         /**
          * Reorder. Moves the entry to position, shifting the others; absent position moves it to the end. Access as addPlaylistEntry.
-         * @description The body names the entry's own item or collection; any other answers 400.
+         * @description The body names the entry's own item or collection; any other answers 400. A smart playlist answers 409.
          */
         put: operations["replacePlaylistEntry"];
         post?: never;
-        /** Access as addPlaylistEntry. */
+        /** Access as addPlaylistEntry; a smart playlist answers 409. */
         delete: operations["removePlaylistEntry"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/profiles/{profileId}/playlists/{playlistId}/rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                profileId: components["parameters"]["ProfileId"];
+                playlistId: components["parameters"]["PlaylistId"];
+            };
+            cookie?: never;
+        };
+        /** A smart playlist's rules. Access as getPlaylist; a playlist without rules answers 404. */
+        get: operations["getPlaylistRules"];
+        /**
+         * Makes the playlist smart or replaces its rules; its entries become the titles they match, at once. Its owner only; anyone else answers 403.
+         * @description A movies playlist holds movies, a tv playlist episodes and a music
+         *     playlist songs, each title once and without an edition (its default
+         *     plays), in a fixed order: movies by sort title; episodes by show,
+         *     season (specials last) and number; songs by artist, album and track.
+         *     An entry keeps its id while its title still matches. watched,
+         *     playCount and favorite read the owner's, whoever the playlist is
+         *     shared with; every profile sees only the entries it may see. While
+         *     it has rules, adding, moving and removing entries, and changing its
+         *     kind, answer 409. The server applies the rules again whenever the
+         *     library or the owner's watch state or favorites change. A field or
+         *     operator the kind lacks, or a missing, blank or extra value, answers
+         *     400 naming it, as groups.0.conditions.2.text. A station's own
+         *     playlist takes rules through its owner's profile.
+         */
+        put: operations["replacePlaylistRules"];
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -3403,8 +3442,8 @@ export interface paths {
         /**
          * Adds a movie to a custom collection.
          * @description Anything but a movie answers 400; an item the profile may not see
-         *     answers 404; a TMDB collection, or any while a kid is active,
-         *     answers 403.
+         *     answers 404; a TMDB collection, a smart one, or any while a kid is
+         *     active, answers 403.
          */
         put: operations["addCollectionMovie"];
         post?: never;
@@ -3457,6 +3496,33 @@ export interface paths {
         post?: never;
         /** Returns the collection to release order, clearing every position. Writes are refused as addCollectionMovie. */
         delete: operations["resetCollectionOrder"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/collections/{collectionId}/rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                collectionId: components["parameters"]["CollectionId"];
+            };
+            cookie?: never;
+        };
+        /** A smart collection's rules, for a collection the active profile may see; one without rules answers 404. */
+        get: operations["getCollectionRules"];
+        /**
+         * Makes a custom collection smart or replaces its rules; its movies become those they match, at once. A TMDB collection, or any while a kid is active, answers 403.
+         * @description Movie fields only: watched, playCount and favorite answer 400. The
+         *     movies keep release order. While it has rules, adding, removing and
+         *     reordering its movies answer 403. The server applies the rules again
+         *     whenever the library changes. Every profile sees only the movies it
+         *     may see.
+         */
+        put: operations["replaceCollectionRules"];
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -6387,6 +6453,8 @@ export interface components {
             access: components["schemas"]["PlaylistAccess"];
             /** @description For its owner, whether it is shared with any profile or household; for anyone else, true. Always sent; optional so a copy a client stored before the field existed still reads, as not shared. Clients draw a shared badge from it. */
             shared?: boolean;
+            /** @description True while rules choose its entries (getPlaylistRules). Always sent; optional so a copy a client stored before the field existed still reads. */
+            smart?: boolean;
             /** @description The owner's name, present when the playlist is shared with the profile or a household of theirs, for "Shared by". */
             ownerName?: string;
             kind: components["schemas"]["PlaylistKind"];
@@ -6636,6 +6704,8 @@ export interface components {
             movieCount: number;
             /** @description True while a custom collection's movies are in a hand order, set by replaceCollectionMoviePosition; false for release order, and always for TMDB. Always sent; optional so a copy a client stored before the field existed still reads. */
             customOrder?: boolean;
+            /** @description True while rules choose its movies (getCollectionRules). Always sent; optional so a copy a client stored before the field existed still reads. */
+            smart?: boolean;
             /** @description Server-relative URL of the collection's poster: its own TMDB image, else its first movie's in listCollectionMovies order for the active profile, served by getArtwork; it changes exactly when the image does. Absent when there is none. */
             posterUrl?: string;
             /** @description Server-relative URL of the collection's backdrop, as posterUrl, served by getArtwork; it changes exactly when the image does. Absent when there is none. */
@@ -6653,6 +6723,53 @@ export interface components {
             /** @description Where the movie goes, from 0; past the end or absent puts it last. */
             position?: number;
         };
+        /**
+         * @description all: every one of the parts must match; any: one is enough.
+         * @enum {string}
+         */
+        SmartMatch: "all" | "any";
+        /** @description What a smart playlist or collection holds: the titles that match `match` of its groups, each group matching `match` of its conditions. At most 50 conditions in all. */
+        SmartRules: {
+            match: components["schemas"]["SmartMatch"];
+            groups: components["schemas"]["SmartGroup"][];
+        };
+        SmartGroup: {
+            match: components["schemas"]["SmartMatch"];
+            conditions: components["schemas"]["SmartCondition"][];
+        };
+        /**
+         * @description One test of a title. Text fields take is, isNot, contains,
+         *     notContains, startsWith and endsWith with `text`, trimmed and never
+         *     blank; comparing ignores the case of A to Z only, as search does,
+         *     and counts accents. Number fields take is, isNot, lt, le, gt and ge
+         *     with `number`. Boolean fields take isTrue and isFalse with neither.
+         *     A missing value reads as false for every operator but isNot,
+         *     notContains and isFalse. genre, cast and director are lists: a
+         *     positive operator holds when any one matches, isNot and notContains
+         *     when none does, so also for an empty list.
+         *
+         *     movies (and collections, without watched, playCount and favorite):
+         *     title, contentRating, genre, cast, director (text); year, runtime in
+         *     minutes, playCount (number); hdr, uhd (a 4K file), watched, favorite
+         *     (boolean). tv, of each episode: title, show, contentRating, genre,
+         *     cast (text, the last three the show's); season, episode, year,
+         *     runtime, playCount (number); hdr, uhd, watched, favorite (boolean,
+         *     favorite also of its season or show). music, of each song: title,
+         *     artist, album, genre (text, genre the album's or its artist's);
+         *     year, duration in seconds, playCount (number); explicit, lossless,
+         *     favorite (boolean, favorite also of its album or an artist of it).
+         */
+        SmartCondition: {
+            field: components["schemas"]["SmartField"];
+            operator: components["schemas"]["SmartOperator"];
+            text?: string;
+            /** Format: int64 */
+            number?: number;
+        };
+        /** @enum {string} */
+        SmartField: "title" | "year" | "runtime" | "contentRating" | "genre" | "cast" | "director" | "hdr" | "uhd" | "watched" | "playCount" | "favorite" | "show" | "season" | "episode" | "artist" | "album" | "duration" | "explicit" | "lossless";
+        /** @enum {string} */
+        SmartOperator: "is" | "isNot" | "contains" | "notContains" | "startsWith" | "endsWith" | "lt" | "le" | "gt" | "ge" | "isTrue" | "isFalse";
         CollectionInput: {
             /** @description On createCollection: the new collection's id, a UUIDv7 the client chose; absent, the server chooses one. An id already in use answers 409. On replaceCollection, an id other than the path's answers 400. */
             id?: components["schemas"]["Id"];
@@ -6816,6 +6933,8 @@ export interface components {
             id: components["schemas"]["Id"];
             name: string;
             kind: components["schemas"]["PlaylistKind"];
+            /** @description True while rules choose what its playlist plays (getPlaylistRules on playlistId). Always sent; optional so a copy a client stored before the field existed still reads. */
+            smart?: boolean;
             /** @description The adult profile that owns it. */
             ownerId: components["schemas"]["Id"];
             /** @description The owner's household. */
@@ -13208,6 +13327,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             501: components["responses"]["NotImplemented"];
         };
     };
@@ -13231,6 +13351,66 @@ export interface operations {
                 };
                 content?: never;
             };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            501: components["responses"]["NotImplemented"];
+        };
+    };
+    getPlaylistRules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                profileId: components["parameters"]["ProfileId"];
+                playlistId: components["parameters"]["PlaylistId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The rules. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SmartRules"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            501: components["responses"]["NotImplemented"];
+        };
+    };
+    replacePlaylistRules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                profileId: components["parameters"]["ProfileId"];
+                playlistId: components["parameters"]["PlaylistId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SmartRules"];
+            };
+        };
+        responses: {
+            /** @description Saved and applied. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SmartRules"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
@@ -14024,6 +14204,63 @@ export interface operations {
                     "application/json": components["schemas"]["Collection"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            501: components["responses"]["NotImplemented"];
+        };
+    };
+    getCollectionRules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                collectionId: components["parameters"]["CollectionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The rules. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SmartRules"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            501: components["responses"]["NotImplemented"];
+        };
+    };
+    replaceCollectionRules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                collectionId: components["parameters"]["CollectionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SmartRules"];
+            };
+        };
+        responses: {
+            /** @description Saved and applied. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SmartRules"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];

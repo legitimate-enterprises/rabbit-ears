@@ -113,11 +113,11 @@ func TestIn(t *testing.T) {
 var (
 	userTables = []string{"library", "library_folder", "household", "account", "join_code", "playlist",
 		"playlist_entry", "collection", "station", "station_time", "sso_provider", "cover", "download",
-		"profile_offer", "occasion", "friend_request"}
+		"profile_offer", "occasion", "friend_request", "smart_list"}
 	systemTables = []string{"track", "chapter", "device", "playback_session", "task", "task_run",
 		"throughput_sample", "log_entry", "genre", "person", "credit", "seek_preview", "device_link", "item",
 		"watch_together", "edition", "media_file", "station_program", "account_identity", "conversion",
-		"identity_review", "identity_evidence"}
+		"identity_review", "identity_evidence", "smart_group", "smart_condition"}
 	keyedTables = []string{"account_allow", "session_plan_entry", "watch_state", "collection_movie",
 		"edition_file", "station_day", "station_loop", "playlist_share", "watch_together_member",
 		"item_metadata", "item_genre", "household_member", "adult_link", "playlist_household_share",
@@ -131,7 +131,7 @@ var (
 		"occasion", "occasion_exclusion", "occasion_item", "occasion_keyword", "occasion_phrase", "person",
 		"playlist", "playlist_entry", "playlist_household_share", "playlist_share", "profile_offer",
 		"server_info", "station", "station_day", "station_loop", "station_program", "station_time", "track",
-		"watch_state", "friendship", "friend_request", "friend_request_decline"}
+		"watch_state", "friendship", "friend_request", "friend_request_decline", "smart_list"}
 	// Id columns without a foreign key, and BLOB columns that are not ids.
 	unkeyedIDs = []string{"log_entry.session_id", "log_entry.item_id", "station_loop.entry_id",
 		"station_loop.item_id", "conversion.audio_track_id", "conversion.burn_track_id"}
@@ -308,7 +308,13 @@ func TestBaselineFollowsTheTableRules(t *testing.T) {
 	// Sync triggers are installed by internal/replica, never by a migration.
 	if got := names(t, d, "trigger"); !slices.Equal(got, []string{"collection_tmdb_empty", "edition_file_orphan",
 		"item_sort_insert", "item_sort_metadata_delete", "item_sort_metadata_insert", "item_sort_metadata_update",
-		"item_sort_setting_update", "item_sort_update"}) {
+		"item_sort_setting_update", "item_sort_update", "smart_credit_delete", "smart_credit_insert", "smart_credit_update",
+		"smart_edition_delete", "smart_edition_file_delete", "smart_edition_file_insert", "smart_edition_insert",
+		"smart_edition_update", "smart_favorite_delete", "smart_favorite_insert", "smart_genre_update", "smart_item_delete",
+		"smart_item_genre_delete", "smart_item_genre_insert", "smart_item_genre_update", "smart_item_insert", "smart_item_update",
+		"smart_media_file_update", "smart_metadata_delete", "smart_metadata_insert", "smart_metadata_update",
+		"smart_person_update", "smart_playlist_owner", "smart_server_info_update", "smart_track_delete", "smart_track_insert",
+		"smart_track_update", "smart_watch_delete", "smart_watch_insert", "smart_watch_update"}) {
 		t.Errorf("triggers %v", got)
 	}
 }
