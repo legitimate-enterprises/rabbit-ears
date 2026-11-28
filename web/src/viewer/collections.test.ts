@@ -461,3 +461,135 @@ describe("playlist with a collection", () => {
     expect(location.hash).toBe(`#/collection/${uid(8)}`);
   });
 });
+
+describe("smart collections", () => {
+  const rules = {
+    match: "all",
+    groups: [{ match: "all", conditions: [{ field: "director", operator: "is", text: "Lynch" }] }],
+  };
+
+  it("makes one for an adult only, with movie fields and none of a profile's own", async () => {
+    await at("#/movies?view=collections");
+    const r = root();
+    await boot(r, {
+      fetch: mockFetch({
+        ...base(),
+        "GET /collections": page([]),
+        "POST /collections": col(9, "Lynch"),
+        [`PUT /collections/${uid(9)}/rules`]: rules,
+        [`GET /collections/${uid(9)}`]: { ...col(9, "Lynch"), smart: true },
+        [`GET /collections/${uid(9)}/movies`]: page([]),
+      }),
+    });
+    await until(() => button(r, "New smart collection"));
+    button(r, "New smart collection").click();
+    const dlg = document.querySelector("[role=dialog]")!;
+    expect(dlg.querySelector("select[aria-label=Kind]")).toBeNull();
+    const field = dlg.querySelector<HTMLSelectElement>("select[aria-label=Field]")!;
+    const fields = text(field.options);
+    for (const own of ["Watched", "Plays", "Favorite"]) expect(fields).not.toContain(own);
+    expect(fields).toContain("Director");
+    dlg.querySelector<HTMLInputElement>("input[name=name]")!.value = "Lynch";
+    field.value = "director";
+    field.dispatchEvent(new Event("change"));
+    const v = dlg.querySelector<HTMLInputElement>("input[aria-label=Value]")!;
+    v.value = "Lynch";
+    v.dispatchEvent(new Event("input"));
+    dlg.querySelector("form")!.requestSubmit();
+    await until(() => r.querySelector("h1")?.textContent === "Lynch");
+    expect(calls.find((c) => c.key === "POST /collections")!.body).toEqual({ name: "Lynch" });
+    expect(calls.find((c) => c.key === `PUT /collections/${uid(9)}/rules`)!.body).toEqual(rules);
+
+    document.body.replaceChildren();
+    await at("#/movies?view=collections");
+    const kid = root();
+    await boot(kid, { fetch: mockFetch({ ...base(2), "GET /collections": page([]) }) });
+    await until(() => kid.querySelector(".vt"));
+    expect(button(kid, "New smart collection")).toBeUndefined();
+  });
+
+  it("deletes the new collection when its rules are refused", async () => {
+    await at("#/movies?view=collections");
+    const r = root();
+    await boot(r, {
+      fetch: mockFetch({
+        ...base(),
+        "GET /collections": page([]),
+        "POST /collections": col(9, "Lynch"),
+        [`PUT /collections/${uid(9)}/rules`]: () =>
+          json({ code: "bad_request", message: "bad", fields: [] }, 400),
+        [`DELETE /collections/${uid(9)}`]: none,
+      }),
+    });
+    await until(() => button(r, "New smart collection"));
+    button(r, "New smart collection").click();
+    const dlg = document.querySelector("[role=dialog]")!;
+    dlg.querySelector<HTMLInputElement>("input[name=name]")!.value = "Lynch";
+    const v = dlg.querySelector<HTMLInputElement>("input[aria-label=Value]")!;
+    v.value = "Lynch";
+    v.dispatchEvent(new Event("input"));
+    dlg.querySelector("form")!.requestSubmit();
+    await until(() => calls.some((c) => c.key === `DELETE /collections/${uid(9)}`));
+    await until(() => dlg.querySelector(".end")!.previousElementSibling!.textContent === "bad");
+  });
+
+  it("shows a smart one with its badge and Edit rules, and no hand editing of its movies", async () => {
+    const c = { ...col(8, "Lynch", "custom", 2, true), smart: true };
+    await at(`#/collection/${uid(8)}`);
+    const r = root();
+    await boot(r, {
+      fetch: mockFetch({
+        ...base(),
+        [`GET /collections/${uid(8)}`]: c,
+        [`GET /collections/${uid(8)}/movies`]: page(MOVIES),
+        [`GET /collections/${uid(8)}/rules`]: rules,
+        [`PUT /collections/${uid(8)}/rules`]: rules,
+      }),
+    });
+    await until(() => r.querySelector(".tracks"));
+    expect(r.querySelector("h1 [role=img][aria-label=Smart]")).toBeTruthy();
+    expect(r.querySelector("[aria-label^=Remove]")).toBeNull();
+    for (const label of ["Edit order", "Reset to release order"])
+      expect(button(r, label)).toBeUndefined();
+    expect(button(r, "Rename")).toBeDefined();
+    button(r, "Edit rules…").click();
+    await until(() => document.querySelector("[role=dialog] input[aria-label=Value]"));
+    const dlg = document.querySelector("[role=dialog]")!;
+    expect(dlg.querySelector<HTMLInputElement>("input[aria-label=Value]")!.value).toBe("Lynch");
+    dlg.querySelector("form")!.requestSubmit();
+    await until(() => calls.some((c) => c.key === `PUT /collections/${uid(8)}/rules`));
+
+    document.body.replaceChildren();
+    const kid = root();
+    await boot(kid, {
+      fetch: mockFetch({
+        ...base(2),
+        [`GET /collections/${uid(8)}`]: c,
+        [`GET /collections/${uid(8)}/movies`]: page(MOVIES),
+      }),
+    });
+    await until(() => kid.querySelector(".tracks"));
+    expect(button(kid, "Edit rules…")).toBeUndefined();
+  });
+
+  it("leaves smart collections out of Add to collection", async () => {
+    await at(`#/movie/${uid(30)}`);
+    const r = root();
+    await boot(r, {
+      fetch: mockFetch({
+        ...base(),
+        [`GET /items/${uid(30)}`]: movie(30, "Dune", 1984),
+        "GET /media-files": page([]),
+        [`GET /items/${uid(30)}/credits`]: { cast: [], crew: [] },
+        "GET /collections": page([col(8, "Date night"), { ...col(10, "Lynch"), smart: true }]),
+      }),
+    });
+    await until(() => button(r, "More"));
+    button(r, "More").click();
+    button(r, "Add to collection").click();
+    await until(() => document.querySelector("[role=dialog] .choices button"));
+    expect(text(document.querySelectorAll("[role=dialog] .choices button"))).toEqual([
+      "Date night",
+    ]);
+  });
+});

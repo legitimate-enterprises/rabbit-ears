@@ -5,7 +5,8 @@ import { ok, paged } from "../../admin/api";
 import type { Schemas } from "../../api/client";
 import { color, title, type Ctx } from "../data";
 import { plural } from "../format";
-import { back, icon, refresh, section } from "../ui";
+import { back, guard, icon, refresh, section, smartBadge } from "../ui";
+import { createSmart, rulesDialog } from "../rules";
 import { addButton, addToPlaylist, addToStation, confirmDelete, nameDialog } from "./playlists";
 import { reorder, row } from "./music";
 import { shuffleButton } from "../shuffle";
@@ -33,6 +34,13 @@ const cover = (c: Collection, cls: string, marked = false) =>
 const list = (ctx: Ctx) =>
   paged((offset) => ok(ctx.api.GET("/collections", { params: { query: { limit: 200, offset } } })));
 const create = (ctx: Ctx, name: string) => ok(ctx.api.POST("/collections", { body: { name } }));
+const putRules = (ctx: Ctx, collectionId: string, rules: Schemas["SmartRules"]) =>
+  ok(
+    ctx.api.PUT("/collections/{collectionId}/rules", {
+      params: { path: { collectionId } },
+      body: rules,
+    }),
+  );
 const member = (collectionId: string, itemId: string) => ({
   params: { path: { collectionId, itemId } },
 });
@@ -62,7 +70,39 @@ export async function collectionTiles(ctx: Ctx) {
           "New collection",
         )
       : null;
-  return { tiles, create: make };
+  const smart =
+    make &&
+    h(
+      "button.btn.s",
+      {
+        type: "button",
+        onclick: () =>
+          rulesDialog({
+            heading: "New smart collection",
+            kind: "collection",
+            name: "",
+            save: async (d) => {
+              const made = await createSmart(
+                () => create(ctx, d.name),
+                (collectionId) => putRules(ctx, collectionId, d.rules),
+                (collectionId) =>
+                  ok(
+                    ctx.api.DELETE("/collections/{collectionId}", {
+                      params: { path: { collectionId } },
+                    }),
+                  ),
+              );
+              ctx.go(`#/collection/${made.id}`);
+            },
+          }),
+      },
+      icon("sparkle", 16),
+      "New smart collection",
+    );
+  if (!make || !smart) return { tiles, create: null };
+  const both = document.createDocumentFragment();
+  both.append(make, smart);
+  return { tiles, create: both };
 }
 
 export const addToCollection = (ctx: Ctx, itemId: string) =>
@@ -70,7 +110,7 @@ export const addToCollection = (ctx: Ctx, itemId: string) =>
     ctx,
     "Add to collection",
     "New collection",
-    async () => (await list(ctx)).filter((c) => c.source === "custom"),
+    async () => (await list(ctx)).filter((c) => c.source === "custom" && !c.smart),
     (name) => create(ctx, name),
     (c) => ok(ctx.api.PUT("/collections/{collectionId}/movies/{itemId}", member(c.id, itemId))),
   );
@@ -90,7 +130,9 @@ export async function collection(ctx: Ctx, [id]: string[]) {
     ok(ctx.api.GET("/collections/{collectionId}", p)),
     listMovies(),
   ]);
-  const edit = ctx.profile.kind === "adult" && c.source === "custom";
+  // An adult manages a custom collection; its movies change by hand only while it has no rules.
+  const manage = ctx.profile.kind === "adult" && c.source === "custom";
+  const edit = manage && !c.smart;
   let editing = false;
   const err = errorLine();
   const meta = h("div.meta");
@@ -190,7 +232,7 @@ export async function collection(ctx: Ctx, [id]: string[]) {
       cover(c, "poster220"),
       h(
         "div.info",
-        h("h1.big", c.name),
+        h("h1.big", c.name, c.smart ? smartBadge() : null),
         meta,
         h(
           "div.actions",
@@ -198,7 +240,35 @@ export async function collection(ctx: Ctx, [id]: string[]) {
           addToPlaylist(ctx, { collectionId: c.id }, "movies"),
           addToStation(ctx, { collectionId: c.id }, "movies"),
           dyn,
-          edit
+          manage && c.smart
+            ? h(
+                "button.btn.s",
+                {
+                  type: "button",
+                  onclick: guard(async () =>
+                    rulesDialog({
+                      heading: "Edit rules",
+                      kind: "collection",
+                      name: c.name,
+                      rules: await ok(ctx.api.GET("/collections/{collectionId}/rules", p)),
+                      save: async (d) => {
+                        await putRules(ctx, collectionId, d.rules);
+                        if (d.name !== c.name)
+                          await ok(
+                            ctx.api.PUT("/collections/{collectionId}", {
+                              ...p,
+                              body: { name: d.name },
+                            }),
+                          );
+                        refresh();
+                      },
+                    }),
+                  ),
+                },
+                "Edit rules…",
+              )
+            : null,
+          manage
             ? h(
                 "button.btn.s",
                 {
@@ -214,7 +284,7 @@ export async function collection(ctx: Ctx, [id]: string[]) {
                 "Rename",
               )
             : null,
-          edit
+          manage
             ? h(
                 "button.btn.s",
                 {
