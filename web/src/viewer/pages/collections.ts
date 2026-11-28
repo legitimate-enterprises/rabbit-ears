@@ -55,54 +55,42 @@ export async function collectionTiles(ctx: Ctx) {
       h("span.sub", plural(c.movieCount, "movie")),
     ),
   );
-  const make =
-    ctx.profile.kind === "adult"
-      ? h(
-          "button.btn.s",
-          {
-            type: "button",
-            onclick: () =>
-              nameDialog("New collection", "Create", "", async (name) =>
-                ctx.go(`#/collection/${(await create(ctx, name)).id}`),
-              ),
-          },
-          icon("plus", 16),
-          "New collection",
-        )
-      : null;
-  const smart =
-    make &&
-    h(
-      "button.btn.s",
-      {
-        type: "button",
-        onclick: () =>
-          rulesDialog({
-            heading: "New smart collection",
-            kind: "collection",
-            name: "",
-            save: async (d) => {
-              const made = await createSmart(
-                () => create(ctx, d.name),
-                (collectionId) => putRules(ctx, collectionId, d.rules),
-                (collectionId) =>
-                  ok(
-                    ctx.api.DELETE("/collections/{collectionId}", {
-                      params: { path: { collectionId } },
-                    }),
-                  ),
-              );
-              ctx.go(`#/collection/${made.id}`);
-            },
-          }),
+  if (ctx.profile.kind !== "adult") return { tiles, create: null };
+  const smart = (name: string) =>
+    rulesDialog({
+      heading: "New smart collection",
+      kind: "collection",
+      save: async (d) => {
+        const made = await createSmart(
+          () => create(ctx, name),
+          (collectionId) => putRules(ctx, collectionId, d.rules),
+          (collectionId) =>
+            ok(
+              ctx.api.DELETE("/collections/{collectionId}", {
+                params: { path: { collectionId } },
+              }),
+            ),
+        );
+        ctx.go(`#/collection/${made.id}`);
       },
-      icon("sparkle", 16),
-      "New smart collection",
-    );
-  if (!make || !smart) return { tiles, create: null };
-  const both = document.createDocumentFragment();
-  both.append(make, smart);
-  return { tiles, create: both };
+    });
+  const make = h(
+    "button.btn.s",
+    {
+      type: "button",
+      onclick: () =>
+        nameDialog(
+          "New collection",
+          "Create",
+          "",
+          async (name) => ctx.go(`#/collection/${(await create(ctx, name)).id}`),
+          smart,
+        ),
+    },
+    icon("plus", 16),
+    "New collection",
+  );
+  return { tiles, create: make };
 }
 
 export const addToCollection = (ctx: Ctx, itemId: string) =>

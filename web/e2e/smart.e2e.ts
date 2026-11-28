@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { api, seed, signIn } from "./support";
 
-test("an adult makes a smart playlist and a smart collection whose titles follow their rules", async ({
+test("an adult makes a plain playlist, and a smart playlist and collection whose titles follow their rules", async ({
   page,
   request,
 }) => {
@@ -18,9 +18,29 @@ test("an adult makes a smart playlist and a smart collection whose titles follow
   await expect(page.getByRole("main").getByRole("region").first()).toBeVisible();
   await page.evaluate(() => (location.hash = "#/movies?view=playlists"));
 
-  await page.getByRole("button", { name: "New smart playlist" }).click();
+  await expect(page.getByRole("button", { name: "New playlist" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "New smart playlist" })).toHaveCount(0);
+  await page.getByRole("button", { name: "New playlist" }).click();
+  let named = page.getByRole("dialog", { name: "New playlist" });
+  await named.getByLabel("Name").fill("Plain one");
+  await expect(named.getByRole("switch", { name: "Smart" })).not.toBeChecked();
+  await named.getByRole("button", { name: "Create" }).click();
+  await expect(page.getByRole("heading", { name: "Plain one" })).toBeVisible();
+  await expect(page.getByRole("img", { name: "Smart" })).toHaveCount(0);
+  const plainId = page.url().split("#/playlist/")[1];
+
+  await page.evaluate(() => (location.hash = "#/movies?view=playlists"));
+  await page.getByRole("button", { name: "New playlist" }).click();
+  named = page.getByRole("dialog", { name: "New playlist" });
+  await named.getByLabel("Name").fill("Only one");
+  await named.getByLabel("Name").press("Tab");
+  const toggle = named.getByRole("switch", { name: "Smart" });
+  await expect(toggle).toBeFocused();
+  await page.keyboard.press("Space");
+  await expect(toggle).toBeChecked();
+  await named.getByRole("button", { name: "Create" }).click();
   let sheet = page.getByRole("dialog", { name: "New smart playlist" });
-  await sheet.getByLabel("Name").fill("Only one");
+  await expect(sheet.getByLabel("Name")).toHaveCount(0);
   await sheet.getByLabel("Field").selectOption("Title");
   await sheet.getByLabel("Value").fill(first);
   await sheet.getByRole("button", { name: "Save" }).click();
@@ -42,9 +62,13 @@ test("an adult makes a smart playlist and a smart collection whose titles follow
   const playlistId = page.url().split("#/playlist/")[1];
 
   await page.evaluate(() => (location.hash = "#/movies?view=collections"));
-  await page.getByRole("button", { name: "New smart collection" }).click();
+  await expect(page.getByRole("button", { name: "New smart collection" })).toHaveCount(0);
+  await page.getByRole("button", { name: "New collection" }).click();
+  named = page.getByRole("dialog", { name: "New collection" });
+  await named.getByLabel("Name").fill("Just the one");
+  await named.getByRole("switch", { name: "Smart" }).check();
+  await named.getByRole("button", { name: "Create" }).click();
   sheet = page.getByRole("dialog", { name: "New smart collection" });
-  await sheet.getByLabel("Name").fill("Just the one");
   await sheet.getByLabel("Value").fill(first);
   await sheet.getByRole("button", { name: "Save" }).click();
   await expect(page.getByRole("heading", { name: "Just the one" })).toBeVisible();
@@ -55,9 +79,8 @@ test("an adult makes a smart playlist and a smart collection whose titles follow
   await page.getByRole("dialog").getByRole("button", { name: "Delete" }).click();
   await expect(page).toHaveURL(/view=collections/);
   const me = await (await request.get(`${api}/me`, { headers })).json();
-  expect(
-    (
-      await request.delete(`${api}/profiles/${me.account.id}/playlists/${playlistId}`, { headers })
-    ).ok(),
-  ).toBeTruthy();
+  for (const id of [playlistId, plainId])
+    expect(
+      (await request.delete(`${api}/profiles/${me.account.id}/playlists/${id}`, { headers })).ok(),
+    ).toBeTruthy();
 });

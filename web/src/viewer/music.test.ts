@@ -570,8 +570,10 @@ describe("playlists", () => {
       "kind=music",
     );
     expect(r.querySelector(".grid .sub")!.textContent).toBe("2 songs");
+    expect(button(r, "New smart playlist")).toBeUndefined();
     button(r, "New playlist").click();
     const dlg = document.querySelector("[role=dialog]")!;
+    expect(dlg.querySelector<HTMLInputElement>("input[role=switch]")!.checked).toBe(false);
     dlg.querySelector("input")!.value = "Late night";
     dlg.querySelector("form")!.requestSubmit();
     await until(() => r.querySelector("h1")?.textContent === "Late night");
@@ -579,6 +581,7 @@ describe("playlists", () => {
       name: "Late night",
       kind: "music",
     });
+    expect(calls.some((c) => c.key.endsWith("/rules"))).toBe(false);
     expect(r.textContent).toContain("Nothing here yet.");
   });
 
@@ -590,9 +593,23 @@ describe("playlists", () => {
         { match: "all", conditions: [{ field: "artist", operator: "is", text: "Radiohead" }] },
       ],
     };
-    const fill = (dlg: Element, name: string, artist: string) => {
-      const n = dlg.querySelector<HTMLInputElement>("input[name=name]")!;
-      n.value = name;
+    // Names the playlist in New playlist with Smart on; the rule editor follows, without a name.
+    const start = async (r: HTMLElement, name: string) => {
+      await until(() => button(r, "New playlist"));
+      expect(button(r, "New smart playlist")).toBeUndefined();
+      button(r, "New playlist").click();
+      const named = document.querySelector("[role=dialog]")!;
+      named.querySelector<HTMLInputElement>("input[type=text]")!.value = name;
+      named.querySelector<HTMLInputElement>("input[role=switch][aria-label=Smart]")!.click();
+      named.querySelector("form")!.requestSubmit();
+      await until(() => document.querySelector("[role=dialog] select[aria-label=Field]"));
+      const dlg = document.querySelector("[role=dialog]")!;
+      expect(dlg.querySelector("h1")!.textContent).toBe("New smart playlist");
+      expect(dlg.querySelector("input[name=name]")).toBeNull();
+      expect(calls.some((c) => c.key === `POST ${P}`)).toBe(false);
+      return dlg;
+    };
+    const fill = (dlg: Element, artist: string) => {
       const f = dlg.querySelector<HTMLSelectElement>("select[aria-label=Field]")!;
       f.value = "artist";
       f.dispatchEvent(new Event("change"));
@@ -615,11 +632,9 @@ describe("playlists", () => {
           [`GET ${P}/${uid(10)}/play-order`]: page([]),
         }),
       });
-      await until(() => button(r, "New smart playlist"));
-      button(r, "New smart playlist").click();
-      const dlg = document.querySelector("[role=dialog]")!;
+      const dlg = await start(r, "Only Radiohead");
       expect(dlg.querySelector<HTMLSelectElement>("select[aria-label=Kind]")!.value).toBe("music");
-      fill(dlg, "Only Radiohead", "Radiohead");
+      fill(dlg, "Radiohead");
       dlg.querySelector("form")!.requestSubmit();
       await until(() => r.querySelector("h1")?.textContent?.startsWith("Only Radiohead"));
       expect(calls.find((c) => c.key === `POST ${P}`)!.body).toEqual({
@@ -649,10 +664,8 @@ describe("playlists", () => {
           [`DELETE ${P}/${uid(10)}`]: none,
         }),
       });
-      await until(() => button(r, "New smart playlist"));
-      button(r, "New smart playlist").click();
-      const dlg = document.querySelector("[role=dialog]")!;
-      fill(dlg, "Only Radiohead", "Radiohead");
+      const dlg = await start(r, "Only Radiohead");
+      fill(dlg, "Radiohead");
       dlg.querySelector("form")!.requestSubmit();
       await until(() => calls.some((c) => c.key === `DELETE ${P}/${uid(10)}`));
       await until(() => dlg.querySelector(".rulerow .err:not([hidden])"));

@@ -118,12 +118,15 @@ describe("Collections view", () => {
       `art:/api/v2/artwork/w500/${uid(7)}.jpg`,
     );
 
+    expect(button(r, "New smart collection")).toBeUndefined();
     button(r, "New collection").click();
     const dlg = document.querySelector("[role=dialog]")!;
+    expect(dlg.querySelector<HTMLInputElement>("input[role=switch]")!.checked).toBe(false);
     dlg.querySelector("input")!.value = "Rainy days";
     dlg.querySelector("form")!.requestSubmit();
     await until(() => r.querySelector("h1")?.textContent === "Rainy days");
     expect(calls.find((c) => c.key === "POST /collections")!.body).toEqual({ name: "Rainy days" });
+    expect(calls.some((c) => c.key.endsWith("/rules"))).toBe(false);
   });
 
   it("lists them for a kid, with no way to make one and no Playlists", async () => {
@@ -467,6 +470,22 @@ describe("smart collections", () => {
     match: "all",
     groups: [{ match: "all", conditions: [{ field: "director", operator: "is", text: "Lynch" }] }],
   };
+  // Names the collection in New collection with Smart on; the rule editor follows, without a name.
+  const start = async (r: HTMLElement, name: string) => {
+    await until(() => button(r, "New collection"));
+    expect(button(r, "New smart collection")).toBeUndefined();
+    button(r, "New collection").click();
+    const named = document.querySelector("[role=dialog]")!;
+    named.querySelector<HTMLInputElement>("input[type=text]")!.value = name;
+    named.querySelector<HTMLInputElement>("input[role=switch][aria-label=Smart]")!.click();
+    named.querySelector("form")!.requestSubmit();
+    await until(() => document.querySelector("[role=dialog] select[aria-label=Field]"));
+    const dlg = document.querySelector("[role=dialog]")!;
+    expect(dlg.querySelector("h1")!.textContent).toBe("New smart collection");
+    expect(dlg.querySelector("input[name=name]")).toBeNull();
+    expect(calls.some((c) => c.key === "POST /collections")).toBe(false);
+    return dlg;
+  };
 
   it("makes one for an adult only, with movie fields and none of a profile's own", async () => {
     await at("#/movies?view=collections");
@@ -481,15 +500,12 @@ describe("smart collections", () => {
         [`GET /collections/${uid(9)}/movies`]: page([]),
       }),
     });
-    await until(() => button(r, "New smart collection"));
-    button(r, "New smart collection").click();
-    const dlg = document.querySelector("[role=dialog]")!;
+    const dlg = await start(r, "Lynch");
     expect(dlg.querySelector("select[aria-label=Kind]")).toBeNull();
     const field = dlg.querySelector<HTMLSelectElement>("select[aria-label=Field]")!;
     const fields = text(field.options);
     for (const own of ["Watched", "Plays", "Favorite"]) expect(fields).not.toContain(own);
     expect(fields).toContain("Director");
-    dlg.querySelector<HTMLInputElement>("input[name=name]")!.value = "Lynch";
     field.value = "director";
     field.dispatchEvent(new Event("change"));
     const v = dlg.querySelector<HTMLInputElement>("input[aria-label=Value]")!;
@@ -505,7 +521,7 @@ describe("smart collections", () => {
     const kid = root();
     await boot(kid, { fetch: mockFetch({ ...base(2), "GET /collections": page([]) }) });
     await until(() => kid.querySelector(".vt"));
-    expect(button(kid, "New smart collection")).toBeUndefined();
+    expect(button(kid, "New collection")).toBeUndefined();
   });
 
   it("deletes the new collection when its rules are refused", async () => {
@@ -521,10 +537,7 @@ describe("smart collections", () => {
         [`DELETE /collections/${uid(9)}`]: none,
       }),
     });
-    await until(() => button(r, "New smart collection"));
-    button(r, "New smart collection").click();
-    const dlg = document.querySelector("[role=dialog]")!;
-    dlg.querySelector<HTMLInputElement>("input[name=name]")!.value = "Lynch";
+    const dlg = await start(r, "Lynch");
     const v = dlg.querySelector<HTMLInputElement>("input[aria-label=Value]")!;
     v.value = "Lynch";
     v.dispatchEvent(new Event("input"));

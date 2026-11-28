@@ -71,15 +71,22 @@ const create = (ctx: Ctx, name: string, kind: Kind) =>
     }),
   );
 
-/** A dialog around one name field; submit runs act, errors stay in the dialog. */
+/**
+ * A dialog around one name field; submit runs act, errors stay in the dialog. Given smart, a
+ * Smart switch, off at first, hands the name to smart instead, once this dialog is closed.
+ */
 export function nameDialog(
   heading: string,
   go: string,
   value: string,
   act: (name: string) => Promise<unknown>,
+  smart?: (name: string) => unknown,
 ) {
   const e = errorLine();
   const name = input("text", { required: true, maxLength: 100, value });
+  const toggle = smart
+    ? (h("input", { type: "checkbox", role: "switch", "aria-label": "Smart" }) as HTMLInputElement)
+    : null;
   const d = dialog(
     heading,
     h(
@@ -87,10 +94,21 @@ export function nameDialog(
       {
         onsubmit: (ev: Event) => {
           ev.preventDefault();
+          if (toggle?.checked) {
+            d.close();
+            smart!(name.value.trim());
+            return;
+          }
           act(name.value.trim()).then(d.close, (x: Error) => showError(e, x.message));
         },
       },
       field("Name", name),
+      toggle &&
+        h(
+          "div.row",
+          h("span", h("b", "Smart"), h("br"), h("span.sub", "Fills itself from rules you set.")),
+          toggle,
+        ),
       e,
       formEnd(() => d.close(), go),
     ),
@@ -111,56 +129,49 @@ export async function playlistTiles(ctx: Ctx, kind: Kind) {
     ),
   );
   if (ctx.profile.kind !== "adult") return { tiles, create: null };
+  const smart = (name: string) =>
+    rulesDialog({
+      heading: "New smart playlist",
+      kind,
+      kindChoice: "choose",
+      save: async (d) => {
+        const k = d.kind as Kind;
+        const made = await createSmart(
+          () => create(ctx, name, k),
+          (playlistId) =>
+            ok(
+              ctx.api.PUT("/profiles/{profileId}/playlists/{playlistId}/rules", {
+                params: { path: { ...path(ctx), playlistId } },
+                body: d.rules,
+              }),
+            ),
+          (playlistId) =>
+            ok(
+              ctx.api.DELETE("/profiles/{profileId}/playlists/{playlistId}", {
+                params: { path: { ...path(ctx), playlistId } },
+              }),
+            ),
+        );
+        ctx.go(`#/playlist/${made.id}`);
+      },
+    });
   const make = h(
     "button.btn.s",
     {
       type: "button",
       onclick: () =>
-        nameDialog("New playlist", "Create", "", async (name) =>
-          ctx.go(`#/playlist/${(await create(ctx, name, kind)).id}`),
+        nameDialog(
+          "New playlist",
+          "Create",
+          "",
+          async (name) => ctx.go(`#/playlist/${(await create(ctx, name, kind)).id}`),
+          smart,
         ),
     },
     icon("plus", 16),
     "New playlist",
   );
-  const smart = h(
-    "button.btn.s",
-    {
-      type: "button",
-      onclick: () =>
-        rulesDialog({
-          heading: "New smart playlist",
-          kind,
-          name: "",
-          kindChoice: "choose",
-          save: async (d) => {
-            const k = d.kind as Kind;
-            const made = await createSmart(
-              () => create(ctx, d.name, k),
-              (playlistId) =>
-                ok(
-                  ctx.api.PUT("/profiles/{profileId}/playlists/{playlistId}/rules", {
-                    params: { path: { ...path(ctx), playlistId } },
-                    body: d.rules,
-                  }),
-                ),
-              (playlistId) =>
-                ok(
-                  ctx.api.DELETE("/profiles/{profileId}/playlists/{playlistId}", {
-                    params: { path: { ...path(ctx), playlistId } },
-                  }),
-                ),
-            );
-            ctx.go(`#/playlist/${made.id}`);
-          },
-        }),
-    },
-    icon("sparkle", 16),
-    "New smart playlist",
-  );
-  const both = document.createDocumentFragment();
-  both.append(make, smart);
-  return { tiles, create: both };
+  return { tiles, create: make };
 }
 
 /** Every row of the playlist's play order. */
