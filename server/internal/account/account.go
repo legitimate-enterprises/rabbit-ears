@@ -311,10 +311,11 @@ func (r *Repo) Rehome(a *Account, householdID *uid.ID, by *uid.ID) error {
 }
 
 // ByHousehold lists who is in a household: its owner first, then adults
-// before kids.
+// before kids, each eldest first and those with no birthday after by name.
 func (r *Repo) ByHousehold(householdID uid.ID) ([]*Account, error) {
 	return r.query(`SELECT `+cols+` FROM account WHERE id IN (SELECT account_id FROM membership WHERE household_id = ?1)
-		ORDER BY id IS NOT (SELECT adult_id FROM household WHERE id = ?1), kind, name COLLATE NOCASE, created_at, id`, householdID)
+		ORDER BY id IS NOT (SELECT adult_id FROM household WHERE id = ?1), kind, birthday IS NULL, birthday, name COLLATE NOCASE,
+		created_at, id`, householdID)
 }
 
 // leastUsedColor is the palette color the fewest members of the household

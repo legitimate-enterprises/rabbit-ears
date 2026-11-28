@@ -2,6 +2,7 @@ package account_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -117,6 +118,40 @@ func TestPendingAdultAndKidRules(t *testing.T) {
 }
 
 func ptr(id uid.ID) *uid.ID { return &id }
+
+func TestByHouseholdOrdersByBirthThenName(t *testing.T) {
+	d := dbtest.Open(t)
+	ar, hr := account.New(d), household.New(d)
+	owner, h := adultWithHousehold(t, ar, hr, "zed@example.test")
+	born := func(y int) *time.Time { b := time.Date(y, 3, 1, 0, 0, 0, 0, time.UTC); return &b }
+	for _, a := range []*account.Account{
+		{Kind: account.Kid, Name: "max"},
+		{Kind: account.Kid, Name: "Ben", Birthday: born(2018)},
+		{Kind: account.Adult, Email: "amy@example.test", Name: "Amy"},
+		{Kind: account.Kid, Name: "Zoe", Birthday: born(2012)},
+		{Kind: account.Adult, Email: "bob@example.test", Name: "Bob", Birthday: born(1990)},
+		{Kind: account.Kid, Name: "Ann", Birthday: born(2018)},
+		{Kind: account.Adult, Email: "cal@example.test", Name: "Cal", Birthday: born(1980)},
+		{Kind: account.Kid, Name: "Lou"},
+	} {
+		a.HouseholdID = &h.ID
+		if err := ar.Create(a, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m, err := ar.ByHousehold(h.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, a := range m {
+		got = append(got, a.Name)
+	}
+	want := []string{owner.Name, "Cal", "Bob", "Amy", "Zoe", "Ann", "Ben", "Lou", "max"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
 
 func TestDeletedWithMatchesTheCascade(t *testing.T) {
 	d := dbtest.Open(t)
