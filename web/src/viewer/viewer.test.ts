@@ -1125,7 +1125,9 @@ describe("grids", () => {
     await until(() => r.querySelector("h1")?.textContent === "Slow Horses");
     await at(`#/show/${uid(41)}`);
     await until(() => r.querySelector(".err")?.textContent === "Show not found");
-    expect(calls.filter((c) => c.query.includes("kind=show"))).toHaveLength(0);
+    expect(
+      calls.filter((c) => c.key === "GET /items" && c.query.includes("kind=show")),
+    ).toHaveLength(0);
   });
 
   it("hides the Kids chip on a kid profile and keeps it for an adult", async () => {
@@ -1137,6 +1139,7 @@ describe("grids", () => {
       "All",
       "Unwatched",
       "In progress",
+      "Favorites",
       "Kids",
     ]);
     document.body.replaceChildren();
@@ -1147,6 +1150,7 @@ describe("grids", () => {
       "All",
       "Unwatched",
       "In progress",
+      "Favorites",
     ]);
   });
 
@@ -3816,18 +3820,26 @@ describe("primary navigation", () => {
 
   it("shows only the sections the server has libraries for, and remembers them", async () => {
     const r = await start(page([lib("movies"), lib("music")]));
-    await until(() => labels(r).join() === "Home,Movies,Music,Stations");
+    await until(() => labels(r).join() === "Home,Movies,Music,Stations,Favorites");
     expect(localStorage.getItem("rabbit-ears.sections")).toBe('["movies","music"]');
     // The next load shows the remembered answer before the server answers.
     const again = await start(() => new Promise(() => {}));
     await until(() => labels(again).length);
-    expect(labels(again).join()).toBe("Home,Movies,Music,Stations");
+    expect(labels(again).join()).toBe("Home,Movies,Music,Stations,Favorites");
   });
 
   it("shows every section until the server answers, and keeps the last set when it fails", async () => {
     const r = await start(json({ code: "internal", message: "x" }, 500));
     await until(() => labels(r).length);
-    expect(labels(r)).toEqual(["Home", "TV", "Movies", "Music", "YouTube", "Stations"]);
+    expect(labels(r)).toEqual([
+      "Home",
+      "TV",
+      "Movies",
+      "Music",
+      "YouTube",
+      "Stations",
+      "Favorites",
+    ]);
   });
 
   it("sends a direct link to a hidden section to Home", async () => {
@@ -3863,7 +3875,7 @@ describe("primary navigation", () => {
       vi.useRealTimers();
     }
     answer(page([lib("movies")]));
-    await until(() => labels(r).join() === "Home,Movies,Stations");
+    await until(() => labels(r).join() === "Home,Movies,Stations,Favorites");
   });
 });
 

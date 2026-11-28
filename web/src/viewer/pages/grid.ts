@@ -19,6 +19,7 @@ import { collectionTiles } from "./collections";
 import { hasPlaylists, playlistTiles } from "./playlists";
 import { stationTiles } from "./stations";
 import { selection } from "../select";
+import { favorites } from "../favorites";
 
 const SORTS = {
   tv: ["Recently added", "Title", "Last watched", "Released"],
@@ -128,6 +129,7 @@ export async function grid(
     "All",
     "Unwatched",
     "In progress",
+    "Favorites",
     ...(ctx.profile.kind === "adult" ? ["Kids"] : []),
   ];
   let filter = filters.includes(query.get("filter")!) ? query.get("filter")! : "All";
@@ -138,10 +140,13 @@ export async function grid(
   const hiding = !!ctx.profile.hideKidsContent;
   const kidsOnly = () => hiding && filter === "Kids";
   let kids: Item[] | undefined;
+  let starred: Set<string> | undefined;
   const inGenre = new Map<string, Set<string>>();
   const genreKey = (g: string) => `${g}${kidsOnly() ? "k" : ""}`;
   // Loads what the current picks need; the kids list stays out of the shared cache of unfiltered titles.
   const ready = async () => {
+    if (filter === "Favorites" && !starred)
+      starred = new Set((await favorites(ctx, itemKind)).map((f) => f.itemId));
     if (kidsOnly() && !kids) {
       kids = await items(ctx.api, { kind: itemKind, kidsContent: true });
       statEntries(kids).forEach(([id, s]) => stats.set(id, s));
@@ -157,7 +162,10 @@ export async function grid(
   };
   await ready();
   // Draws at once when everything is loaded, so a pick that needs no request stays synchronous.
-  const loaded = () => !(kidsOnly() && !kids) && !(genre && !inGenre.has(genreKey(genre)));
+  const loaded = () =>
+    !(filter === "Favorites" && !starred) &&
+    !(kidsOnly() && !kids) &&
+    !(genre && !inGenre.has(genreKey(genre)));
   const redraw = () => (loaded() ? draw() : void ready().then(draw));
   // The picks ride in the hash without a history entry, so a redraw or a return to the page keeps them.
   const remember = () => {
@@ -181,6 +189,7 @@ export async function grid(
       All: () => true,
       Unwatched: isUnwatched,
       "In progress": isStarted,
+      Favorites: (i) => !!starred?.has(i.id),
       Kids: (i) => !!i.kidsContent,
     };
     const list = (kidsOnly() ? kids! : all)

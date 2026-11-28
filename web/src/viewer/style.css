@@ -304,6 +304,12 @@ select.in {
 .btn.wide {
   width: 100%;
 }
+.btn.star {
+  padding: 0 12px;
+}
+.btn.star[aria-pressed="true"] {
+  color: var(--amber);
+}
 .solo,
 .whopage {
   display: flex;

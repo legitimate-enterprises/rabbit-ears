@@ -404,8 +404,10 @@ describe("Video details", () => {
     expect(kv).toContain("Chapters1");
     expect(kv).toContain("SubtitlesEnglish");
     expect(kv).toContain("Open on YouTube");
-    const labels = [...r.querySelectorAll(".actions .btn")].map((b) => b.textContent);
-    expect(labels).toEqual(["Play", "Mark watched", "Watch together"]);
+    const labels = [...r.querySelectorAll(".actions .btn")].map(
+      (b) => b.textContent || b.getAttribute("aria-label"),
+    );
+    expect(labels).toEqual(["Play", "Favorite", "Mark watched", "Watch together"]);
   });
 
   it("links the source only when its address is http or https", async () => {
@@ -464,8 +466,10 @@ describe("Video details", () => {
       }),
     });
     await until(() => r.querySelector(".actions"));
-    const labels = [...r.querySelectorAll(".actions .btn")].map((b) => b.textContent);
-    expect(labels).toEqual(["Resume", "Mark watched", "Dismiss", "Watch together"]);
+    const labels = [...r.querySelectorAll(".actions .btn")].map(
+      (b) => b.textContent || b.getAttribute("aria-label"),
+    );
+    expect(labels).toEqual(["Resume", "Favorite", "Mark watched", "Dismiss", "Watch together"]);
     [...r.querySelectorAll("button")].find((b) => b.textContent === "Dismiss")!.click();
     await until(() =>
       calls.some((c) => c.key === `DELETE /profiles/${uid(1)}/watch-state/${uid(60)}/position`),
@@ -642,6 +646,7 @@ describe("Home and kids", () => {
       "Music",
       "YouTube",
       "Stations",
+      "Favorites",
     ]);
   });
 });
@@ -664,6 +669,7 @@ describe("Movies views and filters", () => {
       "All",
       "Unwatched",
       "In progress",
+      "Favorites",
       "Kids",
     ]);
   });

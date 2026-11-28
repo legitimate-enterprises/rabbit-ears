@@ -42,6 +42,7 @@ import { artKey, artOf } from "../artwork";
 import { watchTogether } from "../together";
 import { markWatched } from "../select";
 import { shuffleButton } from "../shuffle";
+import { star } from "../favorites";
 import { addToCollection } from "./collections";
 import { occasionRows } from "./occasion";
 import { addToPlaylist, addToStation } from "./playlists";
@@ -343,6 +344,7 @@ export async function movie(ctx: Ctx, [id]: string[]): Promise<HTMLElement[]> {
         h(
           "div.actions",
           play,
+          star(ctx, "movie", m.id),
           edition,
           await more(
             ctx,
@@ -416,6 +418,7 @@ export async function show(ctx: Ctx, [id]: string[]): Promise<HTMLElement[]> {
                 `${inProgress(w) ? "Resume" : started ? "Play next" : "Play"} ${epCode(next)}`,
               )
             : null,
+          star(ctx, "show", s.id),
           shuffleButton(ctx, eps, s),
           await more(ctx, s, allWatched, () => markWatched(ctx, [s.id], !allWatched), [
             addToPlaylist(ctx, s.id, "tv"),
@@ -527,6 +530,7 @@ export async function season(ctx: Ctx, [id]: string[]): Promise<HTMLElement[]> {
                 `${inProgress(ws.get(next.id)) ? "Resume" : "Play"} E${next.episodeNumber}`,
               )
             : null,
+          star(ctx, "season", se.id),
           shuffleButton(ctx, eps, sh),
           btn(
             allWatched ? "Mark all unwatched" : "Mark all watched",
@@ -613,6 +617,7 @@ export async function episode(ctx: Ctx, [id]: string[]): Promise<HTMLElement[]> 
         h(
           "div.actions",
           play,
+          star(ctx, "episode", e.id),
           h("a.btn.s", { href: `#/play/${e.id}?pos=0` }, "Start over"),
           btn(
             w?.watched ? "Mark unwatched" : "Mark watched",
@@ -718,6 +723,7 @@ export async function video(ctx: Ctx, [id]: string[]): Promise<HTMLElement[]> {
         h(
           "div.actions",
           play,
+          star(ctx, "video", v.id),
           btn(
             v.watched ? "Mark unwatched" : "Mark watched",
             "check",

@@ -19,6 +19,7 @@ import { collection } from "./pages/collections";
 import { occasion } from "./pages/occasion";
 import { editStation, newStation, stationPage, stations, tune } from "./pages/stations";
 import { channel, youtube } from "./pages/youtube";
+import { favoritesPage } from "./pages/favorites";
 import { mini, music as musicEngine, resetMusic } from "./audio";
 import { command, helpSheet, SECTIONS } from "./keys";
 import { follow, onLive, type LiveEvent } from "./live";
@@ -56,6 +57,7 @@ const routes: Record<string, Page> = {
   youtube,
   channel,
   video,
+  favorites: favoritesPage,
 };
 
 /** The routes that show what each kind of event changes; the player follows its own. */
@@ -413,6 +415,7 @@ function topbar(ctx: Ctx, current: string, q: string) {
       shown.has("music") && link("music", "Music"),
       shown.has("youtube") && link("youtube", "YouTube"),
       link("stations", "Stations"),
+      link("favorites", "Favorites"),
     ),
     h("span.grow"),
     h(

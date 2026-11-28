@@ -234,6 +234,7 @@ describe("music section", () => {
       "Music",
       "YouTube",
       "Stations",
+      "Favorites",
     ]);
     expect(text(r.querySelectorAll("nav.vt a"))).toEqual([
       "Albums",
@@ -298,6 +299,52 @@ describe("music playback", () => {
     expect(r.querySelector("section[aria-label='Up next']")!.textContent).toContain(
       "Nothing up next.",
     );
+  });
+
+  it("stars an album, its artist and the song playing, the song on Now playing", async () => {
+    const favs = `/profiles/${uid(1)}/favorites`;
+    const routes = {
+      ...base(),
+      [`GET ${favs}`]: (_: unknown, u: URL) =>
+        page(
+          u.searchParams.get("kind") === "album"
+            ? [{ itemId: uid(100), kind: "album", createdAt: ts }]
+            : [],
+        ),
+      [`GET /music/artists/${uid(50)}`]: {
+        id: uid(50),
+        libraryId: uid(3),
+        name: "Radiohead",
+        sortName: "Radiohead",
+        albumCount: 9,
+        songCount: 112,
+        genres: [],
+        addedAt: ts,
+      },
+      [`PUT ${favs}/${uid(2)}`]: none,
+    };
+    const star = () => r.querySelector<HTMLButtonElement>("button.star")!;
+    await at(`#/album/${uid(100)}`);
+    const r = root();
+    await boot(r, { fetch: mockFetch(routes) });
+    await until(() => star()?.getAttribute("aria-pressed") === "true" && !star().disabled);
+    await at(`#/artist/${uid(50)}`);
+    await until(() => r.querySelector("h1")?.textContent === "Radiohead" && !star()?.disabled);
+    expect(star().getAttribute("aria-pressed")).toBe("false");
+    await at(`#/album/${uid(100)}`);
+    await until(() => r.querySelector(".tracks"));
+    r.querySelectorAll<HTMLElement>(".tracks .tr")[1].click();
+    await until(() => music()?.pb);
+    r.querySelector<HTMLElement>(".mini a.np")!.click();
+    await until(() => r.querySelector(".np-page") && star() && !star().disabled);
+    expect(star().getAttribute("aria-pressed")).toBe("false");
+    star().click();
+    await until(() => star().getAttribute("aria-pressed") === "true");
+    expect(calls.some((c) => c.key === `PUT ${favs}/${uid(2)}`)).toBe(true);
+    // Shuffle and Repeat repaint their own pressed state, never the star's.
+    button(r, "Repeat").click();
+    button(r, "Repeat").click();
+    expect(star().getAttribute("aria-pressed")).toBe("true");
   });
 
   it("flips the art to the file details and back, and forgets the choice on leaving", async () => {

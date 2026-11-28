@@ -11,6 +11,7 @@ import { addToPlaylist, addToStation, hasPlaylists, playlistTiles } from "./play
 import { stationTiles } from "./stations";
 import { selection } from "../select";
 import { artOf } from "../artwork";
+import { star } from "../favorites";
 
 type Album = Schemas["MusicAlbum"];
 type Artist = Schemas["MusicArtist"];
@@ -314,6 +315,7 @@ export async function artist(ctx: Ctx, [id]: string[]) {
           () => songsOf(ctx, { artistId, sort: "album" }),
           a.name,
           href,
+          star(ctx, "artist", a.id),
           addToPlaylist(ctx, a.id, "music"),
           addToStation(ctx, a.id, "music"),
         ),
@@ -375,6 +377,7 @@ export async function album(ctx: Ctx, [id]: string[]) {
           async () => songs,
           al.title,
           href,
+          star(ctx, "album", al.id),
           addToPlaylist(ctx, al.id, "music"),
           addToStation(ctx, al.id, "music"),
         ),
@@ -484,13 +487,14 @@ export async function nowPlaying(ctx: Ctx) {
           "div.actions",
           toggle("Shuffle", "shuffle", m.q.shuffle, () => m.q.setShuffle(!m.q.shuffle)),
           toggle("Repeat", "repeat", m.q.repeat, () => (m.q.repeat = !m.q.repeat)),
+          star(ctx, "song", s.id),
           addToPlaylist(ctx, s.id, "music"),
           addToStation(ctx, s.id, "music"),
         ),
         m.error ? h("p.err", { role: "alert" }, m.error) : "",
       );
     } else
-      left.querySelectorAll<HTMLElement>("[aria-pressed]").forEach((b) => {
+      left.querySelectorAll<HTMLElement>("[aria-pressed]:not(.star)").forEach((b) => {
         b.setAttribute(
           "aria-pressed",
           String(b.textContent === "Shuffle" ? m.q.shuffle : m.q.repeat),

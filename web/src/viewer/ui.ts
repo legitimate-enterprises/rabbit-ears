@@ -48,6 +48,7 @@ const PATHS: Record<string, string> = {
   grip: "M5 9h14M5 15h14",
   person: "M12 4a4 4 0 1 0 0 8 4 4 0 1 0 0-8zM4 20c0-4 4-6 8-6s8 2 8 6",
   house: "M3 11 12 4l9 7v9H3z",
+  star: "M12 3l2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-2.9-5.6 2.9 1.1-6.2L3 9.6l6.2-.9z",
 };
 export function icon(name: string, size = 20): SVGElement {
   const svg = document.createElementNS(NS, "svg");
