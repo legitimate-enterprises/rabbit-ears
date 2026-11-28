@@ -373,6 +373,63 @@ func TestPeopleAreHouseholdsAndLinkedAdults(t *testing.T) {
 	}
 }
 
+// Friends see each other off TVs, and no one else of the other's household;
+// Friends lists them alone.
+func TestFriendsAreSeenOffTVs(t *testing.T) {
+	d := dbtest.Open(t)
+	ar, hr := account.New(d), household.New(d)
+	joined := func(email string) (*account.Account, *household.Household) {
+		a, h := adultWithHousehold(t, ar, hr, email)
+		a.PasswordHash = "h"
+		if err := ar.Update(a, nil); err != nil {
+			t.Fatal(err)
+		}
+		return a, h
+	}
+	ann, _ := joined("ann")
+	bob, his := joined("bob")
+	kid := &account.Account{Kind: account.Kid, Name: "kid", HouseholdID: &his.ID}
+	if err := ar.Create(kid, nil); err != nil {
+		t.Fatal(err)
+	}
+	lo, hi := ann.ID, bob.ID
+	if lo.Compare(hi) > 0 {
+		lo, hi = hi, lo
+	}
+	if _, err := d.Exec(`INSERT INTO friendship (a_id, b_id, created_at) VALUES (?,?,0)`, lo, hi); err != nil {
+		t.Fatal(err)
+	}
+	people := func(a *account.Account, tv bool) string {
+		t.Helper()
+		got, err := ar.People(a, tv, 0, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return names(got)
+	}
+	if got := people(ann, false); got != "bob " {
+		t.Fatalf("a friend is seen, their kid is not: %q", got)
+	}
+	if got := people(bob, false); got != "ann kid " {
+		t.Fatalf("a friendship is seen from both ends: %q", got)
+	}
+	if got := people(ann, true); got != "" {
+		t.Fatalf("a friend is not seen on a TV: %q", got)
+	}
+	if got := people(kid, false); got != "bob " {
+		t.Fatalf("a kid gains nothing from an adult's friends: %q", got)
+	}
+	if ok, err := ar.Sees(ann, bob.ID, false); err != nil || !ok {
+		t.Fatalf("Sees must agree with People: %v %v", ok, err)
+	}
+	if got, err := ar.Friends(bob, 10, 0); err != nil || names(got) != "ann " {
+		t.Fatalf("Friends is the friendships alone: %q %v", names(got), err)
+	}
+	if _, err := d.Exec(`INSERT INTO friendship (a_id, b_id, created_at) VALUES (?,?,0)`, hi, lo); err == nil {
+		t.Fatal("a friendship is stored once, lower id first")
+	}
+}
+
 // Create keeps a client's id and stamps who made the row; an update stamps
 // who changed it, and a PIN attempt changes neither.
 func TestAuditColumns(t *testing.T) {

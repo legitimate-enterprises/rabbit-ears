@@ -65,6 +65,7 @@ type Services struct {
 	DeviceLinks *DeviceLinkService
 	AdultLinks  *AdultLinkService
 	Offers      *OfferService
+	Friends     *FriendService
 	Sessions    *SessionService
 	Playback    *PlaybackService
 	WatchStates *WatchStateService
@@ -134,6 +135,7 @@ func New(d *sql.DB) *Services {
 		DeviceLinks: NewDeviceLinkService(d),
 		AdultLinks:  NewAdultLinkService(d),
 		Offers:      NewOfferService(d),
+		Friends:     NewFriendService(d),
 		Sessions:    NewSessionService(session.New(d)),
 		Playback:    playback,
 		WatchStates: NewWatchStateService(watchstate.New(d)),

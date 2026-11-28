@@ -90,13 +90,20 @@ const (
 	// reach them.
 	owned     = `SELECT id FROM playlist WHERE account_id IN (` + members + `)`
 	playlists = owned + ` UNION SELECT playlist_id FROM playlist_reach WHERE account_id IN (` + members + `)`
+	// incoming are the friend requests to members, those sent to the email
+	// of one other than its sender.
+	incoming = `SELECT r.id FROM friend_request r JOIN account a ON a.email = r.email AND a.id <> r.from_id
+		WHERE a.id IN (` + members + `)`
 	// known are the accounts members see: who shares a household with one,
-	// the adults linked with one, and the other side of their playlists and
-	// profile offers.
+	// the adults linked with one, their friends, who asked one to be
+	// friends, and the other side of their playlists and profile offers.
 	known = `SELECT m2.account_id FROM membership m1 JOIN membership m2 ON m2.household_id = m1.household_id
 			WHERE m1.account_id IN (` + members + `)
 		UNION SELECT b_id FROM adult_link WHERE a_id IN (` + members + `)
 		UNION SELECT a_id FROM adult_link WHERE b_id IN (` + members + `)
+		UNION SELECT b_id FROM friendship WHERE a_id IN (` + members + `)
+		UNION SELECT a_id FROM friendship WHERE b_id IN (` + members + `)
+		UNION SELECT from_id FROM friend_request WHERE id IN (` + incoming + `)
 		UNION SELECT account_id FROM playlist WHERE id IN (` + playlists + `)
 		UNION SELECT account_id FROM playlist_share WHERE playlist_id IN (` + playlists + `)
 		UNION SELECT from_id FROM profile_offer WHERE household_id = ?1 OR to_id IN (` + members + `)
@@ -194,6 +201,22 @@ var V1 = Schema{
 		{Name: "adult_link", Source: "adult_link", Key: []string{"a_id", "b_id"}, Cols: plain("a_id", "b_id", "tv", "created_at"),
 			Scope:     `a_id IN (` + members + `) OR b_id IN (` + members + `)`,
 			TombScope: `k1 IN (` + known + `) OR k2 IN (` + known + `)`},
+		{Name: "friendship", Source: "friendship", Key: []string{"a_id", "b_id"}, Cols: plain("a_id", "b_id", "created_at"),
+			Scope:     `a_id IN (` + members + `) OR b_id IN (` + members + `)`,
+			TombScope: `k1 IN (` + known + `) OR k2 IN (` + known + `)`},
+		// Members' own requests, as they sent them: whatever the receiver
+		// does, none of these columns changes.
+		{Name: "friend_request", Source: "friend_request", Key: []string{"id"}, Cols: plain("id", "from_id", "email", "created_at",
+			"expires_at"), Scope: `from_id IN (` + members + `)`},
+		// The requests to members, to_id being the member asked.
+		{Name: "friend_request_in", Source: "friend_request", Key: []string{"id"}, Cols: append(plain("id", "from_id", "created_at",
+			"expires_at"), Col{Name: "to_id", Expr: `(SELECT a.id FROM account a WHERE a.email = friend_request.email)`,
+			Watch: []string{"email"}, Type: "BLOB"}), Scope: `id IN (` + incoming + `)`},
+		// Its tombstones reach the decliner's households alone, so no
+		// sender learns of a decline from one.
+		{Name: "friend_request_decline", Source: "friend_request_decline", Key: []string{"account_id", "request_id"},
+			Cols: plain("account_id", "request_id", "created_at"), Scope: `account_id IN (` + members + `)`,
+			TombScope: `k1 IN (` + members + `)`},
 		{Name: "profile_offer", Source: "profile_offer", Key: []string{"id"}, Cols: plain("id", "profile_id", "household_id", "from_id",
 			"to_id", "created_at", "modified_at", "created_by", "modified_by"), Scope: `household_id = ?1 OR from_id IN (` + members + `) OR to_id IN (` + members + `)`},
 		{Name: "account_allow", Source: "account_allow", Key: []string{"account_id", "item_id"}, Cols: plain("account_id", "item_id"),
@@ -265,14 +288,18 @@ var V1 = Schema{
 		"station_time": {"created_at", "modified_at", "created_by", "modified_by"},
 		"cover":        {"jpeg", "modified_at", "created_by", "modified_by"},
 		"download":     {"conversion_id"},
+		// A request is never edited; who made it is its sender.
+		"friend_request": {"modified_at", "created_by", "modified_by"},
 	},
 	Defines: map[string]Defines{
 		"household_member":         {Rows: true},
 		"adult_link":               {Rows: true, Update: []string{"tv"}},
+		"friendship":               {Rows: true},
+		"friend_request":           {Rows: true},
 		"profile_offer":            {Rows: true},
 		"playlist_share":           {Rows: true},
 		"playlist_household_share": {Rows: true},
-		"account":                  {Update: []string{"household_id"}},
+		"account":                  {Update: []string{"household_id", "email"}},
 		"playlist":                 {Update: []string{"account_id"}},
 		"station":                  {Rows: true, Update: []string{"visibility", "account_id", "playlist_id"}},
 		"playlist_entry":           {Rows: true, Update: []string{"playlist_id", "collection_id"}, When: crossing},

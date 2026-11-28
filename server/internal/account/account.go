@@ -227,14 +227,16 @@ func (r *Repo) Labels(viewer *Account, ids []uid.ID) (map[uid.ID]Label, error) {
 	return out, err
 }
 
-// seen selects the profiles ?1 sees: who has joined any household it is in
-// and the adults an admin linked it with, on a TV (?2) only the links set
-// for TVs.
+// seen selects the profiles ?1 sees: who has joined any household it is in,
+// the adults an admin linked it with, on a TV (?2) only the links set for
+// TVs, and off a TV its friends.
 const seen = ` FROM account WHERE id != ?1 AND revoked_at IS NULL AND (kind = 'kid' OR password_hash IS NOT NULL) AND (
 	EXISTS (SELECT 1 FROM membership mine JOIN membership theirs ON theirs.household_id = mine.household_id
 		WHERE mine.account_id = ?1 AND theirs.account_id = account.id)
 	OR EXISTS (SELECT 1 FROM adult_link l WHERE (NOT ?2 OR l.tv)
-		AND (l.a_id = ?1 AND l.b_id = account.id OR l.b_id = ?1 AND l.a_id = account.id)))`
+		AND (l.a_id = ?1 AND l.b_id = account.id OR l.b_id = ?1 AND l.a_id = account.id))
+	OR NOT ?2 AND EXISTS (SELECT 1 FROM friendship f
+		WHERE f.a_id = ?1 AND f.b_id = account.id OR f.b_id = ?1 AND f.a_id = account.id))`
 
 // Linked pages by name the joined, unrevoked adults an admin linked a with,
 // on a TV (tv) only by the links set for TVs.
@@ -243,6 +245,13 @@ func (r *Repo) Linked(a *Account, tv bool, limit, offset int) ([]*Account, error
 		AND EXISTS (SELECT 1 FROM adult_link l WHERE (NOT ?2 OR l.tv)
 			AND (l.a_id = ?1 AND l.b_id = account.id OR l.b_id = ?1 AND l.a_id = account.id))
 		ORDER BY name COLLATE NOCASE, id LIMIT ?3 OFFSET ?4`, a.ID, tv, limit, offset)
+}
+
+// Friends pages by name the joined, unrevoked adults a is friends with.
+func (r *Repo) Friends(a *Account, limit, offset int) ([]*Account, error) {
+	return r.query(`SELECT `+cols+` FROM account WHERE revoked_at IS NULL AND password_hash IS NOT NULL
+		AND EXISTS (SELECT 1 FROM friendship f WHERE f.a_id = ?1 AND f.b_id = account.id OR f.b_id = ?1 AND f.a_id = account.id)
+		ORDER BY name COLLATE NOCASE, id LIMIT ?2 OFFSET ?3`, a.ID, limit, offset)
 }
 
 // People pages by name the profiles a sees; a limit of 0 is all of them.

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -488,13 +489,11 @@ func TestSortTitlesReachReplicas(t *testing.T) {
 	if err := db.MigrateTo(d, 1); err != nil {
 		t.Fatal(err)
 	}
-	// A table a later migration creates had no trigger in that release.
-	then := replica.V1
-	then.Tables = slices.DeleteFunc(slices.Clone(then.Tables), func(tb replica.Table) bool {
-		return count(t, d, `SELECT count(*) FROM sqlite_schema WHERE type = 'table' AND name = ?`, tb.Source) == 0
-	})
-	for _, q := range then.Triggers() {
-		mustExec(t, d, q)
+	for _, q := range replica.V1.Triggers() {
+		// A table a later migration makes has no trigger before it.
+		if _, err := d.Exec(q); err != nil && !strings.Contains(err.Error(), "no such table") {
+			t.Fatal(err)
+		}
 	}
 	mustExec(t, d, `UPDATE sync_clock SET release = '0.22.0'`)
 	mustExec(t, d, `INSERT INTO server_info (id, name, metadata_source, metadata_mode, created_at, modified_at) VALUES (1, 'S', 'local', 'preferred', 0, 0)`)

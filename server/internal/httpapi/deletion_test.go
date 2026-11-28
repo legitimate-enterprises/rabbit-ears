@@ -417,7 +417,13 @@ func TestDeletingOwnAccountLeavesNoOrphans(t *testing.T) {
 		a, b := ordered(owner, other)
 		_, err := e.db.Exec(`INSERT INTO adult_link (a_id, b_id, created_at) VALUES (?,?,0)`, a, b)
 		must(t, err)
+		_, err = e.db.Exec(`INSERT INTO friendship (a_id, b_id, created_at) VALUES (?,?,0)`, a, b)
+		must(t, err)
 	}
+	e.expect(202, "POST", "/friend-requests", e.plain.token, map[string]any{"email": e.admin.account.Email}, nil)
+	var asked api.OutgoingFriendRequest
+	e.expect(202, "POST", "/friend-requests", e.admin.token, map[string]any{"email": e.plain.account.Email}, &asked)
+	e.expect(204, "DELETE", "/friend-requests/"+itoa(asked.Id), e.plain.token, nil, nil)
 	e.offer(201, e.plain.token, k.Id, e.admin.account.ID)
 	e.offer(201, e.admin.token, e.kid(e.admin, "Rex").Id, owner)
 	e.expect(201, "POST", admins+"/"+itoa(given.Id)+"/shares", e.admin.token, map[string]any{"profileId": owner, "access": "read"}, nil)

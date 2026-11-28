@@ -214,6 +214,23 @@ func clean(ctx context.Context, d *service.DownloadService) {
 	}
 }
 
+// expire deletes expired friend requests hourly, so they leave replicas
+// too; until then every read leaves them out.
+func expire(ctx context.Context, f *service.FriendService) {
+	t := time.NewTicker(time.Hour)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if _, err := f.Expire(); err != nil {
+				logstore.Log("server").Warn("Could not delete expired friend requests", "err", err)
+			}
+		}
+	}
+}
+
 // resetPassword gives the adult with the email in args a temporary password
 // and prints it: the way back in for an admin locked out of every device.
 func resetPassword(args []string, out io.Writer) error {
@@ -365,9 +382,10 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	var bg sync.WaitGroup
-	bg.Add(4)
+	bg.Add(5)
 	go func() { defer bg.Done(); reap(ctx, svc.Playback) }()
 	go func() { defer bg.Done(); clean(ctx, svc.Downloads) }()
+	go func() { defer bg.Done(); expire(ctx, svc.Friends) }()
 	go func() { defer bg.Done(); air(ctx, svc.Stations) }()
 	go func() { defer bg.Done(); svc.Downloads.Run(ctx) }()
 	if err := startScanning(ctx, &bg, d, client, data, svc.Channels.Schedule, svc.Events); err != nil {

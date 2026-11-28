@@ -57,7 +57,7 @@ func TestReplayableOperations(t *testing.T) {
 		"replaceCollectionMoviePosition", "resetCollectionOrder",
 		"createStation", "replaceStation", "deleteStation", "rescheduleStation",
 		"allowItem", "disallowItem", "setKidsContent", "clearKidsContent", "setKidsContents", "setYouTubeChannelForKids",
-		"setProfilePreferences", "putFavorite", "deleteFavorite",
+		"setProfilePreferences", "putFavorite", "deleteFavorite", "sendFriendRequest", "deleteFriendRequest", "deleteFriend",
 	}
 	doc, err := api.GetSpec()
 	if err != nil {

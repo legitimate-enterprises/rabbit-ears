@@ -621,6 +621,104 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/friends": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The active adult's friends, by name. Friends offer each other as share and Watch together targets off TVs, and are never in each other's households. Kids get 403. `email` and `householdId` are left out. */
+        get: operations["listFriends"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/friends/{profileId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                profileId: components["parameters"]["ProfileId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Either friend ends a friendship, and the other is not told.
+         * @description Neither then offers the other as a target anew. What they shared already stays as it is: a playlist shared with the other stays shared until its owner stops sharing it, and a Watch together both are in plays on. One who is not the active adult's friend is 404. Kids get 403.
+         */
+        delete: operations["deleteFriend"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/friend-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The friend requests the active adult received and has not declined, and those they sent, newest first, until each expires. Kids get 403. */
+        get: operations["listFriendRequests"];
+        put?: never;
+        /**
+         * Asks whoever holds an email to be friends; the answer says nothing of them.
+         * @description The adult who holds the email, unless it is the sender, receives the request. The answer, and all the sender can later read of the request, is the same whoever holds the email: no one, an adult who has not answered or has declined, a pending or revoked adult, the sender themself, a friend already, or an adult who asked the sender first or ended a friendship with them. The request stays as sent among the sender's until it expires, 30 days on, or the sender withdraws it; it goes early only when accepted. A second request to an email while one is listed answers that one. Emails compare as sign-in compares them, ignoring case and surrounding space. More than 20 requests from one adult within a day answer 429. Kids get 403.
+         */
+        post: operations["sendFriendRequest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/friend-requests/{requestId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                requestId: components["parameters"]["FriendRequestId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** The sender withdraws a request, or the adult asked declines it. A declined request leaves the decliner's list only: nothing the sender reads of it changes. A request the active adult does not list is 404. Kids get 403. */
+        delete: operations["deleteFriendRequest"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/friend-requests/{requestId}/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                requestId: components["parameters"]["FriendRequestId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** The adult asked accepts: the two are friends, and the request goes with any between them the other way. A request the active adult received and lists is the only one they accept (404); a sender no longer to be had, as one revoked, is 409. Kids get 403. */
+        post: operations["acceptFriendRequest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/profiles": {
         parameters: {
             query?: never;
@@ -4581,6 +4679,39 @@ export interface components {
             /** @description Of the device household's profiles; empty for an adult only present there. */
             outgoing: components["schemas"]["ProfileOffer"][];
         };
+        FriendRequestInput: {
+            /** @description The new request's id, a UUIDv7 the client chose; absent, the server chooses one. An id already in use answers 409. */
+            id?: components["schemas"]["Id"];
+            /** Format: email */
+            email: string;
+        };
+        /** @description A request the active adult sent, as they sent it. It reads the same whoever holds the email, so it says nothing of them. */
+        OutgoingFriendRequest: {
+            id: components["schemas"]["Id"];
+            /** @description As the sender wrote it, less surrounding space. */
+            email: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            expiresAt: string;
+        };
+        /** @description A request to the active adult from another. */
+        IncomingFriendRequest: {
+            id: components["schemas"]["Id"];
+            fromProfileId: components["schemas"]["Id"];
+            fromName: string;
+            fromColor: components["schemas"]["ProfileColor"];
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            expiresAt: string;
+        };
+        FriendRequestList: {
+            /** @description To the active adult, those they declined left out. */
+            incoming: components["schemas"]["IncomingFriendRequest"][];
+            /** @description From the active adult. */
+            outgoing: components["schemas"]["OutgoingFriendRequest"][];
+        };
         /** @description Two adults of different households who see each other. */
         AdultLink: {
             /** @description The lower id of the two. */
@@ -7335,6 +7466,7 @@ export interface components {
         JoinCodeParam: string;
         DeviceLinkId: components["schemas"]["Id"];
         OfferId: components["schemas"]["Id"];
+        FriendRequestId: components["schemas"]["Id"];
         /** @description The link's poll token. In the query so a TV can load the QR image by URL alone. */
         LinkToken: string;
         ArtistId: components["schemas"]["Id"];
@@ -8206,6 +8338,153 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description In their household. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    listFriends: {
+        parameters: {
+            query?: {
+                limit?: components["parameters"]["Limit"];
+                offset?: components["parameters"]["Offset"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Friends. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountPage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    deleteFriend: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                profileId: components["parameters"]["ProfileId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No longer friends. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listFriendRequests: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Requests. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FriendRequestList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    sendFriendRequest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FriendRequestInput"];
+            };
+        };
+        responses: {
+            /** @description If they're on this server, they'll get the request. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OutgoingFriendRequest"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    deleteFriendRequest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                requestId: components["parameters"]["FriendRequestId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Withdrawn or declined. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    acceptFriendRequest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                requestId: components["parameters"]["FriendRequestId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Friends. */
             204: {
                 headers: {
                     [name: string]: unknown;

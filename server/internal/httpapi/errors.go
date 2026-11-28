@@ -81,7 +81,8 @@ func responseError(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, fail(http.StatusConflict, api.ErrorCodeConflict, err.Error()))
 	case errors.Is(err, service.ErrSetupDone), errors.Is(err, service.ErrNotJoinable), errors.Is(err, service.ErrNoPassword),
 		errors.Is(err, service.ErrSameKind), errors.Is(err, service.ErrLastAdmin), errors.Is(err, service.ErrNotJoined),
-		errors.Is(err, service.ErrLastHousehold), errors.Is(err, service.ErrOwnerStays), errors.Is(err, service.ErrNotOfferable):
+		errors.Is(err, service.ErrLastHousehold), errors.Is(err, service.ErrOwnerStays), errors.Is(err, service.ErrNotOfferable),
+		errors.Is(err, service.ErrNotBefriendable):
 		writeError(w, fail(http.StatusConflict, api.ErrorCodeConflict, err.Error()))
 	case errors.Is(err, service.ErrNotLinked):
 		writeError(w, fail(http.StatusForbidden, api.ErrorCodeForbidden, err.Error()))

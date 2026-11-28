@@ -113,7 +113,7 @@ func TestIn(t *testing.T) {
 var (
 	userTables = []string{"library", "library_folder", "household", "account", "join_code", "playlist",
 		"playlist_entry", "collection", "station", "station_time", "sso_provider", "cover", "download",
-		"profile_offer", "occasion"}
+		"profile_offer", "occasion", "friend_request"}
 	systemTables = []string{"track", "chapter", "device", "playback_session", "task", "task_run",
 		"throughput_sample", "log_entry", "genre", "person", "credit", "seek_preview", "device_link", "item",
 		"watch_together", "edition", "media_file", "station_program", "account_identity", "conversion",
@@ -122,7 +122,7 @@ var (
 		"edition_file", "station_day", "station_loop", "playlist_share", "watch_together_member",
 		"item_metadata", "item_genre", "household_member", "adult_link", "playlist_household_share",
 		"item_keyword", "occasion_keyword", "occasion_item", "occasion_exclusion", "occasion_phrase",
-		"song_release", "favorite"}
+		"song_release", "favorite", "friendship", "friend_request_decline"}
 	bookTables = []string{"server_info", "occasion_seed", "sync_clock",
 		"sync_tombstone", "sync_action", "schema_migration"}
 	syncedTables = []string{"account", "account_allow", "adult_link", "chapter", "collection",
@@ -131,7 +131,7 @@ var (
 		"occasion", "occasion_exclusion", "occasion_item", "occasion_keyword", "occasion_phrase", "person",
 		"playlist", "playlist_entry", "playlist_household_share", "playlist_share", "profile_offer",
 		"server_info", "station", "station_day", "station_loop", "station_program", "station_time", "track",
-		"watch_state"}
+		"watch_state", "friendship", "friend_request", "friend_request_decline"}
 	// Id columns without a foreign key, and BLOB columns that are not ids.
 	unkeyedIDs = []string{"log_entry.session_id", "log_entry.item_id", "station_loop.entry_id",
 		"station_loop.item_id", "conversion.audio_track_id", "conversion.burn_track_id"}
